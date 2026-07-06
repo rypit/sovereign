@@ -1,5 +1,7 @@
 # Sovereign
 
+[![CI](https://github.com/rypit/sovereign/actions/workflows/ci.yml/badge.svg)](https://github.com/rypit/sovereign/actions/workflows/ci.yml)
+
 A declarative control plane for running local LLM infrastructure — engines,
 frontends, coding harnesses, and benchmarks — on macOS / Apple Silicon laptops.
 
