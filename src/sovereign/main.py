@@ -211,14 +211,17 @@ def _report_drift(state: dict) -> None:
         return
     path = Path(variant_file)
     if not path.exists():
-        console.print(f"[yellow]⚠ variant file {variant_file} no longer exists.[/yellow]")
+        console.print(
+            f"[yellow]⚠ variant file {variant_file} no longer exists.[/yellow]", soft_wrap=True
+        )
     elif file_hash(path) != recorded_hash:
         console.print(
             f"[yellow]⚠ drift: {variant_file} changed since boot — "
-            f"run `sovereign up -f {variant_file}` to apply.[/yellow]"
+            f"run `sovereign up -f {variant_file}` to apply.[/yellow]",
+            soft_wrap=True,
         )
     else:
-        console.print(f"[green]✓ in sync with {variant_file}[/green]")
+        console.print(f"[green]✓ in sync with {variant_file}[/green]", soft_wrap=True)
 
 
 @app.command()
