@@ -256,8 +256,8 @@ def test_shutdown_reverse_order() -> None:
 def test_manifest_and_state_written(tmp_path) -> None:
     cfg = _config(
         [
-            {"name": "engine", "base_type": "llama_cpp"},
-            {"name": "frontend", "base_type": "open_webui", "dependencies": ["engine"]},
+            {"name": "engine", "base_type": "x"},
+            {"name": "frontend", "base_type": "x", "dependencies": ["engine"]},
         ]
     )
     orch = _orch(cfg, state_dir=tmp_path, ports={"engine": 11435})
@@ -282,14 +282,22 @@ def test_status_snapshot_shape() -> None:
             {"name": "frontend", "base_type": "x", "dependencies": ["engine"]},
         ]
     )
-    orch = _orch(cfg)
+    orch = _orch(cfg, ports={"engine": 11435})
     asyncio.run(orch.boot())
     snapshot = orch.status_snapshot()
     assert set(snapshot["services"]) == {"engine", "frontend"}
     frontend = snapshot["services"]["frontend"]
     assert frontend["state"] == "ready"
-    assert frontend["dependencies"] == ["engine"]
+    assert "dependencies" not in frontend
     assert "metrics" in frontend
+
+    engine = snapshot["services"]["engine"]
+    assert engine["endpoint"] == "http://127.0.0.1:11435"
+    assert frontend["endpoint"] is None  # no port configured for this fake manager
+
+    from datetime import datetime
+
+    assert datetime.fromisoformat(engine["since"])
 
 
 def test_status_snapshot_includes_activity() -> None:
@@ -298,6 +306,25 @@ def test_status_snapshot_includes_activity() -> None:
     orch.managers["a"].activity = "pulling foo — 2/5 layers"
     snap = orch.status_snapshot()
     assert snap["services"]["a"]["activity"] == "pulling foo — 2/5 layers"
+
+
+def test_status_snapshot_since_present_immediately_after_build() -> None:
+    from datetime import datetime
+
+    orch = _orch(_config([{"name": "a", "base_type": "x"}]))
+    orch.build()
+    snap = orch.status_snapshot()
+    assert datetime.fromisoformat(snap["services"]["a"]["since"])
+
+
+def test_set_state_updates_since_only_on_real_transition() -> None:
+    orch = _orch(_config([{"name": "a", "base_type": "x"}]))
+    orch.build()
+    first = orch.state_since["a"]
+    orch._set_state("a", ServiceState.PENDING)  # no-op: same state
+    assert orch.state_since["a"] == first
+    orch._set_state("a", ServiceState.PROVISIONING)  # real transition
+    assert orch.state_since["a"] != first
 
 
 def test_boot_is_watchable_live() -> None:

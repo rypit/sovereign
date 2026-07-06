@@ -25,7 +25,12 @@ roadmap; 201 tests passing):
   `monitor`).
 - The Orchestrator: DAG boot in dependency order, async reconciliation loop,
   memory admission control, resolved-stack manifest + drift detection.
-- Services: `docker_engine`, `llama_cpp`, `open_webui`, `searxng`, `mlx_lm`.
+- Services: `docker_engine` (a generic Docker container runner — `open_webui` and
+  `searxng` are just instances of it configured in YAML), `llama_cpp`, `mlx_lm`.
+  The Docker daemon is implicit infrastructure: each `docker_engine` service
+  verifies it's reachable on its own, so there's no separate engine entry or
+  dependency to declare. (Existing YAMLs using `base_type: open_webui` or
+  `searxng` need to switch to `base_type: docker_engine`.)
 
 Still to come: `launchd` install/uninstall (Phase 9), `comfyui` (Phase 11), and
 the harness + benchmarking tracks. See the

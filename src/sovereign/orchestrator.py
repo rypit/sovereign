@@ -23,7 +23,7 @@ from pathlib import Path
 
 from sovereign.config import ServiceEntry, SovereignConfig
 from sovereign.core.base_manager import ServiceManager
-from sovereign.core.resolver import Resolver, ServiceRegistry
+from sovereign.core.resolver import ConsumerKind, Resolver, ServiceRegistry
 from sovereign.core.resources import (
     ResourceBudgeter,
     ResourceExhaustedError,
@@ -87,6 +87,7 @@ class Orchestrator:
         self.managers: dict[str, ServiceManager] = {}
         self.harnesses: dict[str, object] = {}
         self.states: dict[str, ServiceState] = {}
+        self.state_since: dict[str, str] = {}
         self.metrics: dict[str, dict] = {}
 
         self._manager_factory = manager_factory or self._default_manager_factory
@@ -140,6 +141,7 @@ class Orchestrator:
         for entry in self.config.services:
             self.managers[entry.name] = self._manager_factory(entry)
             self.states[entry.name] = ServiceState.PENDING
+            self.state_since[entry.name] = datetime.now(UTC).isoformat()
         for entry in self.config.harnesses:
             try:
                 self.harnesses[entry.name] = self._harness_factory(entry)
@@ -181,8 +183,10 @@ class Orchestrator:
     def _set_state(self, name: str, state: ServiceState) -> None:
         old = self.states.get(name, ServiceState.PENDING)
         self.states[name] = state
-        if self._on_transition is not None and old is not state:
-            self._on_transition(name, old, state)
+        if old is not state:
+            self.state_since[name] = datetime.now(UTC).isoformat()
+            if self._on_transition is not None:
+                self._on_transition(name, old, state)
 
     # --- boot ---
     async def boot(self) -> None:
@@ -358,7 +362,13 @@ class Orchestrator:
             "services": {
                 name: {
                     "state": str(self.states.get(name)),
-                    "dependencies": list(self._entries[name].dependencies),
+                    "since": self.state_since.get(name),
+                    "endpoint": (
+                        self.registry.get(name).url_for(ConsumerKind.NATIVE)
+                        if name in self.registry
+                        and self.states.get(name) in (ServiceState.READY, ServiceState.DEGRADED)
+                        else None
+                    ),
                     "metrics": self.metrics.get(name, {}),
                     "activity": getattr(self.managers.get(name), "activity", "") or "",
                 }

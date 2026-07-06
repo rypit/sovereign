@@ -12,6 +12,7 @@ import os
 import subprocess
 import sys
 import time
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Optional
 
@@ -267,11 +268,38 @@ def _load_dashboard_status(state_dir: Path) -> dict | None:
         state = read_json(state_path)
         return {
             "services": {
-                name: {"state": svc_state, "dependencies": [], "metrics": {}}
+                name: {"state": svc_state, "metrics": {}}
                 for name, svc_state in state.get("services", {}).items()
             }
         }
     return None
+
+
+def _format_duration(seconds: float) -> str:
+    """Compact elapsed time: "42s", "3m 12s", "1h 04m", "2d 05h"."""
+    seconds = int(seconds)
+    if seconds < 60:
+        return f"{seconds}s"
+    minutes, secs = divmod(seconds, 60)
+    if minutes < 60:
+        return f"{minutes}m {secs:02d}s"
+    hours, minutes = divmod(minutes, 60)
+    if hours < 24:
+        return f"{hours}h {minutes:02d}m"
+    days, hours = divmod(hours, 24)
+    return f"{days}d {hours:02d}h"
+
+
+def _duration_cell(since: str | None) -> str:
+    """Elapsed time since an ISO timestamp, or "-" when unknown."""
+    if not since:
+        return "-"
+    try:
+        started = datetime.fromisoformat(since)
+    except (TypeError, ValueError):
+        return "-"
+    elapsed = (datetime.now(UTC) - started).total_seconds()
+    return _format_duration(max(0.0, elapsed))
 
 
 def _dashboard(status: dict):
@@ -279,9 +307,10 @@ def _dashboard(status: dict):
     table = Table(title=f"Sovereign Control Plane v{__version__}", title_justify="left")
     table.add_column("SERVICE")
     table.add_column("STATUS")
+    table.add_column("DURATION")
     table.add_column("CPU %", justify="right")
     table.add_column("MEM (MB)", justify="right")
-    table.add_column("DEPENDENCIES")
+    table.add_column("ENDPOINT")
 
     activity_lines: list[str] = []
     for name, svc in status.get("services", {}).items():
@@ -290,8 +319,11 @@ def _dashboard(status: dict):
         metrics = svc.get("metrics") or {}
         cpu = f"{metrics['cpu_percent']:.1f}%" if "cpu_percent" in metrics else "-"
         mem = f"{metrics['memory_mb']:.0f}" if "memory_mb" in metrics else "-"
-        deps = ", ".join(svc.get("dependencies") or []) or "-"
-        table.add_row(name, f"[{color}]{_status_label(state)}[/{color}]", cpu, mem, deps)
+        duration = _duration_cell(svc.get("since"))
+        endpoint = svc.get("endpoint") or "-"
+        table.add_row(
+            name, f"[{color}]{_status_label(state)}[/{color}]", duration, cpu, mem, endpoint
+        )
 
         activity = (svc.get("activity") or "").strip()
         if activity:

@@ -18,10 +18,10 @@ def test_sample_fixture_loads() -> None:
     assert cfg.resources.default_priority is Priority.MEDIUM
 
     names = {s.name for s in cfg.services}
-    assert names == {"docker_engine", "llama_heavy_v1", "open_webui"}
+    assert names == {"llama_heavy_v1", "open_webui"}
 
     webui = next(s for s in cfg.services if s.name == "open_webui")
-    assert webui.dependencies == ["docker_engine", "llama_heavy_v1"]
+    assert webui.dependencies == ["llama_heavy_v1"]
     # Templates are carried through unresolved at this layer.
     assert webui.env_overrides["OLLAMA_API_BASE_URL"] == "{{ llama_heavy_v1.endpoint }}"
 
@@ -34,7 +34,7 @@ def _base_stack(**overrides) -> dict:
         "resources": {"max_unified_memory_gb": 64, "safety_margin_gb": 4},
         "services": [
             {"name": "a", "base_type": "llama_cpp"},
-            {"name": "b", "base_type": "open_webui", "dependencies": ["a"]},
+            {"name": "b", "base_type": "docker_engine", "dependencies": ["a"]},
         ],
     }
     data.update(overrides)
@@ -50,7 +50,7 @@ def test_duplicate_name_rejected() -> None:
     data = _base_stack(
         services=[
             {"name": "a", "base_type": "llama_cpp"},
-            {"name": "a", "base_type": "open_webui"},
+            {"name": "a", "base_type": "docker_engine"},
         ]
     )
     with pytest.raises(ValueError, match="duplicate entry name"):

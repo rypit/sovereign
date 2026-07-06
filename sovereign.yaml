@@ -8,10 +8,15 @@
 # stop it (that's expected — native processes die if the parent exits).
 #
 # As shipped this boots two services:
-#   - docker_engine : verifies your Docker daemon is reachable (instant).
-#   - open_webui    : a real Open WebUI container. FIRST RUN PULLS THE IMAGE
+#   - searxng    : a SearXNG metasearch container. FIRST RUN PULLS THE IMAGE.
+#   - open_webui : a real Open WebUI container. FIRST RUN PULLS THE IMAGE
 #                     (~3-4 GB, one time). Want an instant test with no download?
-#                     Delete the open_webui block below and boot docker_engine alone.
+#                     Delete the open_webui block below.
+#
+# Both are `base_type: docker_engine` — a generic container runner. The Docker
+# daemon is implicit infrastructure: each docker_engine service verifies it's
+# reachable on its own, so there's no separate engine entry or dependency to
+# declare.
 
 version: "1.1"
 
@@ -21,13 +26,8 @@ resources:
   default_priority: medium
 
 services:
-  - name: docker_engine
-    base_type: docker_engine
-    priority: critical
-    dependencies: []
-
   - name: searxng
-    base_type: searxng
+    base_type: docker_engine
     priority: medium
     health_check:
       type: http
@@ -37,11 +37,24 @@ services:
     config:
       image: searxng/searxng:latest
       port: 8888
-      base_url: "http://localhost:8888/"
-    dependencies: [docker_engine]
+      container_port: 8080
+      volumes:
+        - ~/.sovereign/searxng:/etc/searxng
+      files:
+        - path: ~/.sovereign/searxng/settings.yml
+          content: |
+            use_default_settings: true
+            server:
+              secret_key: "${RANDOM_HEX:64}"
+              limiter: false
+            search:
+              formats: [html, json]
+    env_overrides:
+      SEARXNG_BASE_URL: "http://localhost:8888/"
+    dependencies: []
 
   - name: open_webui
-    base_type: open_webui
+    base_type: docker_engine
     priority: medium
     health_check:
       type: http
@@ -63,7 +76,7 @@ services:
       RAG_WEB_SEARCH_ENGINE: "searxng"
       SEARXNG_QUERY_URL: "{{ searxng.endpoint }}/search?q=<query>&format=json"
       OPENAI_API_BASE_URL: "{{ mlx_heavy.endpoint }}/v1"
-    dependencies: [docker_engine, searxng, mlx_heavy]
+    dependencies: [searxng, mlx_heavy]
 
 # ---------------------------------------------------------------------------
 # Add a native inference engine once you have a GGUF model on disk.
@@ -91,7 +104,6 @@ services:
 # Or use the MLX engine instead (native, Apple MLX). `mlx-lm` ships with the
 # project (a dependency), so `uv sync` provides mlx_lm.server — no extra install.
 # `model` takes a local MLX dir or a HuggingFace repo id (downloaded on first run).
-# See mlx.yaml for a ready-to-run tiny-model example.
 # ---------------------------------------------------------------------------
   - name: mlx_heavy
     base_type: mlx_lm
