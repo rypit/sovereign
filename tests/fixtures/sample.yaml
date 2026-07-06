@@ -1,0 +1,61 @@
+version: "1.1"
+
+resources:
+  max_unified_memory_gb: 128
+  safety_margin_gb: 8
+  default_priority: medium
+
+services:
+  - name: docker_engine
+    base_type: docker_engine
+    priority: critical
+    dependencies: []
+
+  - name: llama_heavy_v1
+    base_type: llama_cpp
+    priority: critical
+    affinity:
+      hardware_type: apple_silicon
+      prefer_cores: [4, 5, 6, 7]
+    health_check:
+      type: http
+      endpoint: /health
+      port: 11435
+      timeout_seconds: 60
+    policy:
+      prompt_caching:
+        enabled: true
+        cache_path: "/tmp/sovereign/cache/llama_heavy"
+        kv_cache_type: f16
+    config:
+      model_path: "~/models/llama3-70b.gguf"
+      gpu_layers: 48
+      threads: 8
+      context_size: 32768
+      max_parallel: 4
+      api_key: "${ENV:LLAMA_API_KEY}"
+    dependencies: []
+
+  - name: open_webui
+    base_type: open_webui
+    priority: medium
+    health_check:
+      type: http
+      endpoint: /health
+      port: 3000
+    config:
+      image: ghcr.io/open-webui/open-webui:main
+      port: 3000
+    env_overrides:
+      OLLAMA_API_BASE_URL: "{{ llama_heavy_v1.endpoint }}"
+    dependencies: [docker_engine, llama_heavy_v1]
+
+harnesses:
+  - name: cline_local
+    base_type: cline_cli
+    config:
+      config_dir: "~/.sovereign/harnesses/cline_local"
+      provider: openai_compatible
+      base_url: "{{ llama_heavy_v1.endpoint }}"
+      model: "llama3-70b"
+    dependencies: [llama_heavy_v1]

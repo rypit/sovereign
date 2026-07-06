@@ -1,0 +1,110 @@
+# Sovereign stack — a working starter you can boot with `sovereign up`.
+#
+#   uv run sovereign up            # boots this file, then runs in the foreground
+#   Ctrl+C                         # graceful reverse-order shutdown
+#
+# On boot it writes .sovereign/manifest.json (resolved stack) and
+# .sovereign/state.json (what's running). `up` blocks and supervises until you
+# stop it (that's expected — native processes die if the parent exits).
+#
+# As shipped this boots two services:
+#   - docker_engine : verifies your Docker daemon is reachable (instant).
+#   - open_webui    : a real Open WebUI container. FIRST RUN PULLS THE IMAGE
+#                     (~3-4 GB, one time). Want an instant test with no download?
+#                     Delete the open_webui block below and boot docker_engine alone.
+
+version: "1.1"
+
+resources:
+  max_unified_memory_gb: 128     # adjust to your machine
+  safety_margin_gb: 8
+  default_priority: medium
+
+services:
+  - name: docker_engine
+    base_type: docker_engine
+    priority: critical
+    dependencies: []
+
+  - name: searxng
+    base_type: searxng
+    priority: medium
+    health_check:
+      type: http
+      endpoint: /
+      port: 8888
+      timeout_seconds: 120
+    config:
+      image: searxng/searxng:latest
+      port: 8888
+      base_url: "http://localhost:8888/"
+    dependencies: [docker_engine]
+
+  - name: open_webui
+    base_type: open_webui
+    priority: medium
+    health_check:
+      type: http
+      endpoint: /health
+      port: 3000
+      timeout_seconds: 180         # first container start can be slow
+    config:
+      image: ghcr.io/open-webui/open-webui:main
+      port: 3000                   # host port -> open it at http://localhost:3000
+      container_port: 8080         # Open WebUI listens on 8080 inside the container
+      volumes:
+        - sovereign_open_webui:/app/backend/data   # persist across restarts
+    env_overrides:
+      WEBUI_AUTH: "False"          # skip login for a quick local test
+      # Web search via SearXNG (set both legacy + current keys; unknown ones ignored):
+      ENABLE_WEB_SEARCH: "true"
+      ENABLE_RAG_WEB_SEARCH: "True"
+      WEB_SEARCH_ENGINE: "searxng"
+      RAG_WEB_SEARCH_ENGINE: "searxng"
+      SEARXNG_QUERY_URL: "{{ searxng.endpoint }}/search?q=<query>&format=json"
+      OPENAI_API_BASE_URL: "{{ mlx_heavy.endpoint }}/v1"
+    dependencies: [docker_engine, searxng, mlx_heavy]
+
+# ---------------------------------------------------------------------------
+# Add a native inference engine once you have a GGUF model on disk.
+# `llama-server` is already installed (brew llama.cpp). Set model_path, uncomment,
+# add `llama_heavy_v1` to open_webui's dependencies, and uncomment the
+# OPENAI_API_BASE_URL line above to auto-wire the UI to it.
+# ---------------------------------------------------------------------------
+#   - name: llama_heavy_v1
+#     base_type: llama_cpp
+#     priority: critical
+#     health_check:
+#       type: http
+#       endpoint: /health
+#       port: 11435
+#       timeout_seconds: 120
+#     config:
+#       model_path: "~/models/your-model.gguf"   # <-- point at a real GGUF
+#       gpu_layers: 999            # offload all layers to Metal
+#       context_size: 8192
+#       max_parallel: 2
+#       host: 127.0.0.1
+#     dependencies: []
+
+# ---------------------------------------------------------------------------
+# Or use the MLX engine instead (native, Apple MLX). `mlx-lm` ships with the
+# project (a dependency), so `uv sync` provides mlx_lm.server — no extra install.
+# `model` takes a local MLX dir or a HuggingFace repo id (downloaded on first run).
+# See mlx.yaml for a ready-to-run tiny-model example.
+# ---------------------------------------------------------------------------
+  - name: mlx_heavy
+    base_type: mlx_lm
+    priority: critical
+    health_check:
+      type: http
+      endpoint: /health
+      port: 8080
+      timeout_seconds: 300
+    config:
+      model: "mlx-community/Qwen3.6-27B-8bit"
+      num_draft_tokens: 2
+      trust_remote_code: true
+      host: 127.0.0.1
+      temp: 0.6
+    dependencies: []

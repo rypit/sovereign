@@ -1,0 +1,344 @@
+"""Typer entry point for the Sovereign CLI.
+
+Commands are stubs at this stage (Phases 0–2); their real implementations land in
+later phases per the roadmap (§12). The command surface is defined now so the CLI
+shape stays stable as internals fill in.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import os
+import subprocess
+import sys
+import time
+from pathlib import Path
+from typing import Optional
+
+import typer
+from rich.console import Console, Group
+from rich.live import Live
+from rich.table import Table
+from rich.text import Text
+
+from sovereign import __version__
+from sovereign.config import ConfigError, load_config
+from sovereign.orchestrator import BootError, serve_forever
+from sovereign.utils.state import file_hash, read_json, write_json
+from sovereign.utils.teardown import stop_service_handle
+
+app = typer.Typer(
+    name="sovereign",
+    help="A declarative control plane for local LLM infrastructure on Apple Silicon.",
+    no_args_is_help=True,
+    add_completion=False,
+)
+console = Console()
+
+_DEFAULT_CONFIG = Path("sovereign.yaml")
+_DEFAULT_STATE_DIR = Path(".sovereign")
+
+_STATE_DIR_OPTION = typer.Option(
+    _DEFAULT_STATE_DIR, "--state-dir", help="Where Sovereign keeps state/logs."
+)
+
+_STATE_COLORS = {
+    "ready": "green",
+    "running": "green",
+    "degraded": "yellow",
+    "starting": "cyan",
+    "provisioning": "cyan",
+    "failed": "red",
+    "stopped": "dim",
+}
+
+
+def _not_implemented(command: str) -> None:
+    console.print(f"[yellow]`sovereign {command}` is not implemented yet.[/yellow]")
+
+
+def _stdout_is_tty() -> bool:
+    """Whether stdout is an interactive terminal (vs. a pipe or launchd log)."""
+    return sys.stdout.isatty()
+
+
+def _dashboard_task_factory(interval: float = 1.0, live_console: Console | None = None):
+    """An extra serve task that renders the live dashboard from in-process state."""
+
+    async def task(orch, stop: asyncio.Event) -> None:
+        with Live(
+            _dashboard(orch.status_snapshot()),
+            console=live_console or console,
+            refresh_per_second=4,
+        ) as live:
+            while not stop.is_set():
+                live.update(_dashboard(orch.status_snapshot()))
+                try:
+                    await asyncio.wait_for(stop.wait(), timeout=interval)
+                except TimeoutError:
+                    pass
+
+    return task
+
+
+def _print_transition(name: str, old, new) -> None:
+    """Headless boot/runtime progress: one line per state change (for daemon logs)."""
+    color = _STATE_COLORS.get(str(new), "white")
+    console.print(f"  [dim]{name}[/dim]: {old} → [{color}]{new}[/{color}]")
+
+
+def _load_dotenv(path: Path = Path(".env")) -> None:
+    """Merge a .env file into os.environ (shell-set vars take precedence)."""
+    if not path.exists():
+        return
+    for line in path.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        value = value.strip().strip('"').strip("'")
+        os.environ.setdefault(key.strip(), value)
+
+
+def _boot_and_serve(file: Path, *, dashboard: bool) -> None:
+    """Load a variant, boot the stack, and run until interrupted."""
+    _load_dotenv()
+    try:
+        config = load_config(file)
+    except ConfigError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1) from exc
+
+    console.print(f"[green]Booting stack from {file}[/green]")
+    # Foreground: the live dashboard shows transitions. Headless: print them instead.
+    extra_tasks = [_dashboard_task_factory()] if dashboard else []
+    on_transition = None if dashboard else _print_transition
+    try:
+        asyncio.run(
+            serve_forever(
+                config,
+                variant_file=file,
+                extra_tasks=extra_tasks,
+                on_transition=on_transition,
+            )
+        )
+    except BootError as exc:
+        console.print(f"[red]Boot failed:[/red] {exc}")
+        raise typer.Exit(1) from exc
+    except KeyboardInterrupt:  # pragma: no cover - interactive
+        pass
+    console.print("[green]Stack stopped.[/green]")
+
+
+@app.command()
+def serve(
+    file: Optional[Path] = typer.Option(  # noqa: UP045 - Typer needs Optional at runtime
+        _DEFAULT_CONFIG, "-f", "--file", help="Stack variant file to serve."
+    ),
+) -> None:
+    """Run Sovereign as a foreground process (launchd entry point) — always headless."""
+    _boot_and_serve(file, dashboard=False)
+
+
+@app.command()
+def up(
+    file: Optional[Path] = typer.Option(  # noqa: UP045 - Typer needs Optional at runtime
+        _DEFAULT_CONFIG,
+        "-f",
+        "--file",
+        help="Stack variant file to bring up.",
+    ),
+) -> None:
+    """Boot the stack; show the live dashboard when run in a terminal."""
+    _boot_and_serve(file, dashboard=_stdout_is_tty())
+
+
+@app.command()
+def down(
+    state_dir: Path = _STATE_DIR_OPTION,
+) -> None:
+    """Stop a running stack via its recorded runtime handles (reverse order)."""
+    state_path = state_dir / "state.json"
+    if not state_path.exists():
+        console.print("[yellow]No recorded stack to stop (no state.json).[/yellow]")
+        return
+
+    state = read_json(state_path)
+    handles: dict = state.get("runtime", {})
+    if not handles:
+        console.print("[yellow]Nothing running to stop.[/yellow]")
+        return
+
+    for name in reversed(list(handles)):
+        result = stop_service_handle(handles[name])
+        console.print(f"  {name}: {result}")
+
+    # Reflect the teardown in state.json so `status` agrees.
+    state["services"] = {name: "stopped" for name in state.get("services", {})}
+    state["runtime"] = {}
+    write_json(state_path, state)
+    console.print("[green]Stack stopped.[/green]")
+
+
+@app.command()
+def status(
+    state_dir: Path = _STATE_DIR_OPTION,
+) -> None:
+    """Report current stack state, and flag drift from the recorded variant."""
+    state_path = state_dir / "state.json"
+    if not state_path.exists():
+        console.print("No running stack (no state.json). Run [bold]sovereign up[/bold].")
+        raise typer.Exit(0)
+
+    state = read_json(state_path)
+
+    table = Table(title="Sovereign stack")
+    table.add_column("SERVICE")
+    table.add_column("STATE")
+    for name, service_state in state.get("services", {}).items():
+        color = _STATE_COLORS.get(service_state, "white")
+        table.add_row(name, f"[{color}]{service_state}[/{color}]")
+    console.print(table)
+
+    _report_drift(state)
+
+
+def _report_drift(state: dict) -> None:
+    variant_file = state.get("variant_file")
+    recorded_hash = state.get("variant_hash")
+    if not variant_file or not recorded_hash:
+        return
+    path = Path(variant_file)
+    if not path.exists():
+        console.print(f"[yellow]⚠ variant file {variant_file} no longer exists.[/yellow]")
+    elif file_hash(path) != recorded_hash:
+        console.print(
+            f"[yellow]⚠ drift: {variant_file} changed since boot — "
+            f"run `sovereign up -f {variant_file}` to apply.[/yellow]"
+        )
+    else:
+        console.print(f"[green]✓ in sync with {variant_file}[/green]")
+
+
+@app.command()
+def logs(
+    service: str = typer.Argument(..., help="Service whose logs to show."),
+    lines: int = typer.Option(50, "-n", "--lines", help="Number of lines to show."),
+    follow: bool = typer.Option(False, "-f", "--follow", help="Follow the log output."),
+    state_dir: Path = _STATE_DIR_OPTION,
+) -> None:
+    """Show a service's logs (native log file, or `docker logs` for containers)."""
+    log_path = state_dir / "logs" / f"{service}.log"
+    if log_path.exists():
+        if follow:
+            os.execvp("tail", ["tail", "-n", str(lines), "-f", str(log_path)])
+        for line in log_path.read_text(errors="replace").splitlines()[-lines:]:
+            typer.echo(line)
+        return
+
+    state_path = state_dir / "state.json"
+    handle = read_json(state_path).get("runtime", {}).get(service) if state_path.exists() else None
+    if handle and handle.get("kind") == "docker":
+        cmd = ["docker", "logs", "--tail", str(lines)]
+        if follow:
+            cmd.append("-f")
+        cmd.append(handle["container"])
+        subprocess.run(cmd)  # noqa: S603 - fixed argv
+        return
+
+    console.print(f"[yellow]No logs found for '{service}'.[/yellow]")
+    raise typer.Exit(1)
+
+
+_STATUS_LABEL = {"ready": "RUNNING"}
+
+
+def _status_label(state: str) -> str:
+    return _STATUS_LABEL.get(state, state.upper())
+
+
+def _load_dashboard_status(state_dir: Path) -> dict | None:
+    """Prefer the live status.json; fall back to state.json (states only)."""
+    status_path = state_dir / "status.json"
+    if status_path.exists():
+        return read_json(status_path)
+    state_path = state_dir / "state.json"
+    if state_path.exists():
+        state = read_json(state_path)
+        return {
+            "services": {
+                name: {"state": svc_state, "dependencies": [], "metrics": {}}
+                for name, svc_state in state.get("services", {}).items()
+            }
+        }
+    return None
+
+
+def _dashboard(status: dict):
+    """Render the §8 dashboard table, plus a live "Provisioning" activity area."""
+    table = Table(title=f"Sovereign Control Plane v{__version__}", title_justify="left")
+    table.add_column("SERVICE")
+    table.add_column("STATUS")
+    table.add_column("CPU %", justify="right")
+    table.add_column("MEM (MB)", justify="right")
+    table.add_column("DEPENDENCIES")
+
+    activity_lines: list[str] = []
+    for name, svc in status.get("services", {}).items():
+        state = svc.get("state", "unknown")
+        color = _STATE_COLORS.get(state, "white")
+        metrics = svc.get("metrics") or {}
+        cpu = f"{metrics['cpu_percent']:.1f}%" if "cpu_percent" in metrics else "-"
+        mem = f"{metrics['memory_mb']:.0f}" if "memory_mb" in metrics else "-"
+        deps = ", ".join(svc.get("dependencies") or []) or "-"
+        table.add_row(name, f"[{color}]{_status_label(state)}[/{color}]", cpu, mem, deps)
+
+        activity = (svc.get("activity") or "").strip()
+        if activity:
+            activity_lines.append(f"  {name}  [{_status_label(state)}] {activity}")
+
+    if not activity_lines:
+        return table
+    body = Text("\n".join(activity_lines), style="dim")
+    return Group(table, Text("Activity:", style="bold"), body)
+
+
+@app.command()
+def monitor(
+    interval: float = typer.Option(2.0, "--interval", help="Refresh interval (seconds)."),
+    once: bool = typer.Option(False, "--once", help="Render a single frame and exit."),
+    state_dir: Path = _STATE_DIR_OPTION,
+) -> None:
+    """Live, top-style view of running services (Ctrl+C to exit)."""
+    status = _load_dashboard_status(state_dir)
+    if status is None:
+        console.print("No running stack (no status.json). Run [bold]sovereign up[/bold].")
+        raise typer.Exit(0)
+
+    if once:
+        console.print(_dashboard(status))
+        return
+
+    with Live(_dashboard(status), console=console, refresh_per_second=4) as live:
+        try:
+            while True:
+                time.sleep(interval)
+                live.update(_dashboard(_load_dashboard_status(state_dir) or status))
+        except KeyboardInterrupt:  # pragma: no cover - interactive
+            pass
+
+
+@app.command()
+def bench() -> None:
+    """Run benchmark sweeps against the resolved stack."""
+    _not_implemented("bench")
+
+
+@app.command()
+def version() -> None:
+    """Print the Sovereign version."""
+    console.print(f"Sovereign {__version__}")
+
+
+if __name__ == "__main__":
+    app()
