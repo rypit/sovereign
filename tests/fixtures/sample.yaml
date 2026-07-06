@@ -6,11 +6,6 @@ resources:
   default_priority: medium
 
 services:
-  - name: docker_engine
-    base_type: docker_engine
-    priority: critical
-    dependencies: []
-
   - name: llama_heavy_v1
     base_type: llama_cpp
     priority: critical
@@ -37,7 +32,7 @@ services:
     dependencies: []
 
   - name: open_webui
-    base_type: open_webui
+    base_type: docker_engine
     priority: medium
     health_check:
       type: http
@@ -48,7 +43,7 @@ services:
       port: 3000
     env_overrides:
       OLLAMA_API_BASE_URL: "{{ llama_heavy_v1.endpoint }}"
-    dependencies: [docker_engine, llama_heavy_v1]
+    dependencies: [llama_heavy_v1]
 
 harnesses:
   - name: cline_local

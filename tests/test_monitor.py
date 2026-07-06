@@ -10,22 +10,59 @@ from rich.console import Console
 from typer.testing import CliRunner
 
 from sovereign import __version__, main
-from sovereign.main import _dashboard, _dashboard_task_factory, _load_dashboard_status, app
+from sovereign.main import (
+    _dashboard,
+    _dashboard_task_factory,
+    _duration_cell,
+    _format_duration,
+    _load_dashboard_status,
+    app,
+)
 from sovereign.utils.state import write_json
 
 runner = CliRunner()
+
+
+# --- duration formatting ---
+def test_format_duration_seconds() -> None:
+    assert _format_duration(42) == "42s"
+
+
+def test_format_duration_minutes() -> None:
+    assert _format_duration(3 * 60 + 12) == "3m 12s"
+
+
+def test_format_duration_hours() -> None:
+    assert _format_duration(3600 + 4 * 60) == "1h 04m"
+
+
+def test_duration_cell_none_renders_dash() -> None:
+    assert _duration_cell(None) == "-"
+
+
+def test_duration_cell_unparseable_renders_dash() -> None:
+    assert _duration_cell("not-a-timestamp") == "-"
+
+
+def test_duration_cell_future_timestamp_clamps_to_zero() -> None:
+    from datetime import UTC, datetime, timedelta
+
+    future = (datetime.now(UTC) + timedelta(minutes=5)).isoformat()
+    assert _duration_cell(future) == "0s"
 
 _STATUS = {
     "updated_at": "2026-07-05T00:00:00+00:00",
     "services": {
         "llama_heavy_v1": {
             "state": "ready",
-            "dependencies": [],
+            "since": "2026-07-05T00:00:00+00:00",
+            "endpoint": "http://127.0.0.1:11435",
             "metrics": {"cpu_percent": 12.4, "memory_mb": 14500.0, "status": "running"},
         },
         "open_webui": {
             "state": "starting",
-            "dependencies": ["docker_engine", "llama_heavy_v1"],
+            "since": "2026-07-05T00:03:12+00:00",
+            "endpoint": None,
             "metrics": {},
         },
     },
@@ -41,15 +78,16 @@ def _render(table) -> str:
 def test_dashboard_matches_mockup_shape() -> None:
     text = _render(_dashboard(_STATUS))
     assert f"Sovereign Control Plane v{__version__}" in text
-    for header in ("SERVICE", "STATUS", "CPU %", "MEM (MB)", "DEPENDENCIES"):
+    for header in ("SERVICE", "STATUS", "DURATION", "CPU %", "MEM (MB)", "ENDPOINT"):
         assert header in text
-    # ready -> RUNNING label; metrics rendered; deps joined
+    assert "DEPENDENCIES" not in text
+    # ready -> RUNNING label; metrics rendered; endpoint rendered
     assert "RUNNING" in text
     assert "12.4%" in text
     assert "14500" in text
     assert "STARTING" in text
-    assert "docker_engine, llama_heavy_v1" in text
-    # missing metrics render as "-"
+    assert "http://127.0.0.1:11435" in text
+    # missing endpoint/metrics render as "-"
     assert "-" in text
 
 
@@ -58,7 +96,6 @@ def test_dashboard_renders_activity_area() -> None:
         "services": {
             "open_webui": {
                 "state": "provisioning",
-                "dependencies": ["docker_engine"],
                 "metrics": {},
                 "activity": "pulling open-webui — 3/8 layers",
             }
@@ -75,7 +112,6 @@ def test_dashboard_activity_shown_for_ready_service() -> None:
         "services": {
             "mlx_heavy": {
                 "state": "ready",
-                "dependencies": [],
                 "metrics": {},
                 "activity": "downloading model: 3/8 files (38%)",
             }
@@ -90,7 +126,7 @@ def test_dashboard_no_activity_area_when_idle() -> None:
     # ready service with no activity should not show an Activity area
     status = {
         "services": {
-            "engine": {"state": "ready", "dependencies": [], "metrics": {}, "activity": ""}
+            "engine": {"state": "ready", "metrics": {}, "activity": ""}
         }
     }
     text = _render(_dashboard(status))

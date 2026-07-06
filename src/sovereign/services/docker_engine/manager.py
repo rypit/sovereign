@@ -1,34 +1,43 @@
-"""``docker_engine`` — the thinnest possible service manager (§12, Phase 3).
+"""``docker_engine`` — the generic Docker container service (§12).
 
 Sovereign runs auxiliary services in Docker (§2.1), but Docker Desktop / OrbStack
-owns the daemon lifecycle on macOS. So this manager does not *start* a daemon; it
-verifies the daemon is reachable, reports health, and exposes ``run_compose()`` for
-the Dockerized services that arrive in later phases.
+owns the daemon lifecycle on macOS, not Sovereign. So there is no standalone
+"engine" service to declare or depend on: any service naming ``base_type:
+docker_engine`` runs an arbitrary container from its own ``config:`` block, and
+this manager verifies the daemon is reachable (as part of its own
+``prepare_environment``) before pulling the image and starting the container.
 
-This module also establishes the manager-construction convention every service
-follows: ``Manager(entry: ServiceEntry)`` parses ``entry.config`` into its own
-sibling config model.
+This module also hosts the shared Docker CLI helpers reused by every
+``docker_engine`` instance: ``run_docker``, ``stream_pull``, ``container_metrics``.
 """
 
 from __future__ import annotations
 
 import re
+import secrets
 import shutil
 import subprocess
-from collections.abc import Callable
+import urllib.error
+import urllib.request
+from collections.abc import Callable, Mapping
+from pathlib import Path
 from typing import Any
 
 from sovereign.config import ServiceEntry
 from sovereign.core.base_manager import ActivityMixin
 from sovereign.core.registry import register_service
-from sovereign.core.resolver import ConsumerKind
-from sovereign.services.docker_engine.config import DockerEngineConfig
+from sovereign.core.resolver import ConsumerKind, ResolvedEndpoint, Resolver, ServiceRegistry
+from sovereign.services.docker_engine.config import DockerEngineConfig, FileSpec
 
-# --- Shared Docker CLI helpers (reused by every Docker-based service) ---
+_HTTP_TIMEOUT = 2.0
+
+# --- Shared Docker CLI helpers (reused by every docker_engine instance) ---
 
 # A `docker pull` progress line: "<layer-id>: <status>".
 _PULL_LINE = re.compile(r"^(?P<layer>[0-9a-f]{12,}): (?P<status>.+)$")
 _DONE_STATUSES = ("Pull complete", "Already exists")
+
+_RANDOM_HEX_RE = re.compile(r"\$\{RANDOM_HEX:(?P<n>\d+)\}")
 
 
 def run_docker(
@@ -139,95 +148,139 @@ def container_metrics(container: str, *, binary: str = "docker") -> dict[str, An
     }
 
 
+def expand_volume(spec: str) -> str:
+    """Expand ``~`` in a bind-mount's host path; leave named volumes untouched."""
+    host, sep, container = spec.partition(":")
+    if sep and host.startswith("~"):
+        return f"{Path(host).expanduser()}{sep}{container}"
+    return spec
+
+
+def materialize_file(spec: FileSpec, env: Mapping[str, str] | None = None) -> bool:
+    """Write ``spec.content`` to ``spec.path`` if absent (idempotent).
+
+    Preserves anything already on disk — including a previously generated
+    ``${RANDOM_HEX:...}`` secret — across restarts. Returns True iff written.
+    """
+    path = Path(spec.path).expanduser()
+    if path.exists():
+        return False
+
+    content = _RANDOM_HEX_RE.sub(
+        lambda m: secrets.token_bytes((int(m.group("n")) + 1) // 2).hex()[: int(m.group("n"))],
+        spec.content,
+    )
+    content = Resolver(ServiceRegistry(), env).resolve(content, ConsumerKind.DOCKER)
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content)
+    return True
+
+
 @register_service("docker_engine")
 class DockerEngineManager(ActivityMixin):
-    """Verifies and talks to the local Docker daemon."""
+    """Supervises a generic Docker container described entirely by its config."""
 
     base_type = "docker_engine"
-    consumer_kind = ConsumerKind.NATIVE
+    consumer_kind = ConsumerKind.DOCKER
 
     def __init__(self, entry: ServiceEntry) -> None:
         self.name = entry.name
         self.dependencies = entry.dependencies
         self.config = DockerEngineConfig.model_validate(entry.config)
+        self._raw_env: dict[str, Any] = dict(entry.env_overrides or {})
+        self.resolved_env: dict[str, Any] = {}
+        self.health_path = entry.health_check.endpoint if entry.health_check else "/"
 
-    # --- internal helper ---
-    def _run(
-        self,
-        args: list[str],
-        *,
-        timeout: float | None = None,
-        check: bool = False,
+    # --- wiring ---
+    def resolve(self, resolver: Resolver) -> None:
+        self.resolved_env = resolver.resolve_mapping(self._raw_env, self.consumer_kind)
+
+    def endpoint(self) -> ResolvedEndpoint:
+        return ResolvedEndpoint(scheme="http", host="127.0.0.1", port=self.config.port)
+
+    def runtime_handle(self) -> dict | None:
+        return {"kind": "docker", "container": self._container_name()}
+
+    # --- internal helpers ---
+    def _container_name(self) -> str:
+        return self.config.container_name or self.name
+
+    def _run_docker(
+        self, args: list[str], *, timeout: float = 30, check: bool = False
     ) -> subprocess.CompletedProcess[str]:
-        return run_docker(
-            args,
-            binary=self.config.binary,
-            timeout=timeout if timeout is not None else self.config.probe_timeout_seconds,
-            check=check,
-        )
+        return run_docker(args, binary=self.config.binary, timeout=timeout, check=check)
 
-    # --- Lifecycle ---
-    def start(self) -> None:
-        """No daemon to spawn — assert reachability so boot fails fast if it's down."""
-        if not self.is_healthy():
-            raise RuntimeError(
-                f"Docker daemon is not reachable via '{self.config.binary}'. "
-                "Start Docker Desktop or OrbStack and retry."
-            )
-
-    def stop(self) -> None:
-        """No-op: Sovereign never stops the user's Docker daemon."""
-
-    # --- Readiness / observability ---
-    def is_healthy(self) -> bool:
+    def _daemon_reachable(self) -> bool:
         """True iff the Docker *server* answers — not just the client being present."""
         try:
-            result = self._run(["version", "--format", "{{.Server.Version}}"])
+            result = self._run_docker(
+                ["version", "--format", "{{.Server.Version}}"],
+                timeout=self.config.probe_timeout_seconds,
+            )
         except (FileNotFoundError, subprocess.TimeoutExpired):
             return False
         return result.returncode == 0 and bool(result.stdout.strip())
 
+    def _run_args(self) -> list[str]:
+        args = [
+            "run",
+            "-d",
+            "--name",
+            self._container_name(),
+            "-p",
+            f"{self.config.port}:{self.config.container_port or self.config.port}",
+        ]
+        for key, val in self.resolved_env.items():
+            args += ["-e", f"{key}={val}"]
+        for vol in self.config.volumes:
+            args += ["-v", expand_volume(vol)]
+        args.append(self.config.image)
+        return args
+
+    # --- Lifecycle ---
+    def start(self) -> None:
+        self._run_docker(["rm", "-f", self._container_name()], check=False)
+        self._run_docker(self._run_args(), timeout=60, check=True)
+
+    def stop(self) -> None:
+        self._run_docker(["rm", "-f", self._container_name()], check=False)
+
+    # --- Readiness / observability ---
+    def is_healthy(self) -> bool:
+        url = f"http://127.0.0.1:{self.config.port}{self.health_path}"
+        try:
+            with urllib.request.urlopen(url, timeout=_HTTP_TIMEOUT) as resp:  # noqa: S310 - fixed http scheme
+                return 200 <= resp.status < 400
+        except (urllib.error.URLError, OSError):
+            return False
+
     def get_metrics(self) -> dict[str, Any]:
-        healthy = self.is_healthy()
-        metrics: dict[str, Any] = {"status": "running" if healthy else "stopped"}
-        if healthy:
-            try:
-                result = self._run(["ps", "--quiet"])
-            except (FileNotFoundError, subprocess.TimeoutExpired):
-                return metrics
-            if result.returncode == 0:
-                metrics["containers"] = sum(
-                    1 for line in result.stdout.splitlines() if line.strip()
-                )
-        return metrics
+        return container_metrics(self._container_name(), binary=self.config.binary)
 
     # --- Resource cooperation ---
     def prepare_environment(self) -> None:
-        """Pre-flight: the Docker CLI must exist before we try to reach the daemon."""
         if shutil.which(self.config.binary) is None:
             raise FileNotFoundError(
-                f"Docker CLI '{self.config.binary}' not found on PATH. "
+                f"Docker CLI '{self.config.binary}' not found on PATH for '{self.name}'. "
                 "Install Docker Desktop or OrbStack."
             )
+        if not self._daemon_reachable():
+            raise RuntimeError(
+                f"Docker daemon is not reachable via '{self.config.binary}' "
+                f"(needed by '{self.name}'). Start Docker Desktop or OrbStack and retry."
+            )
+        for spec in self.config.files:
+            materialize_file(spec)
+        if self.config.auto_pull:
+            try:
+                stream_pull(
+                    self.config.image,
+                    binary=self.config.binary,
+                    on_progress=self.set_activity,
+                )
+            finally:
+                self.clear_activity()
 
     def adjust_resources(self, memory_limit_mb: int) -> None:
-        """No-op: the daemon's footprint isn't Sovereign's to shrink."""
-
-    # --- Service-specific surface ---
-    def run_compose(
-        self,
-        args: list[str],
-        *,
-        compose_file: str | None = None,
-        project_name: str | None = None,
-        timeout: float = 300,
-        check: bool = True,
-    ) -> subprocess.CompletedProcess[str]:
-        """Run ``docker compose ...`` for the Dockerized services built on top of this."""
-        cmd = ["compose"]
-        if compose_file is not None:
-            cmd += ["-f", compose_file]
-        if project_name is not None:
-            cmd += ["-p", project_name]
-        cmd += args
-        return self._run(cmd, timeout=timeout, check=check)
+        """No-op for now (container memory caps are a future phase)."""

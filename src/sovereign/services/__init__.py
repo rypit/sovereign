@@ -9,8 +9,6 @@ from sovereign.services import (  # noqa: F401 - imports register each service
     docker_engine,
     llama_cpp,
     mlx_lm,
-    open_webui,
-    searxng,
 )
 
-__all__ = ["docker_engine", "llama_cpp", "mlx_lm", "open_webui", "searxng"]
+__all__ = ["docker_engine", "llama_cpp", "mlx_lm"]
