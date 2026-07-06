@@ -12,6 +12,8 @@ import os
 import subprocess
 import sys
 import time
+from collections import deque
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Optional
@@ -19,6 +21,7 @@ from typing import Optional
 import typer
 from rich.console import Console, Group
 from rich.live import Live
+from rich.spinner import Spinner
 from rich.table import Table
 from rich.text import Text
 
@@ -67,13 +70,18 @@ def _dashboard_task_factory(interval: float = 1.0, live_console: Console | None 
     """An extra serve task that renders the live dashboard from in-process state."""
 
     async def task(orch, stop: asyncio.Event) -> None:
+        history = MetricHistory()
+        snapshot = orch.status_snapshot()
+        history.record(snapshot)
         with Live(
-            _dashboard(orch.status_snapshot()),
+            _dashboard(snapshot, history=history),
             console=live_console or console,
             refresh_per_second=4,
         ) as live:
             while not stop.is_set():
-                live.update(_dashboard(orch.status_snapshot()))
+                snapshot = orch.status_snapshot()
+                history.record(snapshot)
+                live.update(_dashboard(snapshot, history=history))
                 try:
                     await asyncio.wait_for(stop.wait(), timeout=interval)
                 except TimeoutError:
@@ -305,27 +313,103 @@ def _duration_cell(since: str | None) -> str:
     return _format_duration(max(0.0, elapsed))
 
 
-def _dashboard(status: dict):
+_HISTORY_SECONDS = 60.0  # trailing window kept per service per metric; tune here
+
+
+class MetricHistory:
+    """Rolling ~60s-window per-service, per-metric history for sparklines.
+
+    Constructed once per dashboard session (once in monitor(), once per
+    _dashboard_task_factory() task invocation) — never a module-level global,
+    so state never leaks across unrelated sessions or test invocations. Never
+    exposed as a user-facing parameter; always defaults to _HISTORY_SECONDS.
+    """
+
+    def __init__(self, window_seconds: float = _HISTORY_SECONDS) -> None:
+        self._window = window_seconds
+        self._data: dict[str, dict[str, deque[tuple[float, float]]]] = {}
+
+    def record(self, status: dict) -> None:
+        now = time.monotonic()
+        services = status.get("services", {})
+        for stale in set(self._data) - set(services):
+            del self._data[stale]
+        for name, svc in services.items():
+            metrics = svc.get("metrics") or {}
+            buckets = self._data.setdefault(name, {})
+            for key in ("cpu_percent", "memory_mb"):
+                if key in metrics:
+                    dq = buckets.setdefault(key, deque())
+                    dq.append((now, metrics[key]))
+                    cutoff = now - self._window
+                    while dq and dq[0][0] < cutoff:
+                        dq.popleft()
+
+    def values(self, service: str, metric: str) -> list[float]:
+        return [v for _, v in self._data.get(service, {}).get(metric, ())]
+
+
+_SPARK_CHARS = "▁▂▃▄▅▆▇█"
+
+
+def _sparkline(values: Sequence[float]) -> str:
+    """A trailing Unicode-block sparkline, min-max scaled to the buffer's own range."""
+    if len(values) < 2:
+        return ""
+    lo, hi = min(values), max(values)
+    if hi == lo:
+        mid = _SPARK_CHARS[len(_SPARK_CHARS) // 2]
+        return mid * len(values)
+    span = hi - lo
+    return "".join(
+        _SPARK_CHARS[min(int((v - lo) / span * len(_SPARK_CHARS)), len(_SPARK_CHARS) - 1)]
+        for v in values
+    )
+
+
+def _metric_cell(text: str, spark: str) -> str:
+    return f"{text} {spark}" if spark else text
+
+
+_SPINNER_STATES = {"provisioning", "starting"}
+
+
+def _status_cell(state: str) -> str | Spinner:
+    """Plain colored label for steady states; an animated spinner while coming online."""
+    color = _STATE_COLORS.get(state, "white")
+    markup = f"[{color}]{_status_label(state)}[/{color}]"
+    if state in _SPINNER_STATES:
+        return Spinner("dots", text=Text.from_markup(markup))
+    return markup
+
+
+def _dashboard(status: dict, history: MetricHistory | None = None):
     """Render the §8 dashboard table, plus a live "Provisioning" activity area."""
     table = Table(title=f"Sovereign Control Plane v{__version__}", title_justify="left")
     table.add_column("SERVICE")
     table.add_column("STATUS")
     table.add_column("DURATION")
-    table.add_column("CPU %", justify="right")
-    table.add_column("MEM (MB)", justify="right")
+    table.add_column("CPU %")
+    table.add_column("MEM (MB)")
     table.add_column("ENDPOINT")
 
     activity_lines: list[str] = []
     for name, svc in status.get("services", {}).items():
         state = svc.get("state", "unknown")
-        color = _STATE_COLORS.get(state, "white")
         metrics = svc.get("metrics") or {}
         cpu = f"{metrics['cpu_percent']:.1f}%" if "cpu_percent" in metrics else "-"
         mem = f"{metrics['memory_mb']:.0f}" if "memory_mb" in metrics else "-"
+        cpu_spark = _sparkline(history.values(name, "cpu_percent")) if history else ""
+        mem_spark = _sparkline(history.values(name, "memory_mb")) if history else ""
         duration = _duration_cell(svc.get("since"))
         endpoint = svc.get("endpoint") or "-"
         table.add_row(
-            name, f"[{color}]{_status_label(state)}[/{color}]", duration, cpu, mem, endpoint
+            name,
+            _status_cell(state),
+            duration,
+            _metric_cell(cpu, cpu_spark),
+            _metric_cell(mem, mem_spark),
+            endpoint,
         )
 
         activity = (svc.get("activity") or "").strip()
@@ -350,15 +434,20 @@ def monitor(
         console.print("No running stack (no status.json). Run [bold]sovereign up[/bold].")
         raise typer.Exit(0)
 
+    history = MetricHistory()
+    history.record(status)
+
     if once:
-        console.print(_dashboard(status))
+        console.print(_dashboard(status, history=history))
         return
 
-    with Live(_dashboard(status), console=console, refresh_per_second=4) as live:
+    with Live(_dashboard(status, history=history), console=console, refresh_per_second=4) as live:
         try:
             while True:
                 time.sleep(interval)
-                live.update(_dashboard(_load_dashboard_status(state_dir) or status))
+                status = _load_dashboard_status(state_dir) or status
+                history.record(status)
+                live.update(_dashboard(status, history=history))
         except KeyboardInterrupt:  # pragma: no cover - interactive
             pass
 

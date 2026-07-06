@@ -32,9 +32,9 @@ from sovereign.core.resources import (
 from sovereign.utils.manifest import write_manifest
 from sovereign.utils.state import file_hash, write_json
 
-# Default cadences (§6.2/§6.3): 2s health polling, 10s metrics.
+# Default cadences (§6.2/§6.3): 2s health polling, 2s metrics (fresh enough for sparklines).
 _HEALTH_INTERVAL = 2.0
-_METRICS_INTERVAL = 10.0
+_METRICS_INTERVAL = 2.0
 
 
 class ServiceState(StrEnum):

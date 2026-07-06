@@ -4,18 +4,23 @@ from __future__ import annotations
 
 import asyncio
 import io
+import time
 import types
 
 from rich.console import Console
+from rich.spinner import Spinner
 from typer.testing import CliRunner
 
 from sovereign import __version__, main
 from sovereign.main import (
+    MetricHistory,
     _dashboard,
     _dashboard_task_factory,
     _duration_cell,
     _format_duration,
     _load_dashboard_status,
+    _sparkline,
+    _status_cell,
     app,
 )
 from sovereign.utils.state import write_json
@@ -89,6 +94,89 @@ def test_dashboard_matches_mockup_shape() -> None:
     assert "http://127.0.0.1:11435" in text
     # missing endpoint/metrics render as "-"
     assert "-" in text
+
+
+# --- sparklines ---
+def test_sparkline_empty_for_fewer_than_two_points() -> None:
+    assert _sparkline([]) == ""
+    assert _sparkline([1.0]) == ""
+
+
+def test_sparkline_flat_when_all_equal() -> None:
+    assert _sparkline([5.0, 5.0, 5.0]) == "▅▅▅"
+
+
+def test_sparkline_scales_min_to_max() -> None:
+    spark = _sparkline([0.0, 100.0])
+    assert spark[0] == "▁"
+    assert spark[-1] == "█"
+
+
+# --- MetricHistory ---
+def test_metric_history_prunes_old_samples_by_age() -> None:
+    history = MetricHistory(window_seconds=0.05)
+    history.record({"services": {"a": {"metrics": {"cpu_percent": 1.0}}}})
+    time.sleep(0.1)
+    history.record({"services": {"a": {"metrics": {"cpu_percent": 2.0}}}})
+    assert history.values("a", "cpu_percent") == [2.0]
+
+
+def test_metric_history_keeps_recent_samples() -> None:
+    history = MetricHistory(window_seconds=5.0)
+    history.record({"services": {"a": {"metrics": {"cpu_percent": 1.0}}}})
+    history.record({"services": {"a": {"metrics": {"cpu_percent": 2.0}}}})
+    assert history.values("a", "cpu_percent") == [1.0, 2.0]
+
+
+def test_metric_history_prunes_services_no_longer_present() -> None:
+    history = MetricHistory()
+    history.record({"services": {"a": {"metrics": {"cpu_percent": 1.0}}}})
+    history.record({"services": {"b": {"metrics": {"cpu_percent": 2.0}}}})
+    assert history.values("a", "cpu_percent") == []
+    assert history.values("b", "cpu_percent") == [2.0]
+
+
+def test_metric_history_per_metric_independence() -> None:
+    history = MetricHistory()
+    history.record({"services": {"a": {"metrics": {"cpu_percent": 1.0}}}})
+    history.record({"services": {"a": {"metrics": {"cpu_percent": 2.0, "memory_mb": 100.0}}}})
+    assert history.values("a", "cpu_percent") == [1.0, 2.0]
+    assert history.values("a", "memory_mb") == [100.0]
+
+
+def test_metric_history_instances_share_no_state() -> None:
+    a = MetricHistory()
+    b = MetricHistory()
+    a.record({"services": {"x": {"metrics": {"cpu_percent": 1.0}}}})
+    assert b.values("x", "cpu_percent") == []
+
+
+# --- _status_cell ---
+def test_status_cell_spinner_for_transitional_states() -> None:
+    assert isinstance(_status_cell("provisioning"), Spinner)
+    assert isinstance(_status_cell("starting"), Spinner)
+
+
+def test_status_cell_plain_markup_for_steady_states() -> None:
+    assert _status_cell("ready") == "[green]RUNNING[/green]"
+    assert _status_cell("stopped") == "[dim]STOPPED[/dim]"
+    assert _status_cell("failed") == "[red]FAILED[/red]"
+
+
+# --- backward-compat regression: no sparkline artifacts without history ---
+def test_dashboard_without_history_has_no_sparkline_artifacts() -> None:
+    text = _render(_dashboard(_STATUS))
+    assert "RUNNING" in text
+    assert "12.4%" in text
+    assert "14500" in text
+    assert "STARTING" in text
+    assert "http://127.0.0.1:11435" in text
+    assert not any(ch in text for ch in "▁▂▃▄▅▆▇█")
+
+
+def test_dashboard_with_empty_history_has_no_sparkline_artifacts() -> None:
+    text = _render(_dashboard(_STATUS, history=MetricHistory()))
+    assert not any(ch in text for ch in "▁▂▃▄▅▆▇█")
 
 
 def test_dashboard_renders_activity_area() -> None:
