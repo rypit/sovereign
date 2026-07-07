@@ -1,0 +1,21 @@
+version: "1"
+
+# Clean-room agentic-quality sweep: bench boots examples/bench/quality-stack.yaml
+# itself, runs the smoke suite through mini_swe_local, grades each task from the
+# repo (git diff + pytest), and tears the stack down. Needs `sovereign down`
+# first if a daemon-managed stack is already up in this state dir (bench.lock).
+stacks:
+  - examples/bench/quality-stack.yaml
+
+harnesses:
+  - mini_swe_local
+
+suites:
+  - examples/bench/smoke_suite
+
+trials: 1
+seed: 0
+mode: cleanroom
+
+budgets:
+  task_timeout_s: 300

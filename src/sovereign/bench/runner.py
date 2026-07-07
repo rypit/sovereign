@@ -75,6 +75,22 @@ class Job:
 CellExecutor = Callable[[Job], dict[str, Any]]
 
 
+def is_perf_only_cell(job: Job) -> bool:
+    """Whether a cell has no harness/suite — i.e. it's a pure performance probe."""
+    return job.harness == "_none" and job.suite == "_none"
+
+
+def combine_executors(perf_executor: CellExecutor, quality_executor: CellExecutor) -> CellExecutor:
+    """Dispatch each cell to ``perf_executor`` (no harness/suite) or
+    ``quality_executor`` (both set), so one spec can sweep pure-perf and
+    agentic-quality cells side by side."""
+
+    def executor(job: Job) -> dict[str, Any]:
+        return perf_executor(job) if is_perf_only_cell(job) else quality_executor(job)
+
+    return executor
+
+
 def _stack_identity(stack: str) -> dict[str, Any]:
     path = Path(stack)
     if path.is_file():

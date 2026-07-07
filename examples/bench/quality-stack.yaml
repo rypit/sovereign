@@ -1,0 +1,32 @@
+version: "1.1"
+
+# A minimal stack for exercising the agentic-quality bench pipeline
+# end-to-end (see examples/bench/quality-cleanroom.yaml). Point `model` at a
+# real local GGUF/MLX model before using this for real.
+
+resources:
+  max_unified_memory_gb: 32
+  safety_margin_gb: 4
+
+services:
+  - name: quality_engine
+    base_type: llama_cpp
+    priority: critical
+    health_check:
+      type: http
+      endpoint: /health
+      port: 11435
+      timeout_seconds: 60
+    config:
+      model: "~/models/your-model.gguf"
+      gpu_layers: 999
+      context_size: 8192
+
+harnesses:
+  - name: mini_swe_local
+    base_type: mini_swe_agent
+    dependencies: [quality_engine]
+    config:
+      base_url: "{{ quality_engine.endpoint }}/v1"
+      model: "{{ quality_engine.model }}"
+      step_limit: 20

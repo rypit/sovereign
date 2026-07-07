@@ -29,7 +29,8 @@ from sovereign import __version__
 from sovereign.bench.cleanroom import make_cleanroom_executor
 from sovereign.bench.lock import BenchLockError, lock_path
 from sovereign.bench.perf import make_perf_attach_executor
-from sovereign.bench.runner import run_bench
+from sovereign.bench.quality import make_quality_executor
+from sovereign.bench.runner import combine_executors, run_bench
 from sovereign.bench.spec import BenchMode, BenchSpecError, load_bench_spec
 from sovereign.config import ConfigError, load_config
 from sovereign.core.base_harness import Task
@@ -637,9 +638,13 @@ def bench_run(
         raise typer.Exit(1) from exc
 
     if spec.mode == BenchMode.CLEANROOM:
+        # The clean-room executor dispatches perf vs. quality internally, since
+        # both need the same boot/measure/teardown around a single Orchestrator.
         executor = make_cleanroom_executor(spec, state_dir)
     else:
-        executor = make_perf_attach_executor(spec, state_dir)
+        executor = combine_executors(
+            make_perf_attach_executor(spec, state_dir), make_quality_executor(spec, state_dir)
+        )
 
     try:
         manifest = run_bench(spec, state_dir=state_dir, executor=executor)

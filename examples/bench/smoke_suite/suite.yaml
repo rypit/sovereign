@@ -1,0 +1,28 @@
+version: "1"
+
+# A tiny suite that exercises the whole quality pipeline (prepare workspace ->
+# invoke harness -> grade the repo) without needing your own real tasks yet.
+# `repo.path` is resolved relative to this file's directory.
+tasks:
+  - id: add_multiply
+    repo:
+      path: "./fixture"
+    prompt: >
+      Add a `multiply(a, b)` function to util.py that returns a * b, and add
+      a test for it in test_util.py.
+    grader:
+      type: pytest
+      expect_diff: true
+    timeout_s: 300
+
+  - id: fix_docstring
+    repo:
+      path: "./fixture"
+    prompt: >
+      Add a one-line docstring to the `add` function in util.py explaining
+      what it does.
+    grader:
+      type: command
+      cmd: "grep -q '\"\"\"' util.py"
+      expect_diff: true
+    timeout_s: 300
