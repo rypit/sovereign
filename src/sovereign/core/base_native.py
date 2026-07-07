@@ -141,9 +141,20 @@ class NativeEngineManager(ActivityMixin):
         return None
 
     # --- wiring ---
+    def api_model_name(self) -> str:
+        """The string an OpenAI-compatible client sends as ``"model"``.
+
+        ``served_model_name`` overrides when set; otherwise the configured
+        ``model`` (local path or HF repo id) is the name clients must send.
+        """
+        served = getattr(self.config, "served_model_name", None)
+        return served or self.config.model
+
     def endpoint(self) -> ResolvedEndpoint:
         """The address consumers reach this engine at (registered when READY)."""
-        return ResolvedEndpoint(scheme="http", host=self.host, port=self.port)
+        return ResolvedEndpoint(
+            scheme="http", host=self.host, port=self.port, model=self.api_model_name()
+        )
 
     def runtime_handle(self) -> dict | None:
         """A cross-process teardown handle (PID) recorded in state.json for `down`."""

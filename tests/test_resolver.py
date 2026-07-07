@@ -105,3 +105,16 @@ def test_registry_contains_and_names() -> None:
     reg = _registry()
     assert "llama_heavy_v1" in reg
     assert reg.names() == ["llama_heavy_v1"]
+
+
+# --- model attribute (harness/bench wiring) ---
+def test_model_attribute_resolves() -> None:
+    reg = ServiceRegistry()
+    reg.register("llama_heavy_v1", ResolvedEndpoint("http", "127.0.0.1", 11435, model="llama3-70b"))
+    got = Resolver(reg, env={}).resolve("{{ llama_heavy_v1.model }}", ConsumerKind.NATIVE)
+    assert got == "llama3-70b"
+
+
+def test_model_attribute_missing_raises() -> None:
+    with pytest.raises(ResolutionError, match="no 'model' attribute"):
+        _resolver().resolve("{{ llama_heavy_v1.model }}", ConsumerKind.NATIVE)

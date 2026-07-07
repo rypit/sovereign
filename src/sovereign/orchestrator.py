@@ -107,6 +107,7 @@ class Orchestrator:
         self._service_names = [s.name for s in config.services]
         self._boot_order: list[str] = []
         self._built = False
+        self._boot_complete = False
 
         self.variant_file = Path(variant_file) if variant_file else None
         self.variant_hash = file_hash(self.variant_file) if self.variant_file else None
@@ -220,6 +221,7 @@ class Orchestrator:
             raise BootError(str(_first_exception(group))) from _first_exception(group)
 
         self._materialize_harnesses()
+        self._boot_complete = True
         self.persist()
 
     async def _boot_service(self, name: str) -> None:
@@ -272,7 +274,12 @@ class Orchestrator:
         if callable(endpoint_fn):
             endpoint = endpoint_fn()
             if endpoint is not None:
+                previous = self.registry.get(name) if name in self.registry else None
                 self.registry.register(name, endpoint)
+                # A restart landing on a new endpoint (e.g. a different port) would
+                # otherwise silently strand any harness pointing at the old one.
+                if self._boot_complete and previous is not None and previous != endpoint:
+                    self._materialize_harnesses()
 
     def _materialize_harnesses(self) -> None:
         for entry in self.config.harnesses:

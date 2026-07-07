@@ -78,19 +78,43 @@ class FakeManager:
         return {"kind": "native", "pid": 4242}
 
 
+class FakeHarness:
+    """Records materialize/resolve calls into a shared log for ordering assertions."""
+
+    def __init__(self, entry, log: list):
+        self.name = entry.name
+        self.dependencies = entry.dependencies
+        self._log = log
+        self.resolved_with = None
+        self.materialize_count = 0
+
+    def resolve(self, resolver) -> None:
+        self.resolved_with = resolver
+
+    def materialize(self) -> None:
+        self.materialize_count += 1
+        self._log.append((self.name, "materialize"))
+
+
 def _config(
-    services: list[dict], version: str = "1.1", resources: dict | None = None
+    services: list[dict],
+    version: str = "1.1",
+    resources: dict | None = None,
+    harnesses: list[dict] | None = None,
 ) -> SovereignConfig:
     return SovereignConfig.model_validate(
         {
             "version": version,
             "resources": resources or {"max_unified_memory_gb": 64, "safety_margin_gb": 4},
             "services": services,
+            "harnesses": harnesses or [],
         }
     )
 
 
-def _orch(config: SovereignConfig, log: list | None = None, **kwargs) -> Orchestrator:
+def _orch(
+    config: SovereignConfig, log: list | None = None, *, harness_log: list | None = None, **kwargs
+) -> Orchestrator:
     log = log if log is not None else []
     healthy = kwargs.pop("healthy", True)
     ports = kwargs.pop("ports", {})
@@ -106,6 +130,9 @@ def _orch(config: SovereignConfig, log: list | None = None, **kwargs) -> Orchest
             mem_gb=mems.get(entry.name, 0.0),
             prepare_delay=prepare_delays.get(entry.name, 0.0),
         )
+
+    if harness_log is not None and "harness_factory" not in kwargs:
+        kwargs["harness_factory"] = lambda entry: FakeHarness(entry, harness_log)
 
     kwargs.setdefault("health_interval", 0.01)
     kwargs.setdefault("metrics_interval", 0.01)
@@ -434,3 +461,81 @@ def test_manifest_records_memory_budget(tmp_path) -> None:
         "available_gb": 36.0,
     }
     assert manifest["services"][0]["estimated_memory_gb"] == 20.0
+
+
+# --- harness materialization (H1) ---
+def test_harness_materialized_after_deps_ready() -> None:
+    log: list = []
+    cfg = _config(
+        [{"name": "engine", "base_type": "x"}],
+        harnesses=[{"name": "h", "base_type": "y", "dependencies": ["engine"]}],
+    )
+    orch = _orch(cfg, log, harness_log=log)
+    asyncio.run(orch.boot())
+    assert ("h", "materialize") in log
+    assert orch.harnesses["h"].resolved_with is orch.resolver
+    assert orch.harnesses["h"].materialize_count == 1
+
+
+def test_harness_not_materialized_when_deps_not_ready() -> None:
+    log: list = []
+    cfg = _config(
+        [{"name": "engine", "base_type": "x"}],
+        harnesses=[{"name": "h", "base_type": "y", "dependencies": ["engine"]}],
+    )
+    orch = _orch(cfg, log, harness_log=log, healthy=False, health_interval=0.01)
+    orch._entries["engine"].health_check = None
+    orch._health_timeout = lambda name: 0.05  # type: ignore[method-assign]
+    with pytest.raises(BootError):
+        asyncio.run(orch.boot())
+    assert orch.harnesses["h"].materialize_count == 0
+
+
+def test_harness_remateralized_when_endpoint_changes() -> None:
+    log: list = []
+    cfg = _config(
+        [{"name": "engine", "base_type": "x"}],
+        harnesses=[{"name": "h", "base_type": "y", "dependencies": ["engine"]}],
+    )
+    orch = _orch(cfg, log, harness_log=log, ports={"engine": 11435})
+
+    async def scenario() -> None:
+        await orch.boot()
+        assert orch.harnesses["h"].materialize_count == 1
+        # Simulate a restart landing on a new port.
+        orch.managers["engine"]._port = 11999
+        await orch._restart("engine")
+        assert orch.registry.get("engine").port == 11999
+        assert orch.harnesses["h"].materialize_count == 2
+
+    asyncio.run(scenario())
+
+
+def test_harness_not_remateralized_when_endpoint_unchanged() -> None:
+    log: list = []
+    cfg = _config(
+        [{"name": "engine", "base_type": "x"}],
+        harnesses=[{"name": "h", "base_type": "y", "dependencies": ["engine"]}],
+    )
+    orch = _orch(cfg, log, harness_log=log, ports={"engine": 11435})
+
+    async def scenario() -> None:
+        await orch.boot()
+        assert orch.harnesses["h"].materialize_count == 1
+        await orch._restart("engine")  # same port
+        assert orch.harnesses["h"].materialize_count == 1
+
+    asyncio.run(scenario())
+
+
+def test_manifest_includes_harnesses(tmp_path) -> None:
+    cfg = _config(
+        [{"name": "engine", "base_type": "x"}],
+        harnesses=[{"name": "h", "base_type": "y", "dependencies": ["engine"]}],
+    )
+    orch = _orch(cfg, state_dir=tmp_path, harness_log=[], ports={"engine": 11435})
+    asyncio.run(orch.boot())
+    manifest = json.loads((tmp_path / "manifest.json").read_text())
+    assert manifest["harnesses"] == [
+        {"name": "h", "base_type": "y", "dependencies": ["engine"]}
+    ]

@@ -15,8 +15,15 @@ harness/bench tracks land.
 
 from __future__ import annotations
 
+import hashlib
+import json
 from dataclasses import dataclass, field
-from typing import Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
+
+from sovereign.core.resolver import ConsumerKind, Resolver
+
+if TYPE_CHECKING:
+    from sovereign.config import HarnessEntry
 
 
 @dataclass
@@ -64,3 +71,39 @@ class Harness(Protocol):
     def invoke(self, task: Task) -> RunResult:
         """Run one headless, non-interactive session and return its result."""
         ...
+
+
+class BaseHarness:
+    """Shared scaffolding for concrete harnesses: template resolution + fingerprint.
+
+    Concrete harnesses subclass this and implement ``materialize()``/``invoke()``
+    from the :class:`Harness` Protocol above. ``consumer_kind`` picks which host
+    a ``{{ }}`` template resolves to (NATIVE for a harness running on the host,
+    DOCKER for one running inside a sandbox container).
+    """
+
+    #: How this harness reaches service endpoints — see :class:`ConsumerKind`.
+    consumer_kind: ConsumerKind = ConsumerKind.NATIVE
+
+    def __init__(self, entry: HarnessEntry) -> None:
+        self.entry = entry
+        self.name = entry.name
+        self.dependencies = entry.dependencies
+        self.resolver: Resolver | None = None
+        self.resolved_config: dict[str, object] = {}
+
+    def resolve(self, resolver: Resolver) -> None:
+        """Resolve ``{{ }}``/``${ENV:}`` templates in this harness's config block.
+
+        Called by the Orchestrator once all ``dependencies`` are ``READY``, and
+        again whenever one of those endpoints changes.
+        """
+        self.resolver = resolver
+        self.resolved_config = resolver.resolve_mapping(self.entry.config, self.consumer_kind)
+
+    def fingerprint(self) -> dict[str, object]:
+        """Stable identity for the manifest and bench cell keys."""
+        config_hash = hashlib.sha256(
+            json.dumps(self.resolved_config, sort_keys=True, default=str).encode()
+        ).hexdigest()
+        return {"base_type": self.entry.base_type, "config_hash": config_hash}

@@ -464,3 +464,24 @@ def test_get_metrics_falls_back_to_rss_when_footprint_unavailable(monkeypatch) -
     monkeypatch.setattr(native_mod.psutil, "Process", FakePsProc)
     monkeypatch.setattr(native_mod, "macos_phys_footprint", lambda pid: None)
     assert m.get_metrics()["memory_mb"] == 6000.0
+
+
+# --- served_model_name / api_model_name (harness+bench wiring) ---
+def test_api_model_name_defaults_to_model() -> None:
+    m = _manager({"model": "mlx-community/Llama-3.2-1B-Instruct-4bit"})
+    assert m.api_model_name() == "mlx-community/Llama-3.2-1B-Instruct-4bit"
+
+
+def test_api_model_name_prefers_served_model_name() -> None:
+    m = _manager(
+        {
+            "model": "mlx-community/Llama-3.2-1B-Instruct-4bit",
+            "served_model_name": "llama-3.2-1b",
+        }
+    )
+    assert m.api_model_name() == "llama-3.2-1b"
+
+
+def test_endpoint_carries_api_model_name() -> None:
+    m = _manager({"model": "mlx-community/Llama-3.2-1B-Instruct-4bit"})
+    assert m.endpoint().model == "mlx-community/Llama-3.2-1B-Instruct-4bit"

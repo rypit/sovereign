@@ -48,6 +48,9 @@ class ResolvedEndpoint:
     scheme: str
     host: str
     port: int
+    #: The string an OpenAI-compatible client sends as ``"model"`` (native
+    #: engines only — containers/other services leave this unset).
+    model: str | None = None
 
     def host_for(self, consumer: ConsumerKind) -> str:
         if consumer is ConsumerKind.DOCKER and self.host in _LOOPBACK:
@@ -66,8 +69,12 @@ class ResolvedEndpoint:
             return str(self.port)
         if attr == "scheme":
             return self.scheme
+        if attr == "model":
+            if self.model is None:
+                raise ResolutionError("endpoint has no 'model' attribute set")
+            return self.model
         raise ResolutionError(
-            f"unknown endpoint attribute '{attr}' (expected endpoint/url/host/port/scheme)"
+            f"unknown endpoint attribute '{attr}' (expected endpoint/url/host/port/scheme/model)"
         )
 
 

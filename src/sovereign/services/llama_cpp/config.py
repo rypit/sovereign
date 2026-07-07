@@ -63,6 +63,9 @@ class LlamaCppConfig(SovereignBaseModel):
 
     #: Optional bearer key llama-server requires on requests (``--api-key``).
     api_key: str | None = None
+    #: Client-facing model name (``--alias``) — the string an OpenAI-compatible
+    #: client sends as ``"model"``. Defaults to ``model`` when unset.
+    served_model_name: str | None = None
     #: Escape hatch for flags Sovereign doesn't model yet.
     extra_args: list[str] = Field(default_factory=list)
     #: Directory for the captured stdout/stderr log (created on start).

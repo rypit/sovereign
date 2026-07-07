@@ -27,6 +27,8 @@ from rich.text import Text
 
 from sovereign import __version__
 from sovereign.config import ConfigError, load_config
+from sovereign.core.base_harness import Task
+from sovereign.core.resolver import ResolvedEndpoint, Resolver, ServiceRegistry
 from sovereign.orchestrator import BootError, serve_forever
 from sovereign.utils.state import file_hash, read_json, write_json
 from sovereign.utils.teardown import stop_service_handle
@@ -37,6 +39,8 @@ app = typer.Typer(
     no_args_is_help=True,
     add_completion=False,
 )
+harness_app = typer.Typer(help="Inspect and invoke configured harnesses.")
+app.add_typer(harness_app, name="harness")
 console = Console()
 
 _DEFAULT_CONFIG = Path("sovereign.yaml")
@@ -455,6 +459,148 @@ def monitor(
                 live.update(_dashboard(status, history=history))
         except KeyboardInterrupt:  # pragma: no cover - interactive
             pass
+
+
+def _config_path_for_harness_cli(file: Path | None, state_dir: Path) -> Path:
+    """The stack file to read harnesses from: explicit ``-f``, else the recorded
+    variant of a running stack, else the default ``sovereign.yaml``."""
+    if file is not None:
+        return file
+    state_path = state_dir / "state.json"
+    if state_path.exists():
+        variant = read_json(state_path).get("variant_file")
+        if variant:
+            return Path(variant)
+    return _DEFAULT_CONFIG
+
+
+def _load_harness_config(file: Path | None, state_dir: Path):
+    path = _config_path_for_harness_cli(file, state_dir)
+    try:
+        return load_config(path)
+    except ConfigError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1) from exc
+
+
+def _registry_from_manifest(manifest: dict) -> ServiceRegistry:
+    """Rebuild a `ServiceRegistry` from a persisted manifest.json (a separate
+    CLI invocation has no live Orchestrator to read endpoints from)."""
+    registry = ServiceRegistry()
+    for svc in manifest.get("services", []):
+        endpoint = svc.get("endpoint")
+        if not endpoint:
+            continue
+        registry.register(
+            svc["name"],
+            ResolvedEndpoint(
+                scheme=endpoint["scheme"],
+                host=endpoint["host"],
+                port=endpoint["port"],
+                model=endpoint.get("model"),
+            ),
+        )
+    return registry
+
+
+def _load_harness(name: str, file: Optional[Path], state_dir: Path):  # noqa: UP045
+    """Build and resolve one harness instance against the live stack's manifest."""
+    manifest_path = state_dir / "manifest.json"
+    if not manifest_path.exists():
+        console.print(
+            "[red]No running stack found (no manifest.json). Run `sovereign up` first.[/red]"
+        )
+        raise typer.Exit(1)
+    manifest = read_json(manifest_path)
+
+    config = _load_harness_config(file, state_dir)
+    entry = next((h for h in config.harnesses if h.name == name), None)
+    if entry is None:
+        known = ", ".join(h.name for h in config.harnesses) or "(none configured)"
+        console.print(f"[red]Unknown harness '{name}'; known: {known}[/red]")
+        raise typer.Exit(1)
+
+    import sovereign.harnesses  # noqa: F401 - populate the registry
+    from sovereign.core.registry import get_harness
+
+    try:
+        harness_cls = get_harness(entry.base_type)
+    except KeyError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1) from exc
+
+    registry = _registry_from_manifest(manifest)
+    missing = [dep for dep in entry.dependencies if dep not in registry]
+    if missing:
+        console.print(f"[red]Dependencies not ready: {', '.join(missing)}[/red]")
+        raise typer.Exit(1)
+
+    harness = harness_cls(entry)
+    resolve = getattr(harness, "resolve", None)
+    if callable(resolve):
+        resolve(Resolver(registry))
+    return harness
+
+
+@harness_app.command("list")
+def harness_list(
+    file: Optional[Path] = typer.Option(  # noqa: UP045 - Typer needs Optional at runtime
+        None, "-f", "--file", help="Stack file (defaults to the running stack's variant)."
+    ),
+    state_dir: Path = _STATE_DIR_OPTION,
+) -> None:
+    """List configured harnesses and their dependencies."""
+    config = _load_harness_config(file, state_dir)
+    if not config.harnesses:
+        console.print("[yellow]No harnesses configured.[/yellow]")
+        return
+
+    table = Table(title="Sovereign harnesses")
+    table.add_column("NAME")
+    table.add_column("BASE_TYPE")
+    table.add_column("DEPENDENCIES")
+    for h in config.harnesses:
+        table.add_row(h.name, h.base_type, ", ".join(h.dependencies) or "-")
+    console.print(table)
+
+
+@harness_app.command("materialize")
+def harness_materialize(
+    name: str = typer.Argument(..., help="Harness instance name."),
+    file: Optional[Path] = typer.Option(  # noqa: UP045 - Typer needs Optional at runtime
+        None, "-f", "--file", help="Stack file (defaults to the running stack's variant)."
+    ),
+    state_dir: Path = _STATE_DIR_OPTION,
+) -> None:
+    """Re-run materialize() for a harness against the live stack."""
+    harness = _load_harness(name, file, state_dir)
+    harness.materialize()
+    console.print(f"[green]Materialized '{name}'.[/green]")
+
+
+@harness_app.command("invoke")
+def harness_invoke(
+    name: str = typer.Argument(..., help="Harness instance name."),
+    prompt: str = typer.Option(..., "--prompt", help="Task prompt."),
+    workdir: Optional[Path] = typer.Option(  # noqa: UP045 - Typer needs Optional at runtime
+        None, "--workdir", help="Working directory for the run."
+    ),
+    file: Optional[Path] = typer.Option(  # noqa: UP045 - Typer needs Optional at runtime
+        None, "-f", "--file", help="Stack file (defaults to the running stack's variant)."
+    ),
+    state_dir: Path = _STATE_DIR_OPTION,
+) -> None:
+    """Run one headless session through a harness and print the result."""
+    harness = _load_harness(name, file, state_dir)
+    harness.materialize()
+    task = Task(id=f"{name}-cli", prompt=prompt, workdir=str(workdir) if workdir else None)
+    result = harness.invoke(task)
+    color = "green" if result.success else "red"
+    console.print(f"[{color}]success={result.success} exit_code={result.exit_code}[/{color}]")
+    if result.output:
+        console.print(result.output)
+    if not result.success:
+        raise typer.Exit(1)
 
 
 @app.command()
