@@ -18,13 +18,16 @@ The default stack also runs **SearXNG**, wired into Open WebUI for web search.
 ## Status
 
 The MVP orchestration spine is implemented and tested (Phases 0–8 and 10 of the
-roadmap; 201 tests passing):
+roadmap), and **both post-MVP tracks — harnesses and benchmarking — are complete**
+(375 tests passing):
 
 - Core contracts (`ServiceManager` / `Harness` Protocols, `base_type` registry),
   `sovereign.yaml` parsing, and the full Typer CLI (`up`/`down`/`status`/`logs`/
-  `monitor`).
+  `monitor`/`harness`/`bench`).
 - The Orchestrator: DAG boot in dependency order, async reconciliation loop,
-  memory admission control, resolved-stack manifest + drift detection.
+  memory admission control, resolved-stack manifest + drift detection, and
+  harness materialization (including re-materialization when a dependency's
+  endpoint changes, e.g. after a restart).
 - Services: `docker_engine` (a generic Docker container runner — `open_webui` and
   `searxng` are just instances of it configured in YAML), `llama_cpp`, `mlx_lm`.
   The Docker daemon is implicit infrastructure: each `docker_engine` service
@@ -34,11 +37,29 @@ roadmap; 201 tests passing):
   `mlx_lm` share a native-engine base and are configured consistently:
   `llama_cpp`'s config field is now `model` (renamed from `model_path`) and,
   like `mlx_lm`, accepts a local model path or a HuggingFace repo id; both
-  engines also support speculative-decoding `draft_model`/`num_draft_tokens`.
+  engines also support speculative-decoding `draft_model`/`num_draft_tokens`,
+  and an optional `served_model_name` for the OpenAI-compatible `"model"` string.
+- Harnesses: `cline_cli` (subprocess, isolated `CLINE_DIR`, `--yolo`/`--json`
+  headless) and `mini_swe_agent` (in-process `DefaultAgent`/`LitellmModel`, the
+  optional `harness` dependency extra). Both are invocable via
+  `sovereign harness list/materialize/invoke`.
+- Benchmarking (`sovereign bench run/ls/compare`): a bench spec (`bench.yaml`,
+  never part of `sovereign.yaml`) sweeps `stacks x harnesses x suites` into
+  content-addressed cells that skip on re-run. Attach mode measures an
+  already-running stack read-only (TTFT/tok-s/latency via an in-house `httpx`
+  prober, the optional `bench` extra); clean-room mode boots/measures/tears
+  down each stack itself behind a lockfile so it can't fight the daemon.
+  Agentic-quality cells run a harness against a native task-suite format,
+  grading from `git diff` + a programmatic grader rather than the harness's
+  own self-report, and gate off stacks whose perf cell already failed
+  its thresholds. `bench compare` joins perf + quality results into a
+  Pareto (speed/quality) comparison across runs.
 
-Still to come: `launchd` install/uninstall (Phase 9), `comfyui` (Phase 11), and
-the harness + benchmarking tracks. See the
-[implementation plan](./sovereign-implementation-plan-v1.1.md) for per-phase status.
+Still to come: `launchd` install/uninstall (Phase 9), `comfyui` (Phase 11).
+See the [implementation plan](./sovereign-implementation-plan-v1.1.md) for
+per-phase status, and
+[`harness-bench-implementation-plan.md`](./harness-bench-implementation-plan.md)
+for the harness/bench tracks' detailed phase breakdown.
 
 ## Setup
 
@@ -63,6 +84,32 @@ uv run sovereign up -f mlx.yaml   # boots a tiny MLX model
 uv run sovereign --help    # CLI surface
 uv run pytest -q           # tests
 uv run ruff check .        # lint
+```
+
+### Harnesses & benchmarking
+
+`mini_swe_agent` and the perf prober are optional dependencies so the base
+install stays lean:
+
+```bash
+uv sync --extra harness --extra bench
+```
+
+With a stack up (`sovereign up -f sovereign.yaml`) and harnesses declared in
+its `harnesses:` section:
+
+```bash
+uv run sovereign harness list
+uv run sovereign harness invoke <name> --prompt "..." --workdir /path/to/repo
+```
+
+Benchmarks live in a separate spec file, never in `sovereign.yaml`:
+
+```bash
+uv run sovereign bench run -f examples/bench/perf-attach.yaml   # attach mode, needs a live `sovereign up`
+uv run sovereign bench run -f examples/bench/quality-cleanroom.yaml  # bench boots/tears down its own stack
+uv run sovereign bench ls
+uv run sovereign bench compare
 ```
 
 ## Locked decisions
