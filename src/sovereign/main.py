@@ -76,7 +76,7 @@ def _dashboard_task_factory(interval: float = 1.0, live_console: Console | None 
         with Live(
             _dashboard(snapshot, history=history),
             console=live_console or console,
-            refresh_per_second=4,
+            refresh_per_second=12,
         ) as live:
             while not stop.is_set():
                 snapshot = orch.status_snapshot()
@@ -350,10 +350,12 @@ class MetricHistory:
 
 
 _SPARK_CHARS = "▁▂▃▄▅▆▇█"
+_SPARK_WIDTH = 12  # rendered sparkline width; tune here
 
 
 def _sparkline(values: Sequence[float]) -> str:
-    """A trailing Unicode-block sparkline, min-max scaled to the buffer's own range."""
+    """A trailing Unicode-block sparkline, min-max scaled to the visible window."""
+    values = list(values)[-_SPARK_WIDTH:]
     if len(values) < 2:
         return ""
     lo, hi = min(values), max(values)
@@ -387,6 +389,7 @@ def _dashboard(status: dict, history: MetricHistory | None = None):
     """Render the §8 dashboard table, plus a live "Provisioning" activity area."""
     table = Table(title=f"Sovereign Control Plane v{__version__}", title_justify="left")
     table.add_column("SERVICE")
+    table.add_column("DESCRIPTOR")
     table.add_column("STATUS")
     table.add_column("DURATION")
     table.add_column("CPU %")
@@ -403,8 +406,10 @@ def _dashboard(status: dict, history: MetricHistory | None = None):
         mem_spark = _sparkline(history.values(name, "memory_mb")) if history else ""
         duration = _duration_cell(svc.get("since"))
         endpoint = svc.get("endpoint") or "-"
+        descriptor = svc.get("descriptor") or "-"
         table.add_row(
             name,
+            descriptor,
             _status_cell(state),
             duration,
             _metric_cell(cpu, cpu_spark),
@@ -441,7 +446,7 @@ def monitor(
         console.print(_dashboard(status, history=history))
         return
 
-    with Live(_dashboard(status, history=history), console=console, refresh_per_second=4) as live:
+    with Live(_dashboard(status, history=history), console=console, refresh_per_second=12) as live:
         try:
             while True:
                 time.sleep(interval)

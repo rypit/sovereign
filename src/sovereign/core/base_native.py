@@ -8,9 +8,12 @@ path come from the entry's ``health_check`` block.
 
 from __future__ import annotations
 
+import ctypes
 import os
 import shutil
+import struct
 import subprocess
+import sys
 import threading
 import urllib.error
 import urllib.request
@@ -31,6 +34,45 @@ from sovereign.core.resources import priority_to_nice
 HTTP_TIMEOUT = 2.0
 # How long to wait after SIGTERM before escalating to SIGKILL.
 STOP_TIMEOUT = 10.0
+
+_RUSAGE_INFO_V4 = 4
+# Byte offset of ri_phys_footprint within struct rusage_info_v4 (sys/resource.h):
+# 16-byte ri_uuid + 7 preceding uint64 fields (ri_user_time, ri_system_time,
+# ri_pkg_idle_wkups, ri_interrupt_wkups, ri_pageins, ri_wired_size,
+# ri_resident_size) = 16 + 7*8 = 72. Stable across macOS versions (Apple only
+# appends fields to this struct, never reorders existing ones).
+_PHYS_FOOTPRINT_OFFSET = 72
+# Deliberately larger than the real struct (~280 bytes) — the kernel writes up
+# to sizeof(rusage_info_v4) into whatever buffer we hand it; an undersized
+# buffer would be a real memory-safety bug, not just a wrong read.
+_RUSAGE_BUFFER_SIZE = 512
+
+
+def _parse_phys_footprint(raw: bytes) -> int:
+    """Extract ri_phys_footprint (a little-endian uint64) from a rusage_info_v4 buffer."""
+    return struct.unpack_from("<Q", raw, _PHYS_FOOTPRINT_OFFSET)[0]
+
+
+def macos_phys_footprint(pid: int) -> int | None:
+    """The kernel's per-process physical-memory ledger (bytes) — what Activity
+    Monitor's "Memory" column and ``top``'s MEM show, unlike psutil's RSS, which
+    misses Metal/GPU-resident buffers for unified-memory workloads. Returns
+    None on any failure (non-macOS, missing symbol, syscall error, unexpected
+    layout) so callers fall back to RSS.
+    """
+    if sys.platform != "darwin":
+        return None
+    try:
+        libc = ctypes.CDLL(None, use_errno=True)
+        buf = ctypes.create_string_buffer(_RUSAGE_BUFFER_SIZE)
+        libc.proc_pid_rusage.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_void_p]
+        libc.proc_pid_rusage.restype = ctypes.c_int
+        rc = libc.proc_pid_rusage(pid, _RUSAGE_INFO_V4, buf)
+        if rc != 0:
+            return None
+        return _parse_phys_footprint(buf.raw)
+    except (OSError, AttributeError, struct.error):
+        return None
 
 
 def looks_local(model: str) -> bool:
@@ -187,8 +229,10 @@ class NativeEngineManager(ActivityMixin):
         try:
             p = psutil.Process(proc.pid)
             with p.oneshot():
+                footprint = macos_phys_footprint(proc.pid)
+                memory_bytes = footprint if footprint is not None else p.memory_info().rss
                 return {
-                    "memory_mb": round(p.memory_info().rss / (1024**2), 2),
+                    "memory_mb": round(memory_bytes / (1024**2), 2),
                     "cpu_percent": p.cpu_percent(interval=None),
                     "status": "running",
                 }

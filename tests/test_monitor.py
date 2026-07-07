@@ -62,12 +62,14 @@ _STATUS = {
             "state": "ready",
             "since": "2026-07-05T00:00:00+00:00",
             "endpoint": "http://127.0.0.1:11435",
+            "descriptor": "mlx-community/Qwen3.6-27B-8bit",
             "metrics": {"cpu_percent": 12.4, "memory_mb": 14500.0, "status": "running"},
         },
         "open_webui": {
             "state": "starting",
             "since": "2026-07-05T00:03:12+00:00",
             "endpoint": None,
+            "descriptor": None,
             "metrics": {},
         },
     },
@@ -83,7 +85,9 @@ def _render(table) -> str:
 def test_dashboard_matches_mockup_shape() -> None:
     text = _render(_dashboard(_STATUS))
     assert f"Sovereign Control Plane v{__version__}" in text
-    for header in ("SERVICE", "STATUS", "DURATION", "CPU %", "MEM (MB)", "ENDPOINT"):
+    for header in (
+        "SERVICE", "DESCRIPTOR", "STATUS", "DURATION", "CPU %", "MEM (MB)", "ENDPOINT",
+    ):
         assert header in text
     assert "DEPENDENCIES" not in text
     # ready -> RUNNING label; metrics rendered; endpoint rendered
@@ -92,7 +96,8 @@ def test_dashboard_matches_mockup_shape() -> None:
     assert "14500" in text
     assert "STARTING" in text
     assert "http://127.0.0.1:11435" in text
-    # missing endpoint/metrics render as "-"
+    assert "mlx-community/Qwen3.6-27B-8bit" in text
+    # missing endpoint/metrics/descriptor render as "-"
     assert "-" in text
 
 
@@ -110,6 +115,13 @@ def test_sparkline_scales_min_to_max() -> None:
     spark = _sparkline([0.0, 100.0])
     assert spark[0] == "▁"
     assert spark[-1] == "█"
+
+
+def test_sparkline_capped_to_render_width() -> None:
+    values = list(range(30))
+    result = _sparkline(values)
+    assert len(result) == 12
+    assert result == _sparkline(values[-12:])
 
 
 # --- MetricHistory ---
@@ -223,7 +235,9 @@ def test_dashboard_no_activity_area_when_idle() -> None:
 
 def test_monitor_once_from_status_file(tmp_path) -> None:
     write_json(tmp_path / "status.json", _STATUS)
-    result = runner.invoke(app, ["monitor", "--once", "--state-dir", str(tmp_path)])
+    result = runner.invoke(
+        app, ["monitor", "--once", "--state-dir", str(tmp_path)], env={"COLUMNS": "200"}
+    )
     assert result.exit_code == 0
     assert "llama_heavy_v1" in result.stdout
     assert "RUNNING" in result.stdout
@@ -242,7 +256,9 @@ def test_monitor_falls_back_to_state_json(tmp_path) -> None:
     )
     status = _load_dashboard_status(tmp_path)
     assert status["services"]["docker_engine"]["state"] == "ready"
-    result = runner.invoke(app, ["monitor", "--once", "--state-dir", str(tmp_path)])
+    result = runner.invoke(
+        app, ["monitor", "--once", "--state-dir", str(tmp_path)], env={"COLUMNS": "200"}
+    )
     assert result.exit_code == 0
     assert "docker_engine" in result.stdout
 
