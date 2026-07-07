@@ -4,7 +4,7 @@
 
 This is the consolidated plan. v1.1 folds in the harness/benchmark/stack-capture work: it restates the decisions already locked in, adds the two new entity types the design grew (Harnesses and Jobs), corrects ComfyUI to a native service, and lays out a phased build order with concrete exit criteria for each phase.
 
-> **Progress snapshot — updated 2026-07-05.** The MVP orchestration spine (Phases 0–8 and 10) is implemented and green — 201 tests pass. Remaining work: finish Phase 9 (`launchd` install/uninstall), finish Phase 11 (`comfyui`), and start the two post-MVP tracks (harnesses, benchmarking). **Open Decision #1 is now resolved: Sovereign is strictly local — LiteLLM and Claude Code are dropped.** Per-phase status is tracked inline in §12; the service/harness catalog status is in §10.
+> **Progress snapshot — updated 2026-07-07.** The MVP orchestration spine (Phases 0–8 and 10) is implemented and green, and **both post-MVP tracks (harnesses, benchmarking) are now complete** — 375 tests pass. Remaining work: finish Phase 9 (`launchd` install/uninstall) and Phase 11 (`comfyui`). **Open Decision #1 is now resolved: Sovereign is strictly local — LiteLLM and Claude Code are dropped.** Per-phase status is tracked inline in §12; the service/harness catalog status is in §10; the harness/bench tracks have their own detailed phase breakdown in [`harness-bench-implementation-plan.md`](./harness-bench-implementation-plan.md).
 
 ---
 
@@ -411,8 +411,8 @@ Panel/sparkline/plotext variants are deferred — the `get_metrics()` contract a
 | SearXNG | `searxng` | Service | Convenience | ✅ Implemented — dynamic web-search env wiring into `open_webui`; 2nd Docker service, first multi-dependency test |
 | MLX (oMLX/mlx_lm) | `mlx_lm` | Service | Inference | ✅ Implemented — native pattern, proven alongside `llama_cpp` |
 | ComfyUI | `comfyui` | Service | Visual generation | ⬜ Not started — **native**, first-class Budgeter citizen (§2.13); best validation case for refuse-to-boot |
-| Cline CLI | `cline_cli` | Harness | Coding agent | ⬜ Not started — daily driver + bench workhorse (harness track) |
-| SWE-agent | `swe_agent` | Harness | Coding agent | ⬜ Not started — suite engine for agentic quality benchmarks |
+| Cline CLI | `cline_cli` | Harness | Coding agent | ✅ Implemented — subprocess, isolated `CLINE_DIR`, `--yolo`/`--json` headless |
+| mini-swe-agent | `mini_swe_agent` | Harness | Coding agent | ✅ Implemented — in-process `DefaultAgent`/`LitellmModel`, minimal-surface suite engine (chosen over full SWE-agent) |
 | Vector DB / RAG | `vector_db` | Service | Memory | Deferred (§11.3) |
 | Jupyter, Playwright | — | Service | Convenience | Deferred (§11.3) |
 | **Ollama** | — | — | — | **Excluded** — wraps llama.cpp; Sovereign talks to llama.cpp directly. |
@@ -480,13 +480,13 @@ Each phase has a concrete exit criterion — don't move on until it's true.
 **Phase 11 — Catalog expansion.** 🟡 **Partial** — `searxng` ✅ and `mlx_lm` ✅ are done; **`comfyui` (native) is still needed.** `litellm` is dropped (strictly-local, §11 Open Decision #1). Remaining after ComfyUI: convenience services that clear the "real module, not a wrapper" bar.
 *Exit: each addition is a new `services/<name>/` folder with zero Orchestrator changes.*
 
-**Phase 12 — Testing & hardening.** 🟡 **Ongoing** — `tests/` mirrors `src/` and **201 tests pass** with mock `ServiceManager`/`Harness` implementations (no Docker or real models needed); keep Ruff clean and extend coverage as the harness/bench tracks land.
+**Phase 12 — Testing & hardening.** 🟡 **Ongoing** — `tests/` mirrors `src/` and **375 tests pass** with mock `ServiceManager`/`Harness` implementations (no Docker or real models needed); Ruff clean.
 
 ### Two parallel post-MVP tracks (roughly alongside Phase 11)
 
-**Harness track** ⬜ *Not started.* Design `materialize()` + `invoke()` together (even if `invoke()` lands later). Order: **Cline CLI** (materialize + invoke) → **SWE-agent** (suites) → **teams axis**. (Claude Code dropped — §11 Open Decision #1.) The Orchestrator already wires the `materialize()` hook + harness factory, so these plug in without core changes.
+**Harness track** ✅ **Complete** — see [`harness-bench-implementation-plan.md`](./harness-bench-implementation-plan.md) for the detailed phase breakdown. `materialize()`/`invoke()` hardened (endpoint-change re-materialization, manifest inclusion, `served_model_name`/`api_model_name`), then **Cline CLI** and **mini-swe-agent** landed as the first two concrete harnesses, both invocable via `sovereign harness list/materialize/invoke`. (Claude Code dropped — §11 Open Decision #1; full SWE-agent and the Cline teams axis deferred as optional follow-ups.)
 
-**Bench track** ⬜ *Not started.* Add the `Job` type + terminal states. Order: **perf-attach** (cheap, right after Phase 8 — needs CLI + metrics + registry) → **clean-room sweeps** (after Phase 9's lockfile-able daemon) → **sandboxed quality runner** (gated on the harness `invoke()` contract).
+**Bench track** ✅ **Complete** — see [`harness-bench-implementation-plan.md`](./harness-bench-implementation-plan.md). `Job`/`BenchSpec`/content-addressed cells → attach-mode perf prober (in-house `httpx`, TTFT/tok-s/latency with mean+spread) → clean-room sweeps (bench-owned boot/measure/teardown, `bench.lock` so it can't fight the daemon) → agentic quality runner (native task-suite format, grade-the-repo via git diff + programmatic grader, false-completion rate, perf/quality funnel gating) → `bench compare` (Pareto join across runs). Sandboxed (Docker) quality workspaces, SWE-bench subset, and a guidellm adapter are documented as optional later extensions.
 
 ---
 
