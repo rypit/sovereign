@@ -5,6 +5,6 @@ registers itself via :mod:`sovereign.core.registry`. Importing this module impor
 every harness package, so ``import sovereign.harnesses`` populates the registry.
 """
 
-from sovereign.harnesses import mini_swe_agent  # noqa: F401 - imports register each harness
+from sovereign.harnesses import cline_cli, mini_swe_agent  # noqa: F401 - imports register each
 
-__all__ = ["mini_swe_agent"]
+__all__ = ["cline_cli", "mini_swe_agent"]
