@@ -128,3 +128,37 @@ def test_run_bench_changing_an_axis_forces_recompute(tmp_path) -> None:
 def test_bench_spec_requires_stacks(bad_field) -> None:
     with pytest.raises(Exception):  # noqa: B017,PT011 - pydantic ValidationError
         BenchSpec.model_validate({})
+
+
+# --- clean-room lock integration (B3) ---
+def test_cleanroom_mode_acquires_and_releases_lock(tmp_path) -> None:
+    from sovereign.bench.lock import lock_path
+
+    spec = _spec(trials=1, mode="cleanroom")
+    seen_during_run = {}
+
+    def executor(job):
+        seen_during_run["locked"] = lock_path(tmp_path).exists()
+        return {"tok_s": 1.0}
+
+    run_bench(spec, state_dir=tmp_path, executor=executor)
+    assert seen_during_run["locked"] is True
+    assert not lock_path(tmp_path).exists()  # released after the run
+
+
+def test_cleanroom_mode_refuses_when_daemon_stack_up(tmp_path) -> None:
+    from sovereign.bench.lock import BenchLockError
+    from sovereign.utils.state import write_json
+
+    write_json(tmp_path / "state.json", {"runtime": {"engine": {"kind": "native", "pid": 1}}})
+    spec = _spec(trials=1, mode="cleanroom")
+    with pytest.raises(BenchLockError, match="daemon-managed stack"):
+        run_bench(spec, state_dir=tmp_path, executor=lambda job: {"tok_s": 1.0})
+
+
+def test_attach_mode_needs_no_lock(tmp_path) -> None:
+    from sovereign.bench.lock import lock_path
+
+    spec = _spec(trials=1, mode="attach")
+    run_bench(spec, state_dir=tmp_path, executor=lambda job: {"tok_s": 1.0})
+    assert not lock_path(tmp_path).exists()

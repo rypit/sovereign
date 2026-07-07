@@ -26,6 +26,8 @@ from rich.table import Table
 from rich.text import Text
 
 from sovereign import __version__
+from sovereign.bench.cleanroom import make_cleanroom_executor
+from sovereign.bench.lock import BenchLockError, lock_path
 from sovereign.bench.perf import make_perf_attach_executor
 from sovereign.bench.runner import run_bench
 from sovereign.bench.spec import BenchMode, BenchSpecError, load_bench_spec
@@ -128,6 +130,12 @@ def _load_dotenv(path: Path = Path(".env")) -> None:
 
 def _boot_and_serve(file: Path, *, dashboard: bool) -> None:
     """Load a variant, boot the stack, and run until interrupted."""
+    if lock_path(_DEFAULT_STATE_DIR).exists():
+        console.print(
+            f"[red]A clean-room bench run holds {lock_path(_DEFAULT_STATE_DIR)} — "
+            "wait for it to finish before starting a daemon-managed stack here.[/red]"
+        )
+        raise typer.Exit(1)
     _load_dotenv()
     try:
         config = load_config(file)
@@ -628,10 +636,16 @@ def bench_run(
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(1) from exc
 
-    # Clean-room execution (bench owns the stack) lands in B3; attach mode
-    # (read-only against an already-running `sovereign up`) is wired now.
-    executor = make_perf_attach_executor(spec, state_dir) if spec.mode == BenchMode.ATTACH else None
-    manifest = run_bench(spec, state_dir=state_dir, executor=executor)
+    if spec.mode == BenchMode.CLEANROOM:
+        executor = make_cleanroom_executor(spec, state_dir)
+    else:
+        executor = make_perf_attach_executor(spec, state_dir)
+
+    try:
+        manifest = run_bench(spec, state_dir=state_dir, executor=executor)
+    except BenchLockError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1) from exc
 
     table = Table(title=f"Bench run {manifest['run_id']}")
     table.add_column("CELL")

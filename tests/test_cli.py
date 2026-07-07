@@ -430,3 +430,12 @@ def test_bench_run_attach_mode_success(tmp_path, monkeypatch) -> None:
     result = runner.invoke(app, ["bench", "run", "-f", str(spec), "--state-dir", str(tmp_path)])
     assert result.exit_code == 0
     assert "completed" in result.stdout
+
+
+def test_up_refuses_while_cleanroom_bench_lock_held(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    write_json(tmp_path / ".sovereign" / "bench.lock", {"pid": 1, "run_id": "x"})
+    variant, _ = _write_variant(tmp_path)
+    result = runner.invoke(app, ["up", "-f", str(variant)])
+    assert result.exit_code == 1
+    assert "clean-room bench run holds" in result.stdout
