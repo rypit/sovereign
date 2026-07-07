@@ -365,3 +365,68 @@ def test_bench_ls_shows_run_summary(tmp_path) -> None:
     result = runner.invoke(app, ["bench", "ls", "--state-dir", str(tmp_path)])
     assert result.exit_code == 0
     assert "1" in result.stdout  # cell count
+
+
+def test_bench_run_attach_mode_success(tmp_path, monkeypatch) -> None:
+    import sys
+    import types
+
+    from sovereign.utils.state import write_json
+
+    fake_httpx = types.ModuleType("httpx")
+
+    class FakeResponse:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        def raise_for_status(self):
+            pass
+
+        async def aiter_lines(self):
+            yield 'data: {"choices":[{"delta":{"content":"hi"}}]}'
+            yield 'data: {"choices":[{"delta":{}}],"usage":{"completion_tokens":3}}'
+            yield "data: [DONE]"
+
+    class FakeAsyncClient:
+        def __init__(self, headers=None):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        def stream(self, *a, **kw):
+            return FakeResponse()
+
+    fake_httpx.AsyncClient = FakeAsyncClient
+    monkeypatch.setitem(sys.modules, "httpx", fake_httpx)
+
+    write_json(
+        tmp_path / "manifest.json",
+        {
+            "variant_hash": "abc",
+            "memory_budget": {"available_gb": 10.0},
+            "services": [
+                {
+                    "name": "engine",
+                    "endpoint": {
+                        "scheme": "http",
+                        "host": "127.0.0.1",
+                        "port": 11435,
+                        "model": "llama3-70b",
+                    },
+                    "co_resident": [],
+                }
+            ],
+        },
+    )
+    spec = tmp_path / "bench.yaml"
+    spec.write_text("stacks: [stack.yaml]\ntrials: 1\n")
+    result = runner.invoke(app, ["bench", "run", "-f", str(spec), "--state-dir", str(tmp_path)])
+    assert result.exit_code == 0
+    assert "completed" in result.stdout
