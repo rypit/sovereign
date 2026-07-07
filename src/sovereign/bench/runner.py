@@ -53,6 +53,9 @@ class Job:
     finished_at: str | None = None
     error: str | None = None
     result: dict[str, Any] | None = None
+    #: True when this cell was already complete from a prior run (content-
+    #: addressed skip) rather than freshly executed this time.
+    skipped: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -66,6 +69,7 @@ class Job:
             "finished_at": self.finished_at,
             "error": self.error,
             "result": self.result,
+            "skipped": self.skipped,
         }
 
 
@@ -137,6 +141,7 @@ def _execute_cells(jobs: list[Job], bench_dir: Path, executor: CellExecutor | No
         if is_complete(bench_dir, job.cell_key):
             job.state = JobState.COMPLETED
             job.result = read_cell_result(bench_dir, job.cell_key)
+            job.skipped = True
             continue
 
         if executor is None:
