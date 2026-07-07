@@ -79,14 +79,19 @@ class FakeManager:
 
 
 class FakeHarness:
-    """Records materialize/resolve calls into a shared log for ordering assertions."""
+    """Records prepare/materialize/resolve calls into a shared log for ordering."""
 
     def __init__(self, entry, log: list):
         self.name = entry.name
         self.dependencies = entry.dependencies
         self._log = log
         self.resolved_with = None
+        self.prepare_count = 0
         self.materialize_count = 0
+
+    def prepare_environment(self) -> None:
+        self.prepare_count += 1
+        self._log.append((self.name, "prepare_environment"))
 
     def resolve(self, resolver) -> None:
         self.resolved_with = resolver
@@ -475,6 +480,37 @@ def test_harness_materialized_after_deps_ready() -> None:
     assert ("h", "materialize") in log
     assert orch.harnesses["h"].resolved_with is orch.resolver
     assert orch.harnesses["h"].materialize_count == 1
+
+
+def test_harness_provisioned_before_materialize() -> None:
+    log: list = []
+    cfg = _config(
+        [{"name": "engine", "base_type": "x"}],
+        harnesses=[{"name": "h", "base_type": "y", "dependencies": ["engine"]}],
+    )
+    orch = _orch(cfg, log, harness_log=log)
+    asyncio.run(orch.boot())
+    assert log.index(("h", "prepare_environment")) < log.index(("h", "materialize"))
+    assert orch.harnesses["h"].prepare_count == 1
+
+
+def test_harness_reprovisioned_on_endpoint_change() -> None:
+    log: list = []
+    cfg = _config(
+        [{"name": "engine", "base_type": "x"}],
+        harnesses=[{"name": "h", "base_type": "y", "dependencies": ["engine"]}],
+    )
+    orch = _orch(cfg, log, harness_log=log, ports={"engine": 11435})
+
+    async def scenario() -> None:
+        await orch.boot()
+        orch.managers["engine"]._port = 11999
+        await orch._restart("engine")
+        # Re-materialization re-runs the (idempotent) provisioning hook too.
+        assert orch.harnesses["h"].prepare_count == 2
+        assert orch.harnesses["h"].materialize_count == 2
+
+    asyncio.run(scenario())
 
 
 def test_harness_not_materialized_when_deps_not_ready() -> None:

@@ -7,6 +7,12 @@ events instead of the interactive TUI. Settings live under an isolated
 ``CLINE_DIR`` per instance (§11 locked decision) so this never merges into a
 human's shared global Cline config.
 
+Declaring this harness in ``sovereign.yaml`` provisions its full dependency
+chain automatically (via the shared ``Provisioner`` contract): the package
+``Brewfile`` installs Node/npm if missing, then ``npm install -g cline``
+installs the CLI itself — so it's ready both for headless bench runs and for
+daily-driver use (`CLINE_DIR=... cline`) with zero manual setup.
+
 The on-disk settings schema below approximates Cline's OpenAI-compatible
 provider config as documented at implementation time
 (docs.cline.bot/provider-config/openai-compatible); reconcile field names
@@ -53,6 +59,10 @@ class ClineCliHarness(BaseHarness):
     """Configures + invokes an isolated Cline CLI instance."""
 
     base_type = "cline_cli"
+    #: Provisioning chain: package Brewfile installs Node/npm, then this
+    #: installs the CLI; satisfied once `cline` resolves on PATH.
+    provisioning_binary = "cline"
+    provisioning_commands = [["npm", "install", "-g", "cline"]]
 
     def __init__(self, entry: HarnessEntry) -> None:
         super().__init__(entry)

@@ -25,6 +25,7 @@ from typing import Any
 
 from sovereign.config import ServiceEntry
 from sovereign.core.base_manager import ActivityMixin
+from sovereign.core.provisioning import Provisioner
 from sovereign.core.registry import register_service
 from sovereign.core.resolver import ConsumerKind, ResolvedEndpoint, Resolver, ServiceRegistry
 from sovereign.services.docker_engine.config import DockerEngineConfig, FileSpec
@@ -178,11 +179,13 @@ def materialize_file(spec: FileSpec, env: Mapping[str, str] | None = None) -> bo
 
 
 @register_service("docker_engine")
-class DockerEngineManager(ActivityMixin):
+class DockerEngineManager(ActivityMixin, Provisioner):
     """Supervises a generic Docker container described entirely by its config."""
 
     base_type = "docker_engine"
     consumer_kind = ConsumerKind.DOCKER
+    #: Provisioned via the package Brewfile (`cask "docker-desktop"`) when missing.
+    provisioning_binary = "docker"
 
     def __init__(self, entry: ServiceEntry) -> None:
         self.name = entry.name
@@ -260,6 +263,9 @@ class DockerEngineManager(ActivityMixin):
 
     # --- Resource cooperation ---
     def prepare_environment(self) -> None:
+        # Install the Docker app first if missing (idempotent no-op once present);
+        # daemon *reachability* stays a runtime check below.
+        self.provision()
         if shutil.which(self.config.binary) is None:
             raise FileNotFoundError(
                 f"Docker CLI '{self.config.binary}' not found on PATH for '{self.name}'. "

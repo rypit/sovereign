@@ -184,6 +184,32 @@ def test_get_metrics_delegates_to_container_metrics(monkeypatch) -> None:
     assert m.get_metrics() == {"status": "running", "container": "open_webui"}
 
 
+# --- provisioning ---
+def test_provisioning_declaration() -> None:
+    from sovereign.services.docker_engine.manager import DockerEngineManager
+
+    assert DockerEngineManager.provisioning_binary == "docker"
+    brewfile = DockerEngineManager.provisioning_brewfile()
+    assert brewfile is not None
+    assert 'cask "docker-desktop"' in brewfile.read_text()
+
+
+def test_prepare_environment_provisions_first(monkeypatch) -> None:
+    from sovereign.core.provisioning import Provisioner
+
+    order: list[str] = []
+    monkeypatch.setattr(
+        Provisioner, "provision", classmethod(lambda cls: order.append("provision"))
+    )
+    monkeypatch.setattr(
+        mgr_mod.shutil, "which", lambda _b: order.append("which") or "/usr/local/bin/docker"
+    )
+    monkeypatch.setattr(mgr_mod.subprocess, "run", _fake_run(returncode=0, stdout="29.6.1"))
+    m = _manager({"image": "img:latest", "port": 3000, "auto_pull": False})
+    m.prepare_environment()
+    assert order[0] == "provision"  # install Docker before probing it
+
+
 # --- prepare_environment (daemon probe moved here from the old engine service) ---
 def test_prepare_environment_raises_when_binary_absent(monkeypatch) -> None:
     monkeypatch.setattr(mgr_mod.shutil, "which", lambda _binary: None)

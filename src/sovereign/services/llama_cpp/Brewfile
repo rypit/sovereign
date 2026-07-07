@@ -1,0 +1,3 @@
+# Toolchain for the llama_cpp service — installed by prepare_environment() /
+# `sovereign provision` when `llama-server` is missing.
+brew "llama.cpp"        # native inference engine — provides `llama-server`

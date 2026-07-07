@@ -9,15 +9,20 @@ moving parts.
 
 The ``minisweagent`` package is an optional dependency (the ``harness`` extra):
 imported lazily so the base install stays lean and importing this module never
-fails just because it isn't installed.
+fails just because it isn't installed. Declaring the harness in
+``sovereign.yaml`` provisions it automatically (via the shared ``Provisioner``
+contract): ``prepare_environment()`` installs the package with
+``uv pip install`` when the import is missing.
 """
 
 from __future__ import annotations
 
 import concurrent.futures
+import importlib
 import os
+import sys
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar
 
 import yaml
 
@@ -39,6 +44,20 @@ class MiniSweAgentHarness(BaseHarness):
     """Configures + invokes ``mini-swe-agent``'s ``DefaultAgent`` in-process."""
 
     base_type = "mini_swe_agent"
+    #: uv-managed venvs don't bundle pip; `uv pip --python` targets the running env.
+    provisioning_commands: ClassVar[list[list[str]]] = [
+        ["uv", "pip", "install", "--python", sys.executable, "mini-swe-agent"]
+    ]
+
+    @classmethod
+    def provisioning_satisfied(cls) -> bool:
+        """Satisfied when the ``minisweagent`` package is importable."""
+        importlib.invalidate_caches()  # a just-installed package must be visible
+        try:
+            import minisweagent  # noqa: F401
+        except ImportError:
+            return False
+        return True
 
     def __init__(self, entry: HarnessEntry) -> None:
         super().__init__(entry)
@@ -65,7 +84,7 @@ class MiniSweAgentHarness(BaseHarness):
         (config_dir / "settings.yaml").write_text(yaml.safe_dump(settings, sort_keys=False))
 
     # --- invocation ---
-    def _build_agent(self):
+    def _build_agent(self, workdir: str | None = None):
         try:
             from minisweagent.agents.default import DefaultAgent
             from minisweagent.environments.local import LocalEnvironment
@@ -82,7 +101,8 @@ class MiniSweAgentHarness(BaseHarness):
             model_name=f"openai/{model_name}",
             model_kwargs={"api_base": base_url, "api_key": api_key},
         )
-        env = LocalEnvironment(cwd=None)
+        # LocalEnvironment requires a string cwd (mini-swe-agent v2 validates it).
+        env = LocalEnvironment(cwd=workdir or os.getcwd())
         return DefaultAgent(
             model,
             env,
@@ -96,7 +116,7 @@ class MiniSweAgentHarness(BaseHarness):
         Self-reported success is metadata, not proof — grading (diff + tests)
         happens separately at the bench layer.
         """
-        agent = self._build_agent()
+        agent = self._build_agent(task.workdir)
         cwd = os.getcwd()
         try:
             if task.workdir:

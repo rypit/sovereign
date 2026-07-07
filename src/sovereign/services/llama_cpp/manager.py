@@ -33,6 +33,8 @@ class LlamaCppManager(NativeEngineManager):
 
     base_type = "llama_cpp"
     config_cls = LlamaCppConfig
+    #: Provisioned via the package Brewfile (`brew "llama.cpp"`) when missing.
+    provisioning_binary = "llama-server"
 
     def __init__(self, entry: ServiceEntry) -> None:
         super().__init__(entry)

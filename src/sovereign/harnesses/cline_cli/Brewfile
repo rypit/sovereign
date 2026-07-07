@@ -1,0 +1,3 @@
+# Toolchain for the cline_cli harness — installed by prepare_environment() /
+# `sovereign provision` when the `cline` binary is missing.
+brew "node"             # Node.js — provides npm, which installs the Cline CLI

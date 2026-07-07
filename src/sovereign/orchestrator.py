@@ -287,6 +287,12 @@ class Orchestrator:
             if harness is None:
                 continue
             if all(self.states.get(dep) is ServiceState.READY for dep in entry.dependencies):
+                # Provision first, mirroring the service PROVISIONING phase —
+                # a declared harness installs what it needs before it's wired.
+                # Must be idempotent: re-materialization re-runs this.
+                prepare = getattr(harness, "prepare_environment", None)
+                if callable(prepare):
+                    prepare()
                 resolve = getattr(harness, "resolve", None)
                 if callable(resolve):
                     resolve(self.resolver)
