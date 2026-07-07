@@ -229,10 +229,10 @@ def test_estimated_memory_override() -> None:
     assert MlxLmManager(entry).estimated_memory_gb() == 6.0
 
 
-def test_estimated_memory_from_local_dir(tmp_path) -> None:
+def test_estimated_memory_from_local_dir(tmp_path, sparse_file) -> None:
     model_dir = tmp_path / "mlx-model"
     model_dir.mkdir()
-    (model_dir / "weights.safetensors").write_bytes(b"x" * (2 * 1024**3))  # 2 GiB
+    sparse_file(model_dir / "weights.safetensors", 2 * 1024**3)  # 2 GiB
     m = _manager({"model": str(model_dir)})
     assert m.estimated_memory_gb() == pytest.approx(2.0, abs=0.05)
 
@@ -241,29 +241,29 @@ def test_estimated_memory_repo_id_unknown() -> None:
     assert _manager({"model": "mlx-community/foo-4bit"}).estimated_memory_gb() == 0.0
 
 
-def test_estimated_memory_includes_prompt_cache_bytes(tmp_path) -> None:
+def test_estimated_memory_includes_prompt_cache_bytes(tmp_path, sparse_file) -> None:
     model_dir = tmp_path / "main"
     model_dir.mkdir()
-    (model_dir / "weights.safetensors").write_bytes(b"x" * (4 * 1024**3))  # 4 GiB
+    sparse_file(model_dir / "weights.safetensors", 4 * 1024**3)  # 4 GiB
     m = _manager({"model": str(model_dir), "prompt_cache_bytes": 2 * 1024**3})
     assert m.estimated_memory_gb() == pytest.approx(6.0, abs=0.05)
 
 
-def test_estimated_memory_includes_local_draft_model(tmp_path) -> None:
+def test_estimated_memory_includes_local_draft_model(tmp_path, sparse_file) -> None:
     model_dir = tmp_path / "main"
     model_dir.mkdir()
-    (model_dir / "weights.safetensors").write_bytes(b"x" * (2 * 1024**3))  # 2 GiB
+    sparse_file(model_dir / "weights.safetensors", 2 * 1024**3)  # 2 GiB
     draft_dir = tmp_path / "draft"
     draft_dir.mkdir()
-    (draft_dir / "weights.safetensors").write_bytes(b"x" * (1 * 1024**3))  # 1 GiB
+    sparse_file(draft_dir / "weights.safetensors", 1 * 1024**3)  # 1 GiB
     m = _manager({"model": str(model_dir), "draft_model": str(draft_dir)})
     assert m.estimated_memory_gb() == pytest.approx(3.0, abs=0.05)
 
 
-def test_estimated_memory_repo_id_draft_contributes_zero(tmp_path) -> None:
+def test_estimated_memory_repo_id_draft_contributes_zero(tmp_path, sparse_file) -> None:
     model_dir = tmp_path / "main"
     model_dir.mkdir()
-    (model_dir / "weights.safetensors").write_bytes(b"x" * (2 * 1024**3))  # 2 GiB
+    sparse_file(model_dir / "weights.safetensors", 2 * 1024**3)  # 2 GiB
     m = _manager({"model": str(model_dir), "draft_model": "mlx-community/draft-4bit"})
     assert m.estimated_memory_gb() == pytest.approx(2.0, abs=0.05)
 

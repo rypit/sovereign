@@ -325,9 +325,9 @@ def test_estimated_memory_uses_declared_override() -> None:
     assert LlamaCppManager(entry).estimated_memory_gb() == 40.0
 
 
-def test_estimated_memory_from_model_file_plus_kv(tmp_path) -> None:
+def test_estimated_memory_from_model_file_plus_kv(tmp_path, sparse_file) -> None:
     model = tmp_path / "m.gguf"
-    model.write_bytes(b"x" * (2 * 1024**3))  # 2 GiB on disk
+    sparse_file(model, 2 * 1024**3)  # 2 GiB (logical size only)
     m = _manager(
         {"model": str(model), "context_size": 4096, "kv_bytes_per_token": 1024**2}
     )
@@ -342,11 +342,11 @@ def test_estimated_memory_repo_id_is_kv_only() -> None:
     assert m.estimated_memory_gb() == pytest.approx(m.estimated_kv_cache_gb(), abs=0.001)
 
 
-def test_estimated_memory_includes_local_draft(tmp_path) -> None:
+def test_estimated_memory_includes_local_draft(tmp_path, sparse_file) -> None:
     model = tmp_path / "m.gguf"
-    model.write_bytes(b"x" * (2 * 1024**3))  # 2 GiB
+    sparse_file(model, 2 * 1024**3)  # 2 GiB
     draft = tmp_path / "d.gguf"
-    draft.write_bytes(b"x" * (1 * 1024**3))  # 1 GiB
+    sparse_file(draft, 1 * 1024**3)  # 1 GiB
     m = _manager({"model": str(model), "draft_model": str(draft)})
     # 2 GiB + 1 GiB model bytes + 0 KV (no context_size set)
     assert m.estimated_memory_gb() == pytest.approx(3.0, abs=0.05)
