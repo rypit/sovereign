@@ -43,6 +43,8 @@ def _service_entry(orch: Orchestrator, name: str) -> dict[str, Any]:
             "host": endpoint.host,
             "port": endpoint.port,
         }
+        if endpoint.model is not None:
+            item["endpoint"]["model"] = endpoint.model
 
     # Final resolved flags/args, if the manager exposes them.
     if hasattr(manager, "get_start_args"):
@@ -70,6 +72,19 @@ def _service_entry(orch: Orchestrator, name: str) -> dict[str, Any]:
     return item
 
 
+def _harness_entry(orch: Orchestrator, entry) -> dict[str, Any]:
+    item: dict[str, Any] = {
+        "name": entry.name,
+        "base_type": entry.base_type,
+        "dependencies": list(entry.dependencies),
+    }
+    harness = orch.harnesses.get(entry.name)
+    fingerprint_fn = getattr(harness, "fingerprint", None)
+    if callable(fingerprint_fn):
+        item["fingerprint"] = fingerprint_fn()
+    return item
+
+
 def build_manifest(orch: Orchestrator) -> dict[str, Any]:
     """Assemble the resolved stack manifest for the current orchestrator state."""
     return {
@@ -85,6 +100,7 @@ def build_manifest(orch: Orchestrator) -> dict[str, Any]:
             "available_gb": round(orch.budgeter.available_gb, 2),
         },
         "services": [_service_entry(orch, name) for name in orch.boot_order],
+        "harnesses": [_harness_entry(orch, entry) for entry in orch.config.harnesses],
     }
 
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 from typer.testing import CliRunner
 
@@ -167,3 +168,168 @@ def test_logs_missing_service(tmp_path) -> None:
     result = runner.invoke(app, ["logs", "ghost", "--state-dir", str(tmp_path)])
     assert result.exit_code == 1
     assert "No logs found" in result.stdout
+
+
+# --- harness ---
+def _write_harness_stack(tmp_path) -> Path:
+    variant = tmp_path / "stack.yaml"
+    variant.write_text(
+        """
+version: "1.1"
+resources:
+  max_unified_memory_gb: 64
+  safety_margin_gb: 4
+services:
+  - name: engine
+    base_type: llama_cpp
+    health_check: {type: http, endpoint: /health, port: 11435}
+    config: {model: /models/x.gguf}
+harnesses:
+  - name: h
+    base_type: fake_test_harness
+    dependencies: [engine]
+    config: {base_url: "{{ engine.endpoint }}/v1"}
+"""
+    )
+    return variant
+
+
+def _write_manifest_with_ready_engine(state_dir) -> None:
+    write_json(
+        state_dir / "manifest.json",
+        {
+            "services": [
+                {
+                    "name": "engine",
+                    "endpoint": {"scheme": "http", "host": "127.0.0.1", "port": 11435},
+                }
+            ]
+        },
+    )
+
+
+class _FakeTestHarness:
+    """Registered under a throwaway base_type just for CLI tests."""
+
+    invoked_with = None
+
+    def __init__(self, entry) -> None:
+        self.name = entry.name
+        self.dependencies = entry.dependencies
+        self.entry = entry
+        self.materialized = False
+
+    def resolve(self, resolver) -> None:
+        from sovereign.core.resolver import ConsumerKind
+
+        self.resolved_config = resolver.resolve_mapping(self.entry.config, ConsumerKind.NATIVE)
+
+    def materialize(self) -> None:
+        self.materialized = True
+
+    def invoke(self, task):
+        from sovereign.core.base_harness import RunResult
+
+        _FakeTestHarness.invoked_with = task
+        return RunResult(task_id=task.id, success=True, exit_code=0, output="did the thing")
+
+
+def _register_fake_test_harness(monkeypatch) -> None:
+    from sovereign.core.registry import _HARNESSES
+
+    monkeypatch.setitem(_HARNESSES, "fake_test_harness", _FakeTestHarness)
+
+
+def test_harness_list_shows_configured_harnesses(tmp_path) -> None:
+    variant = _write_harness_stack(tmp_path)
+    result = runner.invoke(app, ["harness", "list", "-f", str(variant)])
+    assert result.exit_code == 0
+    assert "h" in result.stdout
+    assert "fake_test_harness" in result.stdout
+    assert "engine" in result.stdout
+
+
+def test_harness_list_no_harnesses(tmp_path) -> None:
+    variant = tmp_path / "stack.yaml"
+    variant.write_text(
+        'version: "1.1"\nresources: {max_unified_memory_gb: 64, safety_margin_gb: 4}\n'
+    )
+    result = runner.invoke(app, ["harness", "list", "-f", str(variant)])
+    assert result.exit_code == 0
+    assert "No harnesses configured" in result.stdout
+
+
+def test_harness_materialize_no_manifest(tmp_path) -> None:
+    variant = _write_harness_stack(tmp_path)
+    result = runner.invoke(
+        app, ["harness", "materialize", "h", "-f", str(variant), "--state-dir", str(tmp_path)]
+    )
+    assert result.exit_code == 1
+    assert "No running stack found" in result.stdout
+
+
+def test_harness_materialize_runs_against_manifest(tmp_path, monkeypatch) -> None:
+    _register_fake_test_harness(monkeypatch)
+    variant = _write_harness_stack(tmp_path)
+    _write_manifest_with_ready_engine(tmp_path)
+    result = runner.invoke(
+        app, ["harness", "materialize", "h", "-f", str(variant), "--state-dir", str(tmp_path)]
+    )
+    assert result.exit_code == 0, result.stdout
+    assert "Materialized 'h'" in result.stdout
+
+
+def test_harness_invoke_prints_result(tmp_path, monkeypatch) -> None:
+    _register_fake_test_harness(monkeypatch)
+    variant = _write_harness_stack(tmp_path)
+    _write_manifest_with_ready_engine(tmp_path)
+    result = runner.invoke(
+        app,
+        [
+            "harness",
+            "invoke",
+            "h",
+            "--prompt",
+            "do the thing",
+            "-f",
+            str(variant),
+            "--state-dir",
+            str(tmp_path),
+        ],
+    )
+    assert result.exit_code == 0, result.stdout
+    assert "success=True" in result.stdout
+    assert "did the thing" in result.stdout
+    assert _FakeTestHarness.invoked_with.prompt == "do the thing"
+
+
+def test_harness_invoke_unknown_dependency_not_ready(tmp_path, monkeypatch) -> None:
+    _register_fake_test_harness(monkeypatch)
+    variant = _write_harness_stack(tmp_path)
+    write_json(tmp_path / "manifest.json", {"services": []})  # engine not registered
+    result = runner.invoke(
+        app,
+        [
+            "harness",
+            "invoke",
+            "h",
+            "--prompt",
+            "x",
+            "-f",
+            str(variant),
+            "--state-dir",
+            str(tmp_path),
+        ],
+    )
+    assert result.exit_code == 1
+    assert "Dependencies not ready" in result.stdout
+
+
+def test_harness_unknown_name(tmp_path) -> None:
+    variant = _write_harness_stack(tmp_path)
+    _write_manifest_with_ready_engine(tmp_path)
+    result = runner.invoke(
+        app, ["harness", "materialize", "ghost", "-f", str(variant), "--state-dir", str(tmp_path)]
+    )
+    assert result.exit_code == 1
+    assert "Unknown harness 'ghost'" in result.stdout

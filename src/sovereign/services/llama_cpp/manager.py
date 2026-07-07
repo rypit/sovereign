@@ -81,6 +81,8 @@ class LlamaCppManager(NativeEngineManager):
             args += ["-np", str(self.config.max_parallel)]
         if self.config.api_key:
             args += ["--api-key", self.config.api_key]
+        if self.config.served_model_name:
+            args += ["--alias", self.config.served_model_name]
         if self.config.draft_model is not None:
             if looks_local(self.config.draft_model):
                 args += ["--model-draft", os.path.expanduser(self.config.draft_model)]

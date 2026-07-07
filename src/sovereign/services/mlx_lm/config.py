@@ -40,6 +40,11 @@ class MlxLmConfig(SovereignBaseModel):
     num_draft_tokens: int | None = Field(default=None, ge=0)
     #: Trust remote tokenizer code (--trust-remote-code).
     trust_remote_code: bool = False
+    #: Client-facing model name — the string an OpenAI-compatible client sends as
+    #: ``"model"``. mlx_lm.server has no CLI flag for this (it ignores the
+    #: request's model field), so this only affects Sovereign's own bookkeeping
+    #: (endpoint attribute, manifest, harness wiring). Defaults to ``model``.
+    served_model_name: str | None = None
 
     #: Escape hatch for flags Sovereign doesn't model yet.
     extra_args: list[str] = Field(default_factory=list)

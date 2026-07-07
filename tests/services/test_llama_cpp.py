@@ -154,6 +154,32 @@ def test_get_start_args_draft_flags_absent_when_unset() -> None:
     assert "--draft-max" not in args
 
 
+# --- served_model_name / api_model_name (harness+bench wiring) ---
+def test_served_model_name_emits_alias_flag() -> None:
+    args = _manager({"model": "/models/x.gguf", "served_model_name": "llama3-70b"}).get_start_args()
+    assert args[args.index("--alias") + 1] == "llama3-70b"
+
+
+def test_alias_flag_absent_when_unset() -> None:
+    args = _manager().get_start_args()
+    assert "--alias" not in args
+
+
+def test_api_model_name_defaults_to_model() -> None:
+    m = _manager({"model": "/models/x.gguf"})
+    assert m.api_model_name() == "/models/x.gguf"
+
+
+def test_api_model_name_prefers_served_model_name() -> None:
+    m = _manager({"model": "/models/x.gguf", "served_model_name": "llama3-70b"})
+    assert m.api_model_name() == "llama3-70b"
+
+
+def test_endpoint_carries_api_model_name() -> None:
+    m = _manager({"model": "/models/x.gguf", "served_model_name": "llama3-70b"})
+    assert m.endpoint().model == "llama3-70b"
+
+
 # --- prepare_environment ---
 def test_prepare_environment_missing_model(monkeypatch) -> None:
     monkeypatch.setattr(native_mod.shutil, "which", lambda _b: "/opt/homebrew/bin/llama-server")
