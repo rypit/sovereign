@@ -1,8 +1,8 @@
 """Phase 4: llama_cpp manager — mocked unit tests + Protocol/registry checks.
 
 The real llama-server binary and a GGUF model are not required here; the
-subprocess, HTTP probe, and psutil calls are all mocked. A real-process
-end-to-end check lives in the Phase 4 smoke test.
+subprocess, HTTP probe, and psutil calls are all mocked (via the shared
+base_native module, where the process/health/metrics lifecycle now lives).
 """
 
 from __future__ import annotations
@@ -14,9 +14,9 @@ import pytest
 
 import sovereign.services  # noqa: F401 - ensure registration side effect
 from sovereign.config import ServiceEntry
+from sovereign.core import base_native as native_mod
 from sovereign.core.base_manager import ServiceManager
 from sovereign.core.registry import get_service_manager
-from sovereign.services.llama_cpp import manager as mgr_mod
 from sovereign.services.llama_cpp.manager import LlamaCppManager
 
 
@@ -29,7 +29,7 @@ def _entry(config: dict | None = None, with_health: bool = True) -> ServiceEntry
             if with_health
             else None
         ),
-        config=config or {"model_path": "/models/x.gguf"},
+        config=config or {"model": "/models/x.gguf"},
     )
 
 
@@ -87,7 +87,7 @@ def test_port_and_path_taken_from_health_check() -> None:
 def test_get_start_args_full_flag_mapping() -> None:
     m = _manager(
         {
-            "model_path": "/models/llama3-70b.gguf",
+            "model": "/models/llama3-70b.gguf",
             "gpu_layers": 48,
             "threads": 8,
             "context_size": 32768,
@@ -118,30 +118,87 @@ def test_get_start_args_minimal_omits_optional_flags() -> None:
 
 def test_get_start_args_expands_home(monkeypatch) -> None:
     monkeypatch.setenv("HOME", "/home/tester")
-    args = _manager({"model_path": "~/models/x.gguf"}).get_start_args()
+    args = _manager({"model": "~/models/x.gguf"}).get_start_args()
     assert "/home/tester/models/x.gguf" in args
+
+
+def test_get_start_args_hf_repo_uses_hf_flag() -> None:
+    args = _manager({"model": "ggml-org/gemma-3-1b-it-GGUF"}).get_start_args()
+    assert args[args.index("--hf-repo") + 1] == "ggml-org/gemma-3-1b-it-GGUF"
+    assert "--model" not in args
+
+
+def test_get_start_args_local_draft_model(tmp_path) -> None:
+    draft = tmp_path / "draft.gguf"
+    draft.write_bytes(b"x")
+    args = _manager({"model": "/models/x.gguf", "draft_model": str(draft)}).get_start_args()
+    assert args[args.index("--model-draft") + 1] == str(draft)
+
+
+def test_get_start_args_hf_draft_model() -> None:
+    args = _manager(
+        {"model": "/models/x.gguf", "draft_model": "org/tiny-draft"}
+    ).get_start_args()
+    assert args[args.index("--hf-repo-draft") + 1] == "org/tiny-draft"
+
+
+def test_get_start_args_num_draft_tokens() -> None:
+    args = _manager({"model": "/models/x.gguf", "num_draft_tokens": 2}).get_start_args()
+    assert args[args.index("--draft-max") + 1] == "2"
+
+
+def test_get_start_args_draft_flags_absent_when_unset() -> None:
+    args = _manager().get_start_args()
+    assert "--model-draft" not in args
+    assert "--hf-repo-draft" not in args
+    assert "--draft-max" not in args
 
 
 # --- prepare_environment ---
 def test_prepare_environment_missing_model(monkeypatch) -> None:
-    monkeypatch.setattr(mgr_mod.shutil, "which", lambda _b: "/opt/homebrew/bin/llama-server")
+    monkeypatch.setattr(native_mod.shutil, "which", lambda _b: "/opt/homebrew/bin/llama-server")
     with pytest.raises(FileNotFoundError, match="model for 'llama_heavy_v1' not found"):
-        _manager({"model_path": "/nope/missing.gguf"}).prepare_environment()
+        _manager({"model": "/nope/missing.gguf"}).prepare_environment()
 
 
 def test_prepare_environment_ok(tmp_path, monkeypatch) -> None:
     model = tmp_path / "m.gguf"
     model.write_bytes(b"gguf")
-    monkeypatch.setattr(mgr_mod.shutil, "which", lambda _b: "/opt/homebrew/bin/llama-server")
-    _manager({"model_path": str(model)}).prepare_environment()  # must not raise
+    monkeypatch.setattr(native_mod.shutil, "which", lambda _b: "/opt/homebrew/bin/llama-server")
+    _manager({"model": str(model)}).prepare_environment()  # must not raise
 
 
 def test_prepare_environment_missing_binary(tmp_path, monkeypatch) -> None:
     model = tmp_path / "m.gguf"
     model.write_bytes(b"gguf")
-    monkeypatch.setattr(mgr_mod.shutil, "which", lambda _b: None)
+    monkeypatch.setattr(native_mod.shutil, "which", lambda _b: None)
     with pytest.raises(FileNotFoundError, match="binary 'llama-server' not found"):
-        _manager({"model_path": str(model)}).prepare_environment()
+        _manager({"model": str(model)}).prepare_environment()
+
+
+def test_prepare_environment_repo_id_ok(monkeypatch) -> None:
+    monkeypatch.setattr(native_mod.shutil, "which", lambda _b: "/opt/homebrew/bin/llama-server")
+    # A repo id that isn't local must NOT raise (llama-server downloads it on start).
+    _manager({"model": "ggml-org/gemma-3-1b-it-GGUF"}).prepare_environment()
+
+
+def test_prepare_environment_missing_local_draft_raises(tmp_path, monkeypatch) -> None:
+    model = tmp_path / "m.gguf"
+    model.write_bytes(b"gguf")
+    monkeypatch.setattr(native_mod.shutil, "which", lambda _b: "/opt/homebrew/bin/llama-server")
+    with pytest.raises(FileNotFoundError, match="draft_model"):
+        _manager(
+            {"model": str(model), "draft_model": "/nope/missing-draft.gguf"}
+        ).prepare_environment()
+
+
+def test_prepare_environment_hf_draft_ok(tmp_path, monkeypatch) -> None:
+    model = tmp_path / "m.gguf"
+    model.write_bytes(b"gguf")
+    monkeypatch.setattr(native_mod.shutil, "which", lambda _b: "/opt/homebrew/bin/llama-server")
+    _manager(
+        {"model": str(model), "draft_model": "org/tiny-draft"}
+    ).prepare_environment()  # must not raise
 
 
 # --- health ---
@@ -168,7 +225,7 @@ def test_is_healthy_true_on_http_200(monkeypatch) -> None:
         def __exit__(self, *a):
             return False
 
-    monkeypatch.setattr(mgr_mod.urllib.request, "urlopen", lambda url, timeout=None: FakeResp())
+    monkeypatch.setattr(native_mod.urllib.request, "urlopen", lambda url, timeout=None: FakeResp())
     assert m.is_healthy() is True
 
 
@@ -177,9 +234,9 @@ def test_is_healthy_false_on_connection_error(monkeypatch) -> None:
     m.process = FakeProc(poll_value=None)
 
     def boom(url, timeout=None):
-        raise mgr_mod.urllib.error.URLError("refused")
+        raise native_mod.urllib.error.URLError("refused")
 
-    monkeypatch.setattr(mgr_mod.urllib.request, "urlopen", boom)
+    monkeypatch.setattr(native_mod.urllib.request, "urlopen", boom)
     assert m.is_healthy() is False
 
 
@@ -192,8 +249,8 @@ def test_start_launches_process_with_argv(tmp_path, monkeypatch) -> None:
         captured["kwargs"] = kwargs
         return FakeProc()
 
-    monkeypatch.setattr(mgr_mod.subprocess, "Popen", fake_popen)
-    m = _manager({"model_path": "/models/x.gguf", "log_dir": str(tmp_path / "logs")})
+    monkeypatch.setattr(native_mod.subprocess, "Popen", fake_popen)
+    m = _manager({"model": "/models/x.gguf", "log_dir": str(tmp_path / "logs")})
     m.start()
     assert captured["args"] == m.get_start_args()
     assert m.process is not None
@@ -203,8 +260,8 @@ def test_start_launches_process_with_argv(tmp_path, monkeypatch) -> None:
 
 def test_stop_terminates_running_process(tmp_path, monkeypatch) -> None:
     proc = FakeProc(poll_value=None)
-    monkeypatch.setattr(mgr_mod.subprocess, "Popen", lambda *a, **k: proc)
-    m = _manager({"model_path": "/x.gguf", "log_dir": str(tmp_path)})
+    monkeypatch.setattr(native_mod.subprocess, "Popen", lambda *a, **k: proc)
+    m = _manager({"model": "/x.gguf", "log_dir": str(tmp_path)})
     m.start()
     m.stop()
     assert proc.terminated is True
@@ -215,8 +272,8 @@ def test_stop_terminates_running_process(tmp_path, monkeypatch) -> None:
 def test_stop_kills_on_timeout(tmp_path, monkeypatch) -> None:
     proc = FakeProc(poll_value=None)
     proc.wait_raises = subprocess.TimeoutExpired(cmd="llama-server", timeout=_stop())
-    monkeypatch.setattr(mgr_mod.subprocess, "Popen", lambda *a, **k: proc)
-    m = _manager({"model_path": "/x.gguf", "log_dir": str(tmp_path)})
+    monkeypatch.setattr(native_mod.subprocess, "Popen", lambda *a, **k: proc)
+    m = _manager({"model": "/x.gguf", "log_dir": str(tmp_path)})
     m.start()
     m.stop()
     assert proc.terminated is True
@@ -224,7 +281,7 @@ def test_stop_kills_on_timeout(tmp_path, monkeypatch) -> None:
 
 
 def _stop() -> float:
-    return mgr_mod._STOP_TIMEOUT
+    return native_mod.STOP_TIMEOUT
 
 
 # --- metrics ---
@@ -252,7 +309,7 @@ def test_get_metrics_running(monkeypatch) -> None:
         def cpu_percent(self, interval=None):
             return 12.4
 
-    monkeypatch.setattr(mgr_mod.psutil, "Process", FakePsProc)
+    monkeypatch.setattr(native_mod.psutil, "Process", FakePsProc)
     assert m.get_metrics() == {"memory_mb": 14500.0, "cpu_percent": 12.4, "status": "running"}
 
 
@@ -262,7 +319,7 @@ def test_estimated_memory_uses_declared_override() -> None:
         name="llama_heavy_v1",
         base_type="llama_cpp",
         health_check={"type": "http", "endpoint": "/health", "port": 11435},
-        config={"model_path": "/x.gguf"},
+        config={"model": "/x.gguf"},
         memory_gb=40,
     )
     assert LlamaCppManager(entry).estimated_memory_gb() == 40.0
@@ -272,19 +329,36 @@ def test_estimated_memory_from_model_file_plus_kv(tmp_path) -> None:
     model = tmp_path / "m.gguf"
     model.write_bytes(b"x" * (2 * 1024**3))  # 2 GiB on disk
     m = _manager(
-        {"model_path": str(model), "context_size": 4096, "kv_bytes_per_token": 1024**2}
+        {"model": str(model), "context_size": 4096, "kv_bytes_per_token": 1024**2}
     )
     # 2 GiB model + 4096 tokens * 1 MiB = 4 GiB KV -> ~6.0 GB
     assert m.estimated_memory_gb() == pytest.approx(6.0, abs=0.05)
 
 
+def test_estimated_memory_repo_id_is_kv_only() -> None:
+    m = _manager(
+        {"model": "org/repo", "context_size": 4096, "kv_bytes_per_token": 1024**2}
+    )
+    assert m.estimated_memory_gb() == pytest.approx(m.estimated_kv_cache_gb(), abs=0.001)
+
+
+def test_estimated_memory_includes_local_draft(tmp_path) -> None:
+    model = tmp_path / "m.gguf"
+    model.write_bytes(b"x" * (2 * 1024**3))  # 2 GiB
+    draft = tmp_path / "d.gguf"
+    draft.write_bytes(b"x" * (1 * 1024**3))  # 1 GiB
+    m = _manager({"model": str(model), "draft_model": str(draft)})
+    # 2 GiB + 1 GiB model bytes + 0 KV (no context_size set)
+    assert m.estimated_memory_gb() == pytest.approx(3.0, abs=0.05)
+
+
 def test_per_slot_context_divides_across_slots() -> None:
-    m = _manager({"model_path": "/x.gguf", "context_size": 32768, "max_parallel": 4})
+    m = _manager({"model": "/x.gguf", "context_size": 32768, "max_parallel": 4})
     assert m.per_slot_context() == 8192
 
 
 def test_per_slot_context_none_without_context() -> None:
-    assert _manager({"model_path": "/x.gguf"}).per_slot_context() is None
+    assert _manager({"model": "/x.gguf"}).per_slot_context() is None
 
 
 # --- Phase 7: prompt caching ---
@@ -293,7 +367,7 @@ def _caching_manager(caching: dict, config: dict | None = None) -> LlamaCppManag
         name="llama_heavy_v1",
         base_type="llama_cpp",
         health_check={"type": "http", "endpoint": "/health", "port": 11435},
-        config=config or {"model_path": "/models/x.gguf"},
+        config=config or {"model": "/models/x.gguf"},
         policy={"prompt_caching": caching},
     )
     return LlamaCppManager(entry)
@@ -313,33 +387,33 @@ def test_prompt_caching_no_flags_when_disabled() -> None:
 
 
 def test_validate_prompt_caching_creates_dir(tmp_path, monkeypatch) -> None:
-    monkeypatch.setattr(mgr_mod.shutil, "which", lambda _b: "/opt/homebrew/bin/llama-server")
+    monkeypatch.setattr(native_mod.shutil, "which", lambda _b: "/opt/homebrew/bin/llama-server")
     model = tmp_path / "m.gguf"
     model.write_bytes(b"gguf")
     cache = tmp_path / "cache" / "llama"
     m = _caching_manager(
-        {"enabled": True, "cache_path": str(cache)}, {"model_path": str(model)}
+        {"enabled": True, "cache_path": str(cache)}, {"model": str(model)}
     )
     m.prepare_environment()
     assert cache.is_dir()
 
 
 def test_validate_prompt_caching_rejects_bad_kv_type(tmp_path, monkeypatch) -> None:
-    monkeypatch.setattr(mgr_mod.shutil, "which", lambda _b: "/opt/homebrew/bin/llama-server")
+    monkeypatch.setattr(native_mod.shutil, "which", lambda _b: "/opt/homebrew/bin/llama-server")
     model = tmp_path / "m.gguf"
     model.write_bytes(b"gguf")
     m = _caching_manager(
         {"enabled": True, "cache_path": str(tmp_path / "c"), "kv_cache_type": "bogus"},
-        {"model_path": str(model)},
+        {"model": str(model)},
     )
     with pytest.raises(ValueError, match="invalid kv_cache_type 'bogus'"):
         m.prepare_environment()
 
 
 def test_validate_prompt_caching_requires_cache_path(tmp_path, monkeypatch) -> None:
-    monkeypatch.setattr(mgr_mod.shutil, "which", lambda _b: "/opt/homebrew/bin/llama-server")
+    monkeypatch.setattr(native_mod.shutil, "which", lambda _b: "/opt/homebrew/bin/llama-server")
     model = tmp_path / "m.gguf"
     model.write_bytes(b"gguf")
-    m = _caching_manager({"enabled": True}, {"model_path": str(model)})
+    m = _caching_manager({"enabled": True}, {"model": str(model)})
     with pytest.raises(ValueError, match="no cache_path is set"):
         m.prepare_environment()

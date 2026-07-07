@@ -30,7 +30,11 @@ roadmap; 201 tests passing):
   The Docker daemon is implicit infrastructure: each `docker_engine` service
   verifies it's reachable on its own, so there's no separate engine entry or
   dependency to declare. (Existing YAMLs using `base_type: open_webui` or
-  `searxng` need to switch to `base_type: docker_engine`.)
+  `searxng` need to switch to `base_type: docker_engine`.) `llama_cpp` and
+  `mlx_lm` share a native-engine base and are configured consistently:
+  `llama_cpp`'s config field is now `model` (renamed from `model_path`) and,
+  like `mlx_lm`, accepts a local model path or a HuggingFace repo id; both
+  engines also support speculative-decoding `draft_model`/`num_draft_tokens`.
 
 Still to come: `launchd` install/uninstall (Phase 9), `comfyui` (Phase 11), and
 the harness + benchmarking tracks. See the
