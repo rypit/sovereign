@@ -333,3 +333,35 @@ def test_harness_unknown_name(tmp_path) -> None:
     )
     assert result.exit_code == 1
     assert "Unknown harness 'ghost'" in result.stdout
+
+
+# --- bench ---
+def test_bench_run_invalid_spec(tmp_path) -> None:
+    result = runner.invoke(app, ["bench", "run", "-f", str(tmp_path / "missing.yaml")])
+    assert result.exit_code == 1
+    assert "cannot read" in result.stdout
+
+
+def test_bench_run_without_executor_reports_failed_cells(tmp_path) -> None:
+    spec = tmp_path / "bench.yaml"
+    spec.write_text("stacks: [stack.yaml]\ntrials: 1\n")
+    result = runner.invoke(
+        app, ["bench", "run", "-f", str(spec), "--state-dir", str(tmp_path)]
+    )
+    assert result.exit_code == 0
+    assert "failed" in result.stdout
+
+
+def test_bench_ls_no_runs(tmp_path) -> None:
+    result = runner.invoke(app, ["bench", "ls", "--state-dir", str(tmp_path)])
+    assert result.exit_code == 0
+    assert "No benchmark runs recorded" in result.stdout
+
+
+def test_bench_ls_shows_run_summary(tmp_path) -> None:
+    spec = tmp_path / "bench.yaml"
+    spec.write_text("stacks: [stack.yaml]\ntrials: 1\n")
+    runner.invoke(app, ["bench", "run", "-f", str(spec), "--state-dir", str(tmp_path)])
+    result = runner.invoke(app, ["bench", "ls", "--state-dir", str(tmp_path)])
+    assert result.exit_code == 0
+    assert "1" in result.stdout  # cell count

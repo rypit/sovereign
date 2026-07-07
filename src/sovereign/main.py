@@ -26,6 +26,8 @@ from rich.table import Table
 from rich.text import Text
 
 from sovereign import __version__
+from sovereign.bench.runner import run_bench
+from sovereign.bench.spec import BenchSpecError, load_bench_spec
 from sovereign.config import ConfigError, load_config
 from sovereign.core.base_harness import Task
 from sovereign.core.resolver import ResolvedEndpoint, Resolver, ServiceRegistry
@@ -41,7 +43,17 @@ app = typer.Typer(
 )
 harness_app = typer.Typer(help="Inspect and invoke configured harnesses.")
 app.add_typer(harness_app, name="harness")
+bench_app = typer.Typer(help="Benchmark engine x model x harness combinations.")
+app.add_typer(bench_app, name="bench")
 console = Console()
+
+_DEFAULT_BENCH_SPEC = Path("bench.yaml")
+_BENCH_STATE_COLORS = {
+    "completed": "green",
+    "failed": "red",
+    "running": "cyan",
+    "pending": "white",
+}
 
 _DEFAULT_CONFIG = Path("sovereign.yaml")
 _DEFAULT_STATE_DIR = Path(".sovereign")
@@ -603,10 +615,57 @@ def harness_invoke(
         raise typer.Exit(1)
 
 
-@app.command()
-def bench() -> None:
-    """Run benchmark sweeps against the resolved stack."""
-    _not_implemented("bench")
+@bench_app.command("run")
+def bench_run(
+    file: Path = typer.Option(_DEFAULT_BENCH_SPEC, "-f", "--file", help="Bench spec file."),
+    state_dir: Path = _STATE_DIR_OPTION,
+) -> None:
+    """Run (or resume) a bench sweep: enumerate cells, skip completed ones."""
+    try:
+        spec = load_bench_spec(file)
+    except BenchSpecError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1) from exc
+
+    manifest = run_bench(spec, state_dir=state_dir)
+
+    table = Table(title=f"Bench run {manifest['run_id']}")
+    table.add_column("CELL")
+    table.add_column("STATE")
+    for cell in manifest["cells"]:
+        color = _BENCH_STATE_COLORS.get(cell["state"], "white")
+        table.add_row(cell["id"], f"[{color}]{cell['state']}[/{color}]")
+    console.print(table)
+
+
+@bench_app.command("ls")
+def bench_ls(
+    state_dir: Path = _STATE_DIR_OPTION,
+) -> None:
+    """List recorded bench runs and their cell counts."""
+    runs_dir = state_dir / "benchmarks" / "runs"
+    if not runs_dir.exists():
+        console.print("[yellow]No benchmark runs recorded.[/yellow]")
+        return
+
+    table = Table(title="Sovereign benchmark runs")
+    table.add_column("RUN_ID")
+    table.add_column("CELLS")
+    table.add_column("COMPLETED")
+    table.add_column("FAILED")
+    for run_file in sorted(runs_dir.glob("*.json")):
+        manifest = read_json(run_file)
+        cells = manifest.get("cells", [])
+        completed = sum(1 for c in cells if c["state"] == "completed")
+        failed = sum(1 for c in cells if c["state"] == "failed")
+        table.add_row(manifest["run_id"], str(len(cells)), str(completed), str(failed))
+    console.print(table)
+
+
+@bench_app.command("compare")
+def bench_compare() -> None:
+    """Join cell results across runs into a speed/quality Pareto comparison."""
+    _not_implemented("bench compare")
 
 
 @app.command()
