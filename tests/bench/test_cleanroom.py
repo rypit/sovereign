@@ -153,7 +153,11 @@ def test_gated_stack_never_boots(tmp_path) -> None:
     job = _job(stack)
     spec = BenchSpec(stacks=[stack], trials=1)
     with pytest.raises(CleanroomError, match="gated"):
-        asyncio.run(run_cell_cleanroom(job, spec, tmp_path / "cellstate"))
+        asyncio.run(
+            run_cell_cleanroom(
+                job, spec, tmp_path / "cellstate", bench_dir=tmp_path / "benchmarks"
+            )
+        )
     assert FakeCleanroomManager.start_calls == []  # never attempted
 
 
@@ -162,7 +166,9 @@ def test_successful_cell_boots_measures_and_tears_down(tmp_path, monkeypatch) ->
     stack = _write_stack(tmp_path)
     job = _job(stack)
     spec = BenchSpec(stacks=[stack], trials=1)
-    result = asyncio.run(run_cell_cleanroom(job, spec, tmp_path / "cellstate"))
+    result = asyncio.run(
+        run_cell_cleanroom(job, spec, tmp_path / "cellstate", bench_dir=tmp_path / "benchmarks")
+    )
     assert result["engine"] == "engine"
     assert FakeCleanroomManager.start_calls == ["engine"]
     assert FakeCleanroomManager.stop_calls == ["engine"]
