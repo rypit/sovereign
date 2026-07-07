@@ -8,6 +8,7 @@ shape stays stable as internals fill in.
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import subprocess
 import sys
@@ -30,6 +31,7 @@ from sovereign.bench.cleanroom import make_cleanroom_executor
 from sovereign.bench.lock import BenchLockError, lock_path
 from sovereign.bench.perf import make_perf_attach_executor
 from sovereign.bench.quality import make_quality_executor
+from sovereign.bench.report import build_comparison, flag_pareto
 from sovereign.bench.runner import combine_executors, run_bench
 from sovereign.bench.spec import BenchMode, BenchSpecError, load_bench_spec
 from sovereign.config import ConfigError, load_config
@@ -665,7 +667,7 @@ def bench_run(
 def bench_ls(
     state_dir: Path = _STATE_DIR_OPTION,
 ) -> None:
-    """List recorded bench runs and their cell counts."""
+    """List recorded bench runs: cell counts, completed/failed/gated/skipped."""
     runs_dir = state_dir / "benchmarks" / "runs"
     if not runs_dir.exists():
         console.print("[yellow]No benchmark runs recorded.[/yellow]")
@@ -675,20 +677,72 @@ def bench_ls(
     table.add_column("RUN_ID")
     table.add_column("CELLS")
     table.add_column("COMPLETED")
+    table.add_column("SKIPPED")
     table.add_column("FAILED")
+    table.add_column("GATED")
     for run_file in sorted(runs_dir.glob("*.json")):
         manifest = read_json(run_file)
         cells = manifest.get("cells", [])
         completed = sum(1 for c in cells if c["state"] == "completed")
+        skipped = sum(1 for c in cells if c.get("skipped"))
         failed = sum(1 for c in cells if c["state"] == "failed")
-        table.add_row(manifest["run_id"], str(len(cells)), str(completed), str(failed))
+        gated = sum(
+            1 for c in cells if c["state"] == "failed" and "gated" in (c.get("error") or "")
+        )
+        table.add_row(
+            manifest["run_id"],
+            str(len(cells)),
+            str(completed),
+            str(skipped),
+            str(failed),
+            str(gated),
+        )
     console.print(table)
 
 
 @bench_app.command("compare")
-def bench_compare() -> None:
+def bench_compare(
+    run_ids: Optional[list[str]] = typer.Argument(  # noqa: UP045 - Typer needs Optional at runtime
+        None, help="Specific run IDs to compare (default: every recorded run)."
+    ),
+    state_dir: Path = _STATE_DIR_OPTION,
+    as_json: bool = typer.Option(False, "--json", help="Print rows as JSON instead of a table."),
+) -> None:
     """Join cell results across runs into a speed/quality Pareto comparison."""
-    _not_implemented("bench compare")
+    rows = build_comparison(state_dir, run_ids or None)
+    if not rows:
+        console.print("[yellow]No completed bench cells found.[/yellow]")
+        return
+    flag_pareto(rows)
+
+    if as_json:
+        console.print(json.dumps(rows, indent=2))
+        return
+
+    table = Table(title="Sovereign bench comparison")
+    table.add_column("STACK")
+    table.add_column("HARNESS")
+    table.add_column("ENGINE")
+    table.add_column("TOK/S")
+    table.add_column("TTFT (ms)")
+    table.add_column("PASS RATE")
+    table.add_column("FALSE-COMPLETION")
+    table.add_column("PARETO")
+    for row in rows:
+        pareto_cell = {True: "★", False: "-", None: "n/a"}[row["pareto"]]
+        table.add_row(
+            Path(row["stack"]).stem,
+            row["harness"] or "-",
+            row["engine"] or "-",
+            f"{row['tok_s']:.1f}" if row["tok_s"] is not None else "-",
+            f"{row['ttft_ms']:.0f}" if row["ttft_ms"] is not None else "-",
+            f"{row['pass_rate']:.0%}" if row["pass_rate"] is not None else "-",
+            f"{row['false_completion_rate']:.0%}"
+            if row["false_completion_rate"] is not None
+            else "-",
+            pareto_cell,
+        )
+    console.print(table)
 
 
 @app.command()

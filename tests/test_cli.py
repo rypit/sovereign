@@ -367,6 +367,27 @@ def test_bench_ls_shows_run_summary(tmp_path) -> None:
     assert "1" in result.stdout  # cell count
 
 
+def test_bench_ls_counts_gated_and_skipped(tmp_path) -> None:
+    write_json(
+        tmp_path / "benchmarks" / "runs" / "run1.json",
+        {
+            "run_id": "run1",
+            "cells": [
+                {"state": "completed", "skipped": True},
+                {"state": "completed", "skipped": False},
+                {"state": "failed", "error": "gated: stack needs ~10GB, only 2GB available"},
+                {"state": "failed", "error": "some other failure"},
+            ],
+        },
+    )
+    result = runner.invoke(app, ["bench", "ls", "--state-dir", str(tmp_path)])
+    assert result.exit_code == 0
+    line = next(line for line in result.stdout.splitlines() if "run1" in line)
+    fields = [f.strip() for f in line.split("│") if f.strip()]
+    # RUN_ID CELLS COMPLETED SKIPPED FAILED GATED
+    assert fields == ["run1", "4", "2", "1", "2", "1"]
+
+
 def test_bench_run_attach_mode_success(tmp_path, monkeypatch) -> None:
     import sys
     import types
@@ -439,3 +460,64 @@ def test_up_refuses_while_cleanroom_bench_lock_held(tmp_path, monkeypatch) -> No
     result = runner.invoke(app, ["up", "-f", str(variant)])
     assert result.exit_code == 1
     assert "clean-room bench run holds" in result.stdout
+
+
+# --- bench compare ---
+def test_bench_compare_no_cells(tmp_path) -> None:
+    result = runner.invoke(app, ["bench", "compare", "--state-dir", str(tmp_path)])
+    assert result.exit_code == 0
+    assert "No completed bench cells found" in result.stdout
+
+
+def test_bench_compare_renders_table(tmp_path) -> None:
+    write_json(
+        tmp_path / "benchmarks" / "runs" / "run1.json",
+        {
+            "run_id": "run1",
+            "cells": [
+                {
+                    "stack": "a.yaml",
+                    "harness": "_none",
+                    "suite": "_none",
+                    "state": "completed",
+                    "result": {
+                        "engine": "engine",
+                        "tok_s": {"mean": 25.0},
+                        "ttft_ms": {"mean": 120.0},
+                    },
+                },
+                {
+                    "stack": "a.yaml",
+                    "harness": "h1",
+                    "suite": "suite",
+                    "state": "completed",
+                    "result": {"pass_rate": 0.75, "false_completion_rate": 0.0},
+                },
+            ],
+        },
+    )
+    result = runner.invoke(app, ["bench", "compare", "--state-dir", str(tmp_path)])
+    assert result.exit_code == 0
+    assert "h1" in result.stdout
+    assert "engine" in result.stdout
+
+
+def test_bench_compare_json_output(tmp_path) -> None:
+    write_json(
+        tmp_path / "benchmarks" / "runs" / "run1.json",
+        {
+            "run_id": "run1",
+            "cells": [
+                {
+                    "stack": "a.yaml",
+                    "harness": "_none",
+                    "suite": "_none",
+                    "state": "completed",
+                    "result": {"engine": "engine", "tok_s": {"mean": 25.0}, "ttft_ms": {}},
+                }
+            ],
+        },
+    )
+    result = runner.invoke(app, ["bench", "compare", "--state-dir", str(tmp_path), "--json"])
+    assert result.exit_code == 0
+    assert '"engine": "engine"' in result.stdout
