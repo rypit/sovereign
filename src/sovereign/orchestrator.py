@@ -59,6 +59,17 @@ ManagerFactory = Callable[[ServiceEntry], ServiceManager]
 TransitionHook = Callable[[str, ServiceState, ServiceState], None]
 
 
+def _service_descriptor(entry: ServiceEntry) -> str | None:
+    """What a service is running — the image for docker_engine, the model for a
+    native engine — surfaced as-is (untruncated) for the dashboard's MODEL column.
+    """
+    if entry.base_type == "docker_engine":
+        return entry.config.get("image")
+    if entry.base_type in ("llama_cpp", "mlx_lm"):
+        return entry.config.get("model")
+    return None
+
+
 class Orchestrator:
     """Boots, supervises, and tears down a declared stack."""
 
@@ -369,6 +380,7 @@ class Orchestrator:
                         and self.states.get(name) in (ServiceState.READY, ServiceState.DEGRADED)
                         else None
                     ),
+                    "descriptor": _service_descriptor(self._entries[name]),
                     "metrics": self.metrics.get(name, {}),
                     "activity": getattr(self.managers.get(name), "activity", "") or "",
                 }

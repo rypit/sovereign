@@ -300,6 +300,34 @@ def test_status_snapshot_shape() -> None:
     assert datetime.fromisoformat(engine["since"])
 
 
+def test_status_snapshot_descriptor_by_base_type() -> None:
+    cfg = _config(
+        [
+            {
+                "name": "webui",
+                "base_type": "docker_engine",
+                "config": {"image": "ghcr.io/open-webui/open-webui:main"},
+            },
+            {
+                "name": "heavy",
+                "base_type": "mlx_lm",
+                "config": {"model": "mlx-community/Qwen3.6-27B-8bit"},
+            },
+            {
+                "name": "cline_local",
+                "base_type": "cline_cli",
+                "config": {"config_dir": "~/.sovereign/harnesses/cline_local"},
+            },
+        ]
+    )
+    orch = _orch(cfg)
+    orch.build()
+    snap = orch.status_snapshot()
+    assert snap["services"]["webui"]["descriptor"] == "ghcr.io/open-webui/open-webui:main"
+    assert snap["services"]["heavy"]["descriptor"] == "mlx-community/Qwen3.6-27B-8bit"
+    assert snap["services"]["cline_local"]["descriptor"] is None
+
+
 def test_status_snapshot_includes_activity() -> None:
     orch = _orch(_config([{"name": "a", "base_type": "x"}]))
     orch.build()

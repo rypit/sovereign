@@ -1,10 +1,19 @@
-"""Shared native-engine helpers: looks_local / local_model_bytes / check_local_artifact."""
+"""Shared native-engine helpers: looks_local / local_model_bytes / check_local_artifact
+/ macos_phys_footprint."""
 
 from __future__ import annotations
 
+import struct
+
 import pytest
 
-from sovereign.core.base_native import check_local_artifact, local_model_bytes, looks_local
+from sovereign.core import base_native
+from sovereign.core.base_native import (
+    check_local_artifact,
+    local_model_bytes,
+    looks_local,
+    macos_phys_footprint,
+)
 
 
 # --- looks_local ---
@@ -66,3 +75,54 @@ def test_check_local_artifact_existing_local_passes(tmp_path) -> None:
     p = tmp_path / "x.gguf"
     p.write_bytes(b"x")
     check_local_artifact(str(p), kind="thing", service="svc")  # must not raise
+
+
+# --- macos_phys_footprint ---
+def test_parse_phys_footprint_reads_correct_offset() -> None:
+    raw = bytearray(512)
+    struct.pack_into("<Q", raw, 72, 12345678900)
+    assert base_native._parse_phys_footprint(bytes(raw)) == 12345678900
+
+
+def test_macos_phys_footprint_none_on_non_darwin(monkeypatch) -> None:
+    monkeypatch.setattr(base_native.sys, "platform", "linux")
+    assert macos_phys_footprint(123) is None
+
+
+def test_macos_phys_footprint_none_when_cdll_raises(monkeypatch) -> None:
+    monkeypatch.setattr(base_native.sys, "platform", "darwin")
+
+    def boom(*args, **kwargs):
+        raise OSError("no lib")
+
+    monkeypatch.setattr(base_native.ctypes, "CDLL", boom)
+    assert macos_phys_footprint(123) is None
+
+
+class _FakeLibc:
+    """A fake libc whose ``proc_pid_rusage`` is a plain instance-attribute
+    closure (not a bound method) so real ctypes code can assign ``.argtypes``/
+    ``.restype`` on it, exactly as it would on a real ctypes function pointer.
+    """
+
+    def __init__(self, returncode: int = 0, write: int | None = None) -> None:
+        def proc_pid_rusage(pid, flavor, buf):
+            if write is not None:
+                struct.pack_into("<Q", buf, 72, write)
+            return returncode
+
+        self.proc_pid_rusage = proc_pid_rusage
+
+
+def test_macos_phys_footprint_none_on_nonzero_returncode(monkeypatch) -> None:
+    monkeypatch.setattr(base_native.sys, "platform", "darwin")
+    monkeypatch.setattr(base_native.ctypes, "CDLL", lambda *a, **k: _FakeLibc(returncode=1))
+    assert macos_phys_footprint(123) is None
+
+
+def test_macos_phys_footprint_success(monkeypatch) -> None:
+    monkeypatch.setattr(base_native.sys, "platform", "darwin")
+    monkeypatch.setattr(
+        base_native.ctypes, "CDLL", lambda *a, **k: _FakeLibc(returncode=0, write=999999)
+    )
+    assert macos_phys_footprint(123) == 999999
