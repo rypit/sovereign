@@ -53,7 +53,7 @@ def _service_entry(orch: Orchestrator, name: str) -> dict[str, Any]:
         except Exception:  # noqa: BLE001 - manifest detail is best-effort
             pass
 
-    model_path = entry.config.get("model_path")
+    model_path = entry.config.get("model")
     if isinstance(model_path, str):
         fingerprint = _model_fingerprint(model_path)
         if fingerprint is not None:

@@ -23,7 +23,7 @@ services:
         cache_path: "/tmp/sovereign/cache/llama_heavy"
         kv_cache_type: f16
     config:
-      model_path: "~/models/llama3-70b.gguf"
+      model: "~/models/llama3-70b.gguf"
       gpu_layers: 48
       threads: 8
       context_size: 32768

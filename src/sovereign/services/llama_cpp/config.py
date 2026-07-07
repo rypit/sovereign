@@ -40,8 +40,11 @@ class LlamaPolicy(SovereignBaseModel):
 class LlamaCppConfig(SovereignBaseModel):
     """Settings for a single ``llama-server`` instance."""
 
-    #: Path to the GGUF model (``~`` is expanded at use time). Required.
-    model_path: str
+    #: Local GGUF path (``~`` expanded) or a HuggingFace repo id
+    #: (``<user>/<model>[:quant]``) — llama-server downloads and caches repo ids
+    #: on first start. Required. Repo ids not yet cached contribute 0 to the
+    #: admission-control memory estimate.
+    model: str
     #: ``llama-server`` binary; a bare name is resolved on ``PATH``.
     binary: str = "llama-server"
     #: Address the server binds to.
@@ -52,6 +55,11 @@ class LlamaCppConfig(SovereignBaseModel):
     threads: int | None = Field(default=None, gt=0)  # -t
     context_size: int | None = Field(default=None, gt=0)  # -c
     max_parallel: int | None = Field(default=None, gt=0)  # -np
+
+    #: Speculative-decoding draft model — local GGUF path or HF repo id.
+    draft_model: str | None = None
+    #: Max tokens to draft per step (llama-server ``--draft-max``).
+    num_draft_tokens: int | None = Field(default=None, gt=0)
 
     #: Optional bearer key llama-server requires on requests (``--api-key``).
     api_key: str | None = None

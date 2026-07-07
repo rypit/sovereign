@@ -80,7 +80,7 @@ services:
 
 # ---------------------------------------------------------------------------
 # Add a native inference engine once you have a GGUF model on disk.
-# `llama-server` is already installed (brew llama.cpp). Set model_path, uncomment,
+# `llama-server` is already installed (brew llama.cpp). Set model, uncomment,
 # add `llama_heavy_v1` to open_webui's dependencies, and uncomment the
 # OPENAI_API_BASE_URL line above to auto-wire the UI to it.
 # ---------------------------------------------------------------------------
@@ -93,7 +93,9 @@ services:
 #       port: 11435
 #       timeout_seconds: 120
 #     config:
-#       model_path: "~/models/your-model.gguf"   # <-- point at a real GGUF
+#       model: "~/models/your-model.gguf"   # <-- point at a real GGUF ...
+#       # ... or a HuggingFace repo id, e.g. "ggml-org/gemma-3-1b-it-GGUF" —
+#       # first run downloads it; make sure health_check.timeout_seconds covers it.
 #       gpu_layers: 999            # offload all layers to Metal
 #       context_size: 8192
 #       max_parallel: 2

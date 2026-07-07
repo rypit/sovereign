@@ -1,8 +1,8 @@
 """Phase 11: mlx_lm manager — mocked unit tests + Protocol/registry checks.
 
 The real mlx_lm.server binary and an MLX model are not required here; the
-subprocess, HTTP probe, and psutil calls are mocked. A real-process end-to-end
-check lives in the mlx_lm smoke test.
+subprocess, HTTP probe, and psutil calls are mocked (via the shared base_native
+module, where the process/health/metrics lifecycle now lives).
 """
 
 from __future__ import annotations
@@ -15,9 +15,9 @@ import pytest
 
 import sovereign.services  # noqa: F401 - ensure registration side effect
 from sovereign.config import ServiceEntry
+from sovereign.core import base_native as native_mod
 from sovereign.core.base_manager import ServiceManager
 from sovereign.core.registry import get_service_manager
-from sovereign.services.mlx_lm import manager as mgr_mod
 from sovereign.services.mlx_lm.manager import MlxLmManager
 
 
@@ -170,28 +170,51 @@ def test_get_start_args_expands_home(monkeypatch) -> None:
 
 # --- prepare_environment ---
 def test_prepare_environment_missing_binary(monkeypatch) -> None:
-    monkeypatch.setattr(mgr_mod.shutil, "which", lambda _b: None)
-    with pytest.raises(FileNotFoundError, match="mlx_lm.server binary"):
+    monkeypatch.setattr(native_mod.shutil, "which", lambda _b: None)
+    with pytest.raises(FileNotFoundError, match="mlx_lm.server"):
         _manager().prepare_environment()
 
 
 def test_prepare_environment_repo_id_ok(monkeypatch) -> None:
-    monkeypatch.setattr(mgr_mod.shutil, "which", lambda _b: "/usr/bin/mlx_lm.server")
+    monkeypatch.setattr(native_mod.shutil, "which", lambda _b: "/usr/bin/mlx_lm.server")
     # A repo id that isn't local must NOT raise (mlx downloads it on start).
     _manager({"model": "mlx-community/foo-4bit"}).prepare_environment()
 
 
 def test_prepare_environment_local_path_missing(monkeypatch) -> None:
-    monkeypatch.setattr(mgr_mod.shutil, "which", lambda _b: "/usr/bin/mlx_lm.server")
-    with pytest.raises(FileNotFoundError, match="model path for 'mlx_fast' not found"):
+    monkeypatch.setattr(native_mod.shutil, "which", lambda _b: "/usr/bin/mlx_lm.server")
+    with pytest.raises(FileNotFoundError, match="model for 'mlx_fast' not found"):
         _manager({"model": "/nope/missing-mlx-model"}).prepare_environment()
 
 
 def test_prepare_environment_local_path_ok(tmp_path, monkeypatch) -> None:
-    monkeypatch.setattr(mgr_mod.shutil, "which", lambda _b: "/usr/bin/mlx_lm.server")
+    monkeypatch.setattr(native_mod.shutil, "which", lambda _b: "/usr/bin/mlx_lm.server")
     model_dir = tmp_path / "mlx-model"
     model_dir.mkdir()
     _manager({"model": str(model_dir)}).prepare_environment()  # must not raise
+
+
+def test_prepare_environment_missing_local_draft_raises(monkeypatch) -> None:
+    monkeypatch.setattr(native_mod.shutil, "which", lambda _b: "/usr/bin/mlx_lm.server")
+    with pytest.raises(FileNotFoundError, match="draft_model"):
+        _manager(
+            {"model": "mlx-community/foo-4bit", "draft_model": "/nope/missing-draft"}
+        ).prepare_environment()
+
+
+def test_prepare_environment_hf_draft_ok(monkeypatch) -> None:
+    monkeypatch.setattr(native_mod.shutil, "which", lambda _b: "/usr/bin/mlx_lm.server")
+    _manager(
+        {"model": "mlx-community/foo-4bit", "draft_model": "mlx-community/draft-4bit"}
+    ).prepare_environment()  # must not raise
+
+
+def test_prepare_environment_missing_adapter_raises(monkeypatch) -> None:
+    monkeypatch.setattr(native_mod.shutil, "which", lambda _b: "/usr/bin/mlx_lm.server")
+    with pytest.raises(FileNotFoundError, match="adapter_path"):
+        _manager(
+            {"model": "mlx-community/foo-4bit", "adapter_path": "/nope/missing-adapter"}
+        ).prepare_environment()
 
 
 # --- resource estimation ---
@@ -269,7 +292,7 @@ def test_is_healthy_true_on_http_200(monkeypatch) -> None:
         def __exit__(self, *a):
             return False
 
-    monkeypatch.setattr(mgr_mod.urllib.request, "urlopen", lambda url, timeout=None: FakeResp())
+    monkeypatch.setattr(native_mod.urllib.request, "urlopen", lambda url, timeout=None: FakeResp())
     assert m.is_healthy() is True
 
 
@@ -278,9 +301,9 @@ def test_is_healthy_false_on_connection_error(monkeypatch) -> None:
     m.process = FakeProc(poll_value=None)
 
     def boom(url, timeout=None):
-        raise mgr_mod.urllib.error.URLError("refused")
+        raise native_mod.urllib.error.URLError("refused")
 
-    monkeypatch.setattr(mgr_mod.urllib.request, "urlopen", boom)
+    monkeypatch.setattr(native_mod.urllib.request, "urlopen", boom)
     assert m.is_healthy() is False
 
 
@@ -292,7 +315,7 @@ def test_start_launches_process_with_argv(tmp_path, monkeypatch) -> None:
         captured["args"] = args
         return FakeProc()
 
-    monkeypatch.setattr(mgr_mod.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(native_mod.subprocess, "Popen", fake_popen)
     m = _manager({"model": "mlx-community/foo", "log_dir": str(tmp_path / "logs")})
     m.start()
     assert captured["args"] == m.get_start_args()
@@ -302,7 +325,7 @@ def test_start_launches_process_with_argv(tmp_path, monkeypatch) -> None:
 
 def test_stop_terminates_running_process(tmp_path, monkeypatch) -> None:
     proc = FakeProc(poll_value=None)
-    monkeypatch.setattr(mgr_mod.subprocess, "Popen", lambda *a, **k: proc)
+    monkeypatch.setattr(native_mod.subprocess, "Popen", lambda *a, **k: proc)
     m = _manager({"model": "mlx-community/foo", "log_dir": str(tmp_path)})
     m.start()
     m.stop()
@@ -314,7 +337,7 @@ def test_stop_terminates_running_process(tmp_path, monkeypatch) -> None:
 def test_stop_kills_on_timeout(tmp_path, monkeypatch) -> None:
     proc = FakeProc(poll_value=None)
     proc.wait_raises = subprocess.TimeoutExpired(cmd="mlx_lm.server", timeout=10)
-    monkeypatch.setattr(mgr_mod.subprocess, "Popen", lambda *a, **k: proc)
+    monkeypatch.setattr(native_mod.subprocess, "Popen", lambda *a, **k: proc)
     m = _manager({"model": "mlx-community/foo", "log_dir": str(tmp_path)})
     m.start()
     m.stop()
@@ -352,7 +375,7 @@ def test_tail_log_clears_activity_at_100_percent(tmp_path) -> None:
 
 
 def test_start_launches_tailer_thread(tmp_path, monkeypatch) -> None:
-    monkeypatch.setattr(mgr_mod.subprocess, "Popen", lambda *a, **k: FakeProc())
+    monkeypatch.setattr(native_mod.subprocess, "Popen", lambda *a, **k: FakeProc())
     m = _manager({"model": "mlx-community/foo", "log_dir": str(tmp_path / "logs")})
     m.start()
     assert m._tailer is not None
@@ -387,5 +410,5 @@ def test_get_metrics_running(monkeypatch) -> None:
         def cpu_percent(self, interval=None):
             return 9.9
 
-    monkeypatch.setattr(mgr_mod.psutil, "Process", FakePsProc)
+    monkeypatch.setattr(native_mod.psutil, "Process", FakePsProc)
     assert m.get_metrics() == {"memory_mb": 6000.0, "cpu_percent": 9.9, "status": "running"}
