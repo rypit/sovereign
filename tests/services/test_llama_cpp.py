@@ -180,6 +180,31 @@ def test_endpoint_carries_api_model_name() -> None:
     assert m.endpoint().model == "llama3-70b"
 
 
+# --- provisioning ---
+def test_provisioning_declaration() -> None:
+    assert LlamaCppManager.provisioning_binary == "llama-server"
+    brewfile = LlamaCppManager.provisioning_brewfile()
+    assert brewfile is not None
+    assert 'brew "llama.cpp"' in brewfile.read_text()
+
+
+def test_prepare_environment_provisions_first(monkeypatch) -> None:
+    from sovereign.core.provisioning import Provisioner
+
+    order: list[str] = []
+    monkeypatch.setattr(
+        Provisioner, "provision", classmethod(lambda cls: order.append("provision"))
+    )
+    monkeypatch.setattr(
+        native_mod.shutil,
+        "which",
+        lambda _b: order.append("which") or "/opt/homebrew/bin/llama-server",
+    )
+    m = _manager({"model": "org/some-hf-repo"})  # repo id: no local file check
+    m.prepare_environment()
+    assert order[0] == "provision"  # install the toolchain before validating it
+
+
 # --- prepare_environment ---
 def test_prepare_environment_missing_model(monkeypatch) -> None:
     monkeypatch.setattr(native_mod.shutil, "which", lambda _b: "/opt/homebrew/bin/llama-server")

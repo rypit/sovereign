@@ -212,12 +212,16 @@ class _FakeTestHarness:
     """Registered under a throwaway base_type just for CLI tests."""
 
     invoked_with = None
+    prepared_count = 0
 
     def __init__(self, entry) -> None:
         self.name = entry.name
         self.dependencies = entry.dependencies
         self.entry = entry
         self.materialized = False
+
+    def prepare_environment(self) -> None:
+        _FakeTestHarness.prepared_count += 1
 
     def resolve(self, resolver) -> None:
         from sovereign.core.resolver import ConsumerKind
@@ -283,6 +287,7 @@ def test_harness_invoke_prints_result(tmp_path, monkeypatch) -> None:
     _register_fake_test_harness(monkeypatch)
     variant = _write_harness_stack(tmp_path)
     _write_manifest_with_ready_engine(tmp_path)
+    _FakeTestHarness.prepared_count = 0
     result = runner.invoke(
         app,
         [
@@ -301,6 +306,7 @@ def test_harness_invoke_prints_result(tmp_path, monkeypatch) -> None:
     assert "success=True" in result.stdout
     assert "did the thing" in result.stdout
     assert _FakeTestHarness.invoked_with.prompt == "do the thing"
+    assert _FakeTestHarness.prepared_count == 1  # CLI provisions like the Orchestrator
 
 
 def test_harness_invoke_unknown_dependency_not_ready(tmp_path, monkeypatch) -> None:
@@ -460,6 +466,120 @@ def test_up_refuses_while_cleanroom_bench_lock_held(tmp_path, monkeypatch) -> No
     result = runner.invoke(app, ["up", "-f", str(variant)])
     assert result.exit_code == 1
     assert "clean-room bench run holds" in result.stdout
+
+
+# --- provision ---
+class _FakeProvisionable:
+    """Stands in for a registered integration class in provision tests."""
+
+    satisfied = False
+    provisioned: list[str] = []
+
+    @classmethod
+    def provisioning_satisfied(cls) -> bool:
+        return cls.satisfied
+
+    @classmethod
+    def provision(cls) -> None:
+        _FakeProvisionable.provisioned.append(cls.__name__)
+
+
+def test_provision_scoped_to_stack_file(tmp_path, monkeypatch) -> None:
+    from sovereign.core.registry import _SERVICE_MANAGERS
+
+    class FakeEngine(_FakeProvisionable):
+        pass
+
+    class FakeOther(_FakeProvisionable):
+        pass
+
+    monkeypatch.setitem(_SERVICE_MANAGERS, "prov_fake_engine", FakeEngine)
+    monkeypatch.setitem(_SERVICE_MANAGERS, "prov_fake_other", FakeOther)
+    _FakeProvisionable.provisioned = []
+
+    stack = tmp_path / "stack.yaml"
+    stack.write_text(
+        'version: "1.1"\n'
+        "resources: {max_unified_memory_gb: 64, safety_margin_gb: 4}\n"
+        "services:\n"
+        "  - name: engine\n"
+        "    base_type: prov_fake_engine\n"
+    )
+    result = runner.invoke(app, ["provision", "-f", str(stack)])
+    assert result.exit_code == 0, result.stdout
+    # Only the declared base_type provisioned; the other registered fake untouched.
+    assert _FakeProvisionable.provisioned == ["FakeEngine"]
+    assert "installed" in result.stdout
+
+
+def test_provision_reports_satisfied(tmp_path, monkeypatch) -> None:
+    from sovereign.core.registry import _SERVICE_MANAGERS
+
+    class FakeSatisfied(_FakeProvisionable):
+        satisfied = True
+
+    monkeypatch.setitem(_SERVICE_MANAGERS, "prov_fake_satisfied", FakeSatisfied)
+    _FakeProvisionable.provisioned = []
+
+    stack = tmp_path / "stack.yaml"
+    stack.write_text(
+        'version: "1.1"\n'
+        "resources: {max_unified_memory_gb: 64, safety_margin_gb: 4}\n"
+        "services:\n"
+        "  - name: engine\n"
+        "    base_type: prov_fake_satisfied\n"
+    )
+    result = runner.invoke(app, ["provision", "-f", str(stack)])
+    assert result.exit_code == 0
+    assert "satisfied" in result.stdout
+    assert _FakeProvisionable.provisioned == []  # never installed
+
+
+def test_provision_failure_exits_nonzero(tmp_path, monkeypatch) -> None:
+    from sovereign.core.provisioning import ProvisioningError
+    from sovereign.core.registry import _SERVICE_MANAGERS
+
+    class FakeBroken(_FakeProvisionable):
+        @classmethod
+        def provision(cls) -> None:
+            raise ProvisioningError("registry unreachable")
+
+    monkeypatch.setitem(_SERVICE_MANAGERS, "prov_fake_broken", FakeBroken)
+
+    stack = tmp_path / "stack.yaml"
+    stack.write_text(
+        'version: "1.1"\n'
+        "resources: {max_unified_memory_gb: 64, safety_margin_gb: 4}\n"
+        "services:\n"
+        "  - name: engine\n"
+        "    base_type: prov_fake_broken\n"
+    )
+    result = runner.invoke(app, ["provision", "-f", str(stack)])
+    assert result.exit_code == 1
+    assert "registry unreachable" in result.stdout
+
+
+def test_provision_unknown_base_type_errors(tmp_path) -> None:
+    stack = tmp_path / "stack.yaml"
+    stack.write_text(
+        'version: "1.1"\n'
+        "resources: {max_unified_memory_gb: 64, safety_margin_gb: 4}\n"
+        "services:\n"
+        "  - name: engine\n"
+        "    base_type: no_such_thing\n"
+    )
+    result = runner.invoke(app, ["provision", "-f", str(stack)])
+    assert result.exit_code == 1
+    assert "no_such_thing" in result.stdout
+
+
+def test_provision_unscoped_covers_all_registered() -> None:
+    # The suite-wide fixture no-ops real provision(), so this exercises the
+    # full walk over every registered service + harness without side effects.
+    result = runner.invoke(app, ["provision"])
+    assert result.exit_code == 0, result.stdout
+    for base_type in ("llama_cpp", "docker_engine", "cline_cli", "mini_swe_agent"):
+        assert base_type in result.stdout
 
 
 # --- bench compare ---

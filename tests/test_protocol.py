@@ -31,6 +31,8 @@ class FakeHarness:
         self.name = "fake_harness"
         self.dependencies: list[str] = []
 
+    def prepare_environment(self) -> None: ...
+
     def materialize(self) -> None: ...
 
     def invoke(self, task: Task) -> RunResult:
@@ -59,3 +61,13 @@ def test_harness_invoke_roundtrip() -> None:
     result = FakeHarness().invoke(Task(id="t1", prompt="do the thing"))
     assert result.task_id == "t1"
     assert result.success is True
+
+
+def test_incomplete_harness_is_rejected() -> None:
+    class Incomplete:
+        name = "x"
+        dependencies: list[str] = []
+
+        def materialize(self) -> None: ...  # no prepare_environment / invoke
+
+    assert not isinstance(Incomplete(), Harness)

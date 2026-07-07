@@ -91,6 +91,24 @@ class FakeEnv:
         self.cwd = cwd
 
 
+_MSA_MODULES = (
+    "minisweagent",
+    "minisweagent.agents",
+    "minisweagent.agents.default",
+    "minisweagent.environments",
+    "minisweagent.environments.local",
+    "minisweagent.models",
+    "minisweagent.models.litellm_model",
+)
+
+
+def _block_minisweagent(monkeypatch) -> None:
+    """Simulate the package being uninstalled, even when it's really present:
+    a None entry in sys.modules makes `import <name>` raise ImportError."""
+    for name in _MSA_MODULES:
+        monkeypatch.setitem(sys.modules, name, None)
+
+
 def _install_fake_minisweagent(monkeypatch, agent_cls=FakeAgent) -> None:
     modules = {
         "minisweagent": types.ModuleType("minisweagent"),
@@ -141,9 +159,55 @@ def test_materialize_default_config_dir(tmp_path, monkeypatch) -> None:
     assert (tmp_path / ".sovereign" / "harnesses" / "mini_swe_local" / "settings.yaml").exists()
 
 
+# --- provisioning ---
+def test_provisioning_satisfied_with_fake_module(monkeypatch) -> None:
+    _install_fake_minisweagent(monkeypatch)
+    assert MiniSweAgentHarness.provisioning_satisfied() is True
+
+
+def test_provisioning_not_satisfied_when_absent(monkeypatch) -> None:
+    _block_minisweagent(monkeypatch)
+    assert MiniSweAgentHarness.provisioning_satisfied() is False
+
+
+def test_provisioning_command_uses_uv_pip() -> None:
+    (cmd,) = MiniSweAgentHarness.provisioning_commands
+    assert cmd[:3] == ["uv", "pip", "install"]
+    assert cmd[-1] == "mini-swe-agent"
+
+
+@pytest.mark.allow_provisioning
+def test_provision_installs_package(monkeypatch) -> None:
+    from sovereign.core import provisioning
+
+    _block_minisweagent(monkeypatch)
+    runs: list[list[str]] = []
+
+    def fake_run(cmd, **kw):
+        runs.append(cmd)
+        _install_fake_minisweagent(monkeypatch)  # the install "worked"
+        return 0, ""
+
+    monkeypatch.setattr(provisioning, "_run", fake_run)
+    MiniSweAgentHarness.provision()
+    assert len(runs) == 1
+    assert runs[0][-1] == "mini-swe-agent"
+
+
+def test_prepare_environment_provisions(monkeypatch) -> None:
+    from sovereign.core.provisioning import Provisioner
+
+    provisioned: list[type] = []
+    monkeypatch.setattr(
+        Provisioner, "provision", classmethod(lambda cls: provisioned.append(cls))
+    )
+    _harness().prepare_environment()
+    assert provisioned == [MiniSweAgentHarness]
+
+
 # --- invoke ---
 def test_invoke_without_dependency_raises_import_error_message(monkeypatch) -> None:
-    monkeypatch.delitem(sys.modules, "minisweagent", raising=False)
+    _block_minisweagent(monkeypatch)
     h = _harness()
     with pytest.raises(ImportError, match="mini-swe-agent is not installed"):
         h._build_agent()

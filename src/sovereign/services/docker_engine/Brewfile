@@ -1,0 +1,5 @@
+# Toolchain for docker_engine services — installed by prepare_environment() /
+# `sovereign provision` when the `docker` CLI is missing. Provisioning installs
+# the app; *starting* the daemon remains a runtime concern (prepare_environment
+# still errors with "Start Docker Desktop..." if it isn't running).
+cask "docker-desktop"   # Docker runtime for auxiliary/container services

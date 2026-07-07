@@ -160,6 +160,57 @@ def test_invoke_max_turns_flag(monkeypatch) -> None:
     assert captured["args"][captured["args"].index("--max-turns") + 1] == "10"
 
 
+# --- provisioning ---
+def test_provisioning_declaration() -> None:
+    assert ClineCliHarness.provisioning_binary == "cline"
+    assert ClineCliHarness.provisioning_commands == [["npm", "install", "-g", "cline"]]
+
+
+def test_package_ships_brewfile_with_node() -> None:
+    brewfile = ClineCliHarness.provisioning_brewfile()
+    assert brewfile is not None
+    assert 'brew "node"' in brewfile.read_text()
+
+
+def test_prepare_environment_provisions(monkeypatch) -> None:
+    from sovereign.core.provisioning import Provisioner
+
+    provisioned: list[type] = []
+    monkeypatch.setattr(
+        Provisioner, "provision", classmethod(lambda cls: provisioned.append(cls))
+    )
+    _harness().prepare_environment()
+    assert provisioned == [ClineCliHarness]
+
+
+@pytest.mark.allow_provisioning
+def test_provision_full_chain_on_bare_machine(monkeypatch) -> None:
+    """No cline, no npm: Brewfile installs Node, then npm installs cline."""
+    from sovereign.core import provisioning
+
+    available = {"brew"}
+    monkeypatch.setattr(
+        provisioning.shutil, "which", lambda n: f"/fake/bin/{n}" if n in available else None
+    )
+    runs: list[list[str]] = []
+
+    def fake_run(cmd, **kw):
+        runs.append(cmd)
+        if cmd[0] == "brew":
+            available.add("npm")
+        elif cmd[0] == "npm":
+            available.add("cline")
+        return 0, ""
+
+    monkeypatch.setattr(provisioning, "_run", fake_run)
+    ClineCliHarness.provision()
+
+    assert runs[0][:3] == ["brew", "bundle", "--file"]
+    assert runs[0][3].endswith("cline_cli/Brewfile")
+    assert runs[1] == ["npm", "install", "-g", "cline"]
+    assert ClineCliHarness.provisioning_satisfied()
+
+
 # --- fingerprint ---
 def test_fingerprint_includes_cline_version(monkeypatch) -> None:
     monkeypatch.setattr(cline_mod.shutil, "which", lambda _b: "/usr/local/bin/cline")

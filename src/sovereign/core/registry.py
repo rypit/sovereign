@@ -71,3 +71,13 @@ def get_harness(base_type: str) -> type[Harness]:
     except KeyError:
         known = ", ".join(sorted(_HARNESSES)) or "(none registered)"
         raise KeyError(f"unknown harness base_type {base_type!r}; known: {known}") from None
+
+
+def all_service_managers() -> dict[str, type[ServiceManager]]:
+    """Every registered service manager, keyed by base_type (for `sovereign provision`)."""
+    return dict(_SERVICE_MANAGERS)
+
+
+def all_harnesses() -> dict[str, type[Harness]]:
+    """Every registered harness, keyed by base_type (for `sovereign provision`)."""
+    return dict(_HARNESSES)

@@ -19,7 +19,7 @@ The default stack also runs **SearXNG**, wired into Open WebUI for web search.
 
 The MVP orchestration spine is implemented and tested (Phases 0–8 and 10 of the
 roadmap), and **both post-MVP tracks — harnesses and benchmarking — are complete**
-(375 tests passing):
+(419 tests passing):
 
 - Core contracts (`ServiceManager` / `Harness` Protocols, `base_type` registry),
   `sovereign.yaml` parsing, and the full Typer CLI (`up`/`down`/`status`/`logs`/
@@ -43,6 +43,10 @@ roadmap), and **both post-MVP tracks — harnesses and benchmarking — are comp
   headless) and `mini_swe_agent` (in-process `DefaultAgent`/`LitellmModel`, the
   optional `harness` dependency extra). Both are invocable via
   `sovereign harness list/materialize/invoke`.
+- Per-integration provisioning: one shared contract (`core/provisioning.py`)
+  lets every service and harness install its own dependency chain (a Brewfile
+  in its folder + install commands) — run at boot, by `sovereign provision`,
+  and by `scripts/setup.py`. Declaring an integration in YAML is all it takes.
 - Benchmarking (`sovereign bench run/ls/compare`): a bench spec (`bench.yaml`,
   never part of `sovereign.yaml`) sweeps `stacks x harnesses x suites` into
   content-addressed cells that skip on re-run. Attach mode measures an
@@ -67,7 +71,23 @@ for the harness/bench tracks' detailed phase breakdown.
 python3 scripts/setup.py
 ```
 
-Installs Homebrew dependencies, syncs the Python environment, and registers `sovereign` as a global executable.
+Bootstraps the toolchain (Homebrew `uv`), syncs the Python environment,
+registers `sovereign` as a global executable, and then runs
+`sovereign provision` to install every integration's own dependencies.
+
+### Provisioning
+
+Declaring a service or harness in `sovereign.yaml` is all it takes — Sovereign
+installs its full dependency chain automatically. Each integration folder owns
+its setup artifacts (e.g. `services/llama_cpp/Brewfile`,
+`harnesses/cline_cli/Brewfile` + `npm install -g cline`), and one shared
+contract (`core/provisioning.py`, surfaced as `prepare_environment()` on both
+services and harnesses) runs them idempotently in three places:
+
+- at boot (`sovereign up`), for whatever the stack declares;
+- via `sovereign provision [-f stack.yaml]` — scoped to a stack file, or every
+  registered integration when unscoped (what `setup.py` runs);
+- before one-shot `sovereign harness invoke`/bench quality runs.
 
 ### MLX engine
 
@@ -88,8 +108,9 @@ uv run ruff check .        # lint
 
 ### Harnesses & benchmarking
 
-`mini_swe_agent` and the perf prober are optional dependencies so the base
-install stays lean:
+Harness dependencies install automatically when a harness is declared (see
+Provisioning above). The `harness`/`bench` extras remain as the declarative,
+lockfile-friendly path (e.g. for CI):
 
 ```bash
 uv sync --extra harness --extra bench

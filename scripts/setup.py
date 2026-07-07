@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
-"""Install Sovereign's dependencies: ``brew bundle`` + ``uv sync``.
+"""Install Sovereign's dependencies: bootstrap, then per-integration provisioning.
 
-Lightweight and idempotent — both steps skip work that's already done, so it's
+Lightweight and idempotent — every step skips work that's already done, so it's
 safe to re-run. Stdlib-only so it works on a fresh checkout with just system
 ``python3`` (it must not import the ``sovereign`` package, which doesn't exist
-until after ``uv sync``).
+until after ``uv sync``). The final step delegates to ``sovereign provision``,
+the same shared mechanism the Orchestrator runs at boot: it installs each
+integration's own dependencies (services/*/Brewfile, harnesses/*/Brewfile,
+plus install commands like ``npm install -g cline``).
 
 Usage:
     python3 scripts/setup.py
@@ -20,12 +23,14 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 BREWFILE = REPO_ROOT / "Brewfile"
 
-# Ordered: brew bundle first (it installs `uv` if missing), then uv sync,
-# then uv tool install so `sovereign` is available globally on PATH.
+# Ordered: brew bundle first (bootstrap — installs `uv` if missing), then uv
+# sync, then uv tool install so `sovereign` is available globally on PATH, then
+# `sovereign provision` to install every integration's own dependencies.
 COMMANDS: list[list[str]] = [
     ["brew", "bundle", "--file", str(BREWFILE)],
     ["uv", "sync"],
     ["uv", "tool", "install", "--editable", "."],
+    ["uv", "run", "sovereign", "provision"],
 ]
 
 

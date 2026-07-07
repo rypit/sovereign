@@ -36,6 +36,7 @@ from sovereign.bench.runner import combine_executors, run_bench
 from sovereign.bench.spec import BenchMode, BenchSpecError, load_bench_spec
 from sovereign.config import ConfigError, load_config
 from sovereign.core.base_harness import Task
+from sovereign.core.provisioning import ProvisioningError
 from sovereign.core.resolver import ResolvedEndpoint, Resolver, ServiceRegistry
 from sovereign.orchestrator import BootError, serve_forever
 from sovereign.utils.state import file_hash, read_json, write_json
@@ -563,6 +564,15 @@ def _load_harness(name: str, file: Optional[Path], state_dir: Path):  # noqa: UP
     resolve = getattr(harness, "resolve", None)
     if callable(resolve):
         resolve(Resolver(registry))
+    # Same provisioning the Orchestrator runs, so one-shot CLI use also installs
+    # whatever the harness needs.
+    prepare = getattr(harness, "prepare_environment", None)
+    if callable(prepare):
+        try:
+            prepare()
+        except (ProvisioningError, FileNotFoundError, ImportError) as exc:
+            console.print(f"[red]{exc}[/red]")
+            raise typer.Exit(1) from exc
     return harness
 
 
@@ -624,6 +634,60 @@ def harness_invoke(
     if result.output:
         console.print(result.output)
     if not result.success:
+        raise typer.Exit(1)
+
+
+def _provision_targets(file: Path | None) -> dict[str, type]:
+    """base_type -> class to provision: a stack file's declared types, or everything."""
+    import sovereign.harnesses  # noqa: F401 - populate the registries
+    import sovereign.services  # noqa: F401
+    from sovereign.core.registry import all_harnesses, all_service_managers
+
+    registered: dict[str, type] = {**all_service_managers(), **all_harnesses()}
+    if file is None:
+        return registered
+
+    try:
+        config = load_config(file)
+    except ConfigError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1) from exc
+
+    declared = {e.base_type for e in (*config.services, *config.harnesses)}
+    unknown = declared - registered.keys()
+    if unknown:
+        console.print(f"[red]Unknown base_type(s) in {file}: {', '.join(sorted(unknown))}[/red]")
+        raise typer.Exit(1)
+    return {bt: cls for bt, cls in registered.items() if bt in declared}
+
+
+@app.command()
+def provision(
+    file: Optional[Path] = typer.Option(  # noqa: UP045 - Typer needs Optional at runtime
+        None,
+        "-f",
+        "--file",
+        help="Provision only the integrations this stack file declares (default: all).",
+    ),
+) -> None:
+    """Install every declared integration's dependencies (Brewfiles + install commands)."""
+    failed = False
+    for base_type, cls in sorted(_provision_targets(file).items()):
+        provision_fn = getattr(cls, "provision", None)
+        satisfied_fn = getattr(cls, "provisioning_satisfied", None)
+        if not callable(provision_fn):
+            continue  # integration predates the Provisioner mixin — nothing declared
+        if callable(satisfied_fn) and satisfied_fn():
+            console.print(f"  [green]✓[/green] {base_type} — satisfied")
+            continue
+        console.print(f"  [cyan]→[/cyan] {base_type} — installing…")
+        try:
+            provision_fn()
+            console.print(f"  [green]✓[/green] {base_type} — installed")
+        except (ProvisioningError, FileNotFoundError, ImportError) as exc:
+            console.print(f"  [red]✗ {base_type}: {exc}[/red]")
+            failed = True
+    if failed:
         raise typer.Exit(1)
 
 

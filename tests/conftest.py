@@ -6,6 +6,24 @@ from pathlib import Path
 
 import pytest
 
+from sovereign.core import provisioning
+
+
+@pytest.fixture(autouse=True)
+def _no_real_provisioning(monkeypatch, request):
+    """Neutralize Provisioner.provision() suite-wide so no test ever runs real
+    installers (brew/npm/uv pip) as a side effect of booting integrations.
+
+    Provisioning-behavior tests opt back in with @pytest.mark.allow_provisioning
+    and mock the subprocess layer themselves.
+    """
+    provisioning.reset_attempts()
+    if "allow_provisioning" in request.keywords:
+        return
+    monkeypatch.setattr(
+        provisioning.Provisioner, "provision", classmethod(lambda cls: None)
+    )
+
 
 @pytest.fixture
 def sparse_file():

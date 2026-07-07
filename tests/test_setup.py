@@ -25,14 +25,15 @@ class _Result:
         self.returncode = returncode
 
 
-def test_brewfile_declares_deps() -> None:
+def test_brewfile_declares_bootstrap_only() -> None:
+    """Root Brewfile is bootstrap-only; integration deps live in their own folders."""
     text = setup.BREWFILE.read_text()
     assert 'brew "uv"' in text
-    assert 'brew "llama.cpp"' in text
-    assert 'cask "docker-desktop"' in text
+    assert 'brew "llama.cpp"' not in text  # moved to services/llama_cpp/Brewfile
+    assert 'cask "docker-desktop"' not in text  # moved to services/docker_engine/Brewfile
 
 
-def test_main_runs_brew_bundle_then_uv_sync(monkeypatch) -> None:
+def test_main_runs_bootstrap_then_provision(monkeypatch) -> None:
     calls: list[list[str]] = []
     monkeypatch.setattr(setup.shutil, "which", lambda _name: "/opt/homebrew/bin/brew")
     monkeypatch.setattr(
@@ -41,6 +42,7 @@ def test_main_runs_brew_bundle_then_uv_sync(monkeypatch) -> None:
     assert setup.main() == 0
     assert calls[0][:2] == ["brew", "bundle"]
     assert calls[1] == ["uv", "sync"]
+    assert calls[3] == ["uv", "run", "sovereign", "provision"]
 
 
 def test_main_fails_without_homebrew(monkeypatch) -> None:

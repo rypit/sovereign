@@ -57,3 +57,6 @@ select = ["E", "F", "I", "UP", "B"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+markers = [
+    "allow_provisioning: run the real Provisioner.provision() (test mocks the subprocess layer)",
+]

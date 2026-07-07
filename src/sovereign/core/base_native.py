@@ -26,6 +26,7 @@ import psutil
 from sovereign.config import ServiceEntry
 from sovereign.core.base_config import SovereignBaseModel
 from sovereign.core.base_manager import ActivityMixin
+from sovereign.core.provisioning import Provisioner
 from sovereign.core.resolver import ConsumerKind, ResolvedEndpoint
 from sovereign.core.resources import priority_to_nice
 
@@ -98,11 +99,13 @@ def check_local_artifact(value: str, *, kind: str, service: str) -> None:
             raise FileNotFoundError(f"{kind} for '{service}' not found: {path}")
 
 
-class NativeEngineManager(ActivityMixin):
+class NativeEngineManager(ActivityMixin, Provisioner):
     """Shared lifecycle for a native engine subprocess. Not registered itself.
 
     Subclasses set ``base_type``, ``config_cls`` and implement ``get_start_args()``;
-    they extend ``prepare_environment()`` via ``super()``.
+    they extend ``prepare_environment()`` via ``super()``. Engine toolchains are
+    provisioned per-integration (a ``Brewfile`` next to the manager's module +
+    ``provisioning_binary``) via the shared :class:`Provisioner` mixin.
     """
 
     base_type: ClassVar[str]
@@ -252,7 +255,10 @@ class NativeEngineManager(ActivityMixin):
 
     # --- Resource cooperation ---
     def prepare_environment(self) -> None:
-        """Shared pre-flight: binary on PATH (or a local file), local model exists."""
+        """Shared pre-flight: provision declared deps, then validate binary + model."""
+        # Install the engine's own toolchain first (idempotent no-op once present),
+        # so a declared service works on a fresh machine without manual setup.
+        self.provision()
         binary = self.config.binary
         if shutil.which(binary) is None and not Path(binary).expanduser().is_file():
             message = f"binary '{binary}' not found on PATH for '{self.name}'."

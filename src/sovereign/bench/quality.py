@@ -104,6 +104,11 @@ def run_quality_cell(
     resolve = getattr(harness, "resolve", None)
     if callable(resolve):
         resolve(Resolver(_registry_from_manifest(manifest)))
+    # Provision like the Orchestrator/CLI do — a bench sweep on a fresh cell
+    # must not fail just because the harness's tool isn't installed yet.
+    prepare = getattr(harness, "prepare_environment", None)
+    if callable(prepare):
+        prepare()
     harness.materialize()
 
     suite = load_suite(job.suite)

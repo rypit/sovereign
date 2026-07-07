@@ -86,7 +86,9 @@ _SSE_LINES = [
 
 # --- probe_endpoint / _stream_once ---
 def test_probe_endpoint_without_httpx_raises_install_hint(monkeypatch) -> None:
-    monkeypatch.delitem(sys.modules, "httpx", raising=False)
+    # A None sys.modules entry forces ImportError even when httpx is really
+    # installed (e.g. pulled in transitively by mini-swe-agent).
+    monkeypatch.setitem(sys.modules, "httpx", None)
     with pytest.raises(ImportError, match="httpx is not installed"):
         asyncio.run(probe_endpoint("http://127.0.0.1:11435/v1", "llama3-70b", trials=1))
 
