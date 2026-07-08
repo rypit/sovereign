@@ -36,9 +36,21 @@ roadmap), and **both post-MVP tracks — harnesses and benchmarking — are comp
   `searxng` need to switch to `base_type: docker_engine`.) `llama_cpp` and
   `mlx_lm` share a native-engine base and are configured consistently:
   `llama_cpp`'s config field is now `model` (renamed from `model_path`) and,
-  like `mlx_lm`, accepts a local model path or a HuggingFace repo id; both
-  engines also support speculative-decoding `draft_model`/`num_draft_tokens`,
-  and an optional `served_model_name` for the OpenAI-compatible `"model"` string.
+  like `mlx_lm`, accepts a local model path or a HuggingFace repo id
+  (`org/name`, `org/name:Q4_K_M`, or `org/name/file.gguf`); both engines also
+  support speculative-decoding `draft_model`/`num_draft_tokens`, and an optional
+  `served_model_name` for the OpenAI-compatible `"model"` string.
+- HF-native model management. `base_type: auto` (the default when `base_type` is
+  omitted) routes a model to `llama_cpp`/`mlx_lm` from its HuggingFace metadata,
+  so you only declare the `model`. Sovereign estimates a repo's memory footprint
+  from its weight-file sizes for admission control, and **pre-downloads** the
+  model into the shared HF cache before launch — a `DOWNLOADING` state with
+  byte-level progress (MB/s + ETA, Xet-aware via `hf_xet`) in the dashboard. Both
+  engines always launch from the resolved local path (no `--hf-repo`), so
+  `health_check.timeout_seconds` now only needs to cover model *load*, not the
+  download. `sovereign plan -f stack.yaml` is a no-download dry-run (routing +
+  memory estimate + budget verdict per service); `sovereign models list/prune`
+  inspects and reclaims the HF cache.
 - Harnesses: `cline_cli` (subprocess, isolated `CLINE_DIR`, `--yolo`/`--json`
   headless) and `mini_swe_agent` (in-process `DefaultAgent`/`LitellmModel`, the
   optional `harness` dependency extra). Both are invocable via
@@ -92,10 +104,13 @@ services and harnesses) runs them idempotently in three places:
 ### MLX engine
 
 The `mlx_lm` engine ships with the project: `mlx-lm` is a dependency (Apple Silicon
-only), so `uv sync` provides the `mlx_lm.server` binary. Try it with a tiny model:
+only), so `uv sync` provides the `mlx_lm.server` binary. Try it with a tiny model —
+`mlx.yaml` omits `base_type`, so it's routed to `mlx_lm` automatically:
 
 ```bash
-uv run sovereign up -f mlx.yaml   # boots a tiny MLX model
+uv run sovereign plan -f mlx.yaml   # dry-run: shows the routed engine + memory estimate, no download
+uv run sovereign up   -f mlx.yaml   # DOWNLOADING (byte progress) -> STARTING -> READY
+uv run sovereign models list        # what's in the shared HF cache
 ```
 
 ## Development
