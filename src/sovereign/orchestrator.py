@@ -135,15 +135,15 @@ class Orchestrator:
 
     # --- factories ---
     def _default_manager_factory(self, entry: ServiceEntry) -> ServiceManager:
-        import sovereign.services  # noqa: F401 - populate the registry
-        from sovereign.core.registry import get_service_manager
+        from sovereign.core.registry import get_service_manager, populate_registries
 
+        populate_registries()
         return get_service_manager(entry.base_type)(entry)
 
     def _default_harness_factory(self, entry: ServiceEntry) -> object:
-        import sovereign.harnesses  # noqa: F401 - populate the registry
-        from sovereign.core.registry import get_harness
+        from sovereign.core.registry import get_harness, populate_registries
 
+        populate_registries()
         return get_harness(entry.base_type)(entry)
 
     # --- build + graph ---
