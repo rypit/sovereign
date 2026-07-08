@@ -321,8 +321,8 @@ def test_build_routes_auto_base_type(monkeypatch) -> None:
 
 
 def test_build_auto_routing_uses_cache_offline(tmp_path, monkeypatch) -> None:
-    from sovereign.core import models as models_mod
-    from sovereign.core.models import RoutingCache
+    from sovereign import hf as models_mod
+    from sovereign.hf import RoutingCache
 
     RoutingCache(tmp_path / "models.json").put(
         "org/m", base_type="llama_cpp", weight_bytes=None

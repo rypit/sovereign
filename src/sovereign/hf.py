@@ -1,4 +1,4 @@
-"""HuggingFace model metadata, routing, and download library (Phase M1).
+"""The HuggingFace model pipeline: metadata, routing, and download.
 
 Pure library — no typer, no manager imports. Provides:
 - ModelRef parsing from raw model strings (local path, repo id, repo:quant, repo/file.gguf)
@@ -9,8 +9,8 @@ Pure library — no typer, no manager imports. Provides:
   backend through ``hf_xet``, which reports transfer progress through the same bars)
 - Engine routing: mlx_lm vs llama_cpp, with persisted RoutingCache for offline restarts
 
-Helpers ``looks_local`` and ``local_model_bytes`` are defined here and re-exported
-from ``base_native`` for backwards compatibility.
+Engines call this module through a single seam (``base_native`` imports it as
+``hf_models``), so tests patch ``sovereign.hf.<fn>`` and every caller sees it.
 """
 
 from __future__ import annotations
@@ -29,9 +29,11 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
+import httpx  # a hard dependency of huggingface_hub>=1.0 (its transport layer)
 from huggingface_hub import HfApi, hf_hub_download, snapshot_download
 from huggingface_hub.errors import (
     GatedRepoError,
+    HfHubHTTPError,
     RepositoryNotFoundError,
 )
 from tqdm.auto import tqdm as _BaseTqdm
@@ -171,8 +173,9 @@ def fetch_repo_info(repo_id: str) -> RepoInfo | None:
         raise ModelNotFoundError(
             f"Repository '{repo_id}' not found on HuggingFace Hub"
         ) from exc
-    except Exception:
-        # Transient: connection error, timeout, 5xx, offline — do not cache
+    except (OSError, httpx.HTTPError, HfHubHTTPError):
+        # Transient: connection error, timeout, 5xx, offline — do not cache.
+        # Deliberately narrow so genuine bugs surface instead of reading as "offline".
         return None
 
     tags = tuple(info.tags or [])

@@ -21,23 +21,17 @@ from typing import Any, ClassVar, Literal
 
 import psutil
 
-from sovereign.config import ServiceEntry
-
 # The runtime HF surface (metadata fetch, estimation, download) is called through
-# the module — one seam, so tests patch `sovereign.core.models.<fn>` and every
-# caller sees it. Pure helpers are imported by name; the local-path ones are
-# re-exported here for backwards compatibility.
-from sovereign.core import models as hf_models
+# the module — one seam, so tests patch `sovereign.hf.<fn>` and every
+# caller sees it. Pure helpers are imported by name.
+from sovereign import hf as hf_models
+from sovereign.config import ServiceEntry
 from sovereign.core.base_config import SovereignBaseModel
 from sovereign.core.base_manager import ActivityMixin
-from sovereign.core.models import (  # noqa: F401
-    local_model_bytes,
-    looks_local,
-    parse_model_ref,
-)
 from sovereign.core.provisioning import Provisioner
 from sovereign.core.resolver import ConsumerKind, ResolvedEndpoint
 from sovereign.core.resources import priority_to_nice
+from sovereign.hf import looks_local, parse_model_ref
 
 # Per-request health probe timeout (seconds) — distinct from the overall boot
 # timeout the Orchestrator enforces while polling.

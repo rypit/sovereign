@@ -1,4 +1,4 @@
-"""Phase M1: unit tests for sovereign.core.models.
+"""Phase M1: unit tests for sovereign.hf.
 
 Pure unit — no real HF network calls.  HfApi.model_info is monkeypatched or
 RepoInfo is built directly.  Mirrors the mock style in tests/services/test_mlx_lm.py.
@@ -11,9 +11,9 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from sovereign import hf as models_mod
 from sovereign.config import ServiceEntry
-from sovereign.core import models as models_mod
-from sovereign.core.models import (
+from sovereign.hf import (
     ModelAccessError,
     ModelNotFoundError,
     ModelResolutionError,
@@ -303,13 +303,13 @@ def test_estimate_local_beats_api(tmp_path, sparse_file, monkeypatch):
     model_dir.mkdir()
     sparse_file(model_dir / "weights.safetensors", 4 * 1024**3)
     # Even if API would return something, local should be used
-    monkeypatch.setattr("sovereign.core.models.fetch_repo_info", lambda _: None)
+    monkeypatch.setattr("sovereign.hf.fetch_repo_info", lambda _: None)
     ref = parse_model_ref(str(model_dir))
     assert estimate_model_bytes(ref, "snapshot") == 4 * 1024**3
 
 
 def test_estimate_offline_uncached_returns_none(monkeypatch):
-    monkeypatch.setattr("sovereign.core.models.fetch_repo_info", lambda _: None)
+    monkeypatch.setattr("sovereign.hf.fetch_repo_info", lambda _: None)
     ref = parse_model_ref("org/model")
     assert estimate_model_bytes(ref, "snapshot") is None
 
@@ -319,7 +319,7 @@ def test_estimate_from_api(monkeypatch):
         "org/model",
         siblings=(("model.safetensors", 3 * 1024**3),),
     )
-    monkeypatch.setattr("sovereign.core.models.fetch_repo_info", lambda _: fake_info)
+    monkeypatch.setattr("sovereign.hf.fetch_repo_info", lambda _: fake_info)
     ref = parse_model_ref("org/model")
     assert estimate_model_bytes(ref, "snapshot") == 3 * 1024**3
 
@@ -516,7 +516,7 @@ def test_fetch_gated_repo_raises_model_access_error():
     fake_resp = MagicMock()
     fake_resp.headers = {}
     exc = _GRE("gated", response=fake_resp)
-    with patch("sovereign.core.models.HfApi") as MockApi:
+    with patch("sovereign.hf.HfApi") as MockApi:
         MockApi.return_value.model_info.side_effect = exc
         with pytest.raises(ModelAccessError, match="gated"):
             fetch_repo_info("org/gated-model")
@@ -528,21 +528,21 @@ def test_fetch_not_found_raises_model_not_found_error():
     fake_resp = MagicMock()
     fake_resp.headers = {}
     exc = _RNFE("missing", response=fake_resp)
-    with patch("sovereign.core.models.HfApi") as MockApi:
+    with patch("sovereign.hf.HfApi") as MockApi:
         MockApi.return_value.model_info.side_effect = exc
         with pytest.raises(ModelNotFoundError):
             fetch_repo_info("org/missing")
 
 
 def test_fetch_connection_error_returns_none():
-    with patch("sovereign.core.models.HfApi") as MockApi:
+    with patch("sovereign.hf.HfApi") as MockApi:
         MockApi.return_value.model_info.side_effect = ConnectionError("offline")
         result = fetch_repo_info("org/model")
     assert result is None
 
 
 def test_fetch_connection_error_not_cached():
-    with patch("sovereign.core.models.HfApi") as MockApi:
+    with patch("sovereign.hf.HfApi") as MockApi:
         MockApi.return_value.model_info.side_effect = ConnectionError("offline")
         fetch_repo_info("org/model")
         MockApi.return_value.model_info.side_effect = ConnectionError("offline again")
@@ -554,7 +554,7 @@ def test_fetch_connection_error_not_cached():
 
 def test_fetch_success_is_cached():
     fake = _make_hfapi_info(("mlx",), (("model.safetensors", 1024),))
-    with patch("sovereign.core.models.HfApi") as MockApi:
+    with patch("sovereign.hf.HfApi") as MockApi:
         MockApi.return_value.model_info.return_value = fake
         r1 = fetch_repo_info("org/model")
         r2 = fetch_repo_info("org/model")
@@ -685,7 +685,7 @@ def test_progress_tqdm_handles_snapshot_style_growing_total(monkeypatch):
     # snapshot_download creates the byte bar with total=0, then grows bar.total as
     # each file's metadata arrives (see _AggregatedTqdm in _snapshot_download.py).
     # The reporter must tolerate that and never divide by the stale zero.
-    from sovereign.core.models import _make_progress_tqdm
+    from sovereign.hf import _make_progress_tqdm
 
     messages: list[str] = []
     tqdm_cls = _make_progress_tqdm(messages.append, "org/model")

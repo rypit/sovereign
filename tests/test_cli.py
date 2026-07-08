@@ -646,7 +646,7 @@ def test_bench_compare_json_output(tmp_path) -> None:
 # --- sovereign plan (M5) ---
 import types  # noqa: E402
 
-from sovereign.core import models as models_mod  # noqa: E402
+from sovereign import hf as models_mod  # noqa: E402
 
 _PLAN_YAML = """
 version: "1.1"
