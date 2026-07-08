@@ -8,12 +8,8 @@ import struct
 import pytest
 
 from sovereign.core import base_native
-from sovereign.core.base_native import (
-    check_local_artifact,
-    local_model_bytes,
-    looks_local,
-    macos_phys_footprint,
-)
+from sovereign.core.base_native import check_local_artifact, macos_phys_footprint
+from sovereign.hf import local_model_bytes, looks_local
 
 
 # --- looks_local ---

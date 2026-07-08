@@ -679,7 +679,7 @@ def _provision_targets(file: Path | None) -> dict[str, type]:
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(1) from exc
 
-    from sovereign.core.models import ModelResolutionError, resolve_entry_base_type
+    from sovereign.hf import ModelResolutionError, resolve_entry_base_type
 
     declared: set[str] = {h.base_type for h in config.harnesses}
     for svc in config.services:
@@ -926,13 +926,13 @@ def plan(
     """Dry-run a stack: route models, estimate memory, and check the budget. No downloads."""
     from pydantic import ValidationError
 
-    from sovereign.core.models import (
+    from sovereign.core.resources import ResourceBudgeter, ResourceExhaustedError
+    from sovereign.hf import (
         ModelResolutionError,
         estimate_model_bytes_with_source,
         parse_model_ref,
         resolve_entry_base_type,
     )
-    from sovereign.core.resources import ResourceBudgeter, ResourceExhaustedError
     from sovereign.services.llama_cpp.config import LlamaCppConfig
 
     _load_dotenv()

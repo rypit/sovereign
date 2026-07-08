@@ -23,13 +23,13 @@ from pathlib import Path
 
 from sovereign.config import ServiceEntry, SovereignConfig
 from sovereign.core.base_manager import ServiceManager
-from sovereign.core.models import resolve_entry_base_type
 from sovereign.core.resolver import ConsumerKind, Resolver, ServiceRegistry
 from sovereign.core.resources import (
     ResourceBudgeter,
     ResourceExhaustedError,
     estimate_service_memory,
 )
+from sovereign.hf import resolve_entry_base_type
 from sovereign.utils.manifest import write_manifest
 from sovereign.utils.state import file_hash, write_json
 
