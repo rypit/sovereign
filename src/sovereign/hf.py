@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import contextlib
 import io
+import logging
 import os
 import re
 import shutil
@@ -42,6 +43,8 @@ from sovereign.utils.state import read_json, write_json
 
 if TYPE_CHECKING:
     from sovereign.config import ServiceEntry
+
+log = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -70,7 +73,7 @@ class RoutingError(ModelResolutionError):
 
 
 # ---------------------------------------------------------------------------
-# Local-path helpers (moved from base_native; re-exported there for back-compat)
+# Local-path helpers
 # ---------------------------------------------------------------------------
 
 
@@ -173,9 +176,10 @@ def fetch_repo_info(repo_id: str) -> RepoInfo | None:
         raise ModelNotFoundError(
             f"Repository '{repo_id}' not found on HuggingFace Hub"
         ) from exc
-    except (OSError, httpx.HTTPError, HfHubHTTPError):
+    except (OSError, httpx.HTTPError, HfHubHTTPError) as exc:
         # Transient: connection error, timeout, 5xx, offline — do not cache.
         # Deliberately narrow so genuine bugs surface instead of reading as "offline".
+        log.debug("metadata fetch for %s failed (%s); treating as offline", repo_id, exc)
         return None
 
     tags = tuple(info.tags or [])
@@ -690,11 +694,13 @@ def resolve_entry_base_type(entry: ServiceEntry, state_dir: Path) -> str:
         kind: Literal["snapshot", "gguf"] = "gguf" if base_type == "llama_cpp" else "snapshot"
         wb = weight_bytes(info, kind, quant=ref.quant, filename=ref.filename)
         cache.put(model, base_type=base_type, weight_bytes=wb)
+        log.debug("routed %s -> %s (hub metadata)", model, base_type)
         return base_type
 
     # Offline: consult routing cache
     cached = cache.get(model)
     if cached:
+        log.debug("routed %s -> %s (offline, routing cache)", model, cached["base_type"])
         return cached["base_type"]
 
     raise RoutingError(
