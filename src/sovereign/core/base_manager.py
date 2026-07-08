@@ -10,7 +10,10 @@ Harnesses and Jobs do **not** implement this — they have their own contracts
 
 from __future__ import annotations
 
-from typing import Any, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
+
+if TYPE_CHECKING:
+    from sovereign.core.resolver import ResolvedEndpoint, Resolver
 
 
 class ActivityMixin:
@@ -81,3 +84,83 @@ class ServiceManager(Protocol):
     def adjust_resources(self, memory_limit_mb: int) -> None:
         """Shrink resource use in response to pressure (e.g. reduce cache size)."""
         ...
+
+
+# ---------------------------------------------------------------------------
+# Optional capabilities
+#
+# Not every manager implements every hook: docker containers have no model to
+# download, native engines have no `docker run` argv. The Orchestrator, the
+# resource budgeter, and the manifest builder discover these capabilities via
+# `isinstance()` against the runtime-checkable Protocols below — never via ad-hoc
+# `getattr` probing — so the full manager contract is visible in one place.
+#
+# A manager opts into a capability simply by defining the method. Additionally,
+# managers may expose these *data* attributes (which Protocols can't
+# runtime-check on Python 3.11), read via `getattr` where needed:
+#
+# - ``model_path: Path | None`` — the resolved local model artifact, populated
+#   by ``prepare_model()``; the manifest fingerprints it.
+# - ``resolved_env: dict[str, Any]`` — endpoint-resolved environment for
+#   container managers, recorded alongside ``run_args()`` in the manifest.
+# ---------------------------------------------------------------------------
+
+
+@runtime_checkable
+class SupportsModelPreparation(Protocol):
+    """Downloads/resolves model artifacts before ``start()`` (DOWNLOADING state)."""
+
+    def prepare_model(self) -> None:
+        """Resolve the model to a local path, downloading into the HF cache if needed."""
+        ...
+
+
+@runtime_checkable
+class SupportsMemoryEstimate(Protocol):
+    """Estimates resident memory for admission control (§7 refuse-to-boot)."""
+
+    def estimated_memory_gb(self) -> float:
+        """Expected unified-memory footprint in GB (0.0 when unknown)."""
+        ...
+
+
+@runtime_checkable
+class SupportsResolve(Protocol):
+    """Consumes dependency endpoints (``{{ service.url }}`` templates) before start."""
+
+    def resolve(self, resolver: Resolver) -> None: ...
+
+
+@runtime_checkable
+class SupportsEndpoint(Protocol):
+    """Exposes a network endpoint registered for dependents when READY."""
+
+    def endpoint(self) -> ResolvedEndpoint | None: ...
+
+
+@runtime_checkable
+class SupportsRuntimeHandle(Protocol):
+    """Provides a cross-process teardown handle (PID / container name) for `down`."""
+
+    def runtime_handle(self) -> dict[str, Any] | None: ...
+
+
+@runtime_checkable
+class SupportsStartArgs(Protocol):
+    """Native engines: the final resolved argv, recorded in the manifest."""
+
+    def get_start_args(self) -> list[str]: ...
+
+
+@runtime_checkable
+class SupportsRunArgs(Protocol):
+    """Container managers: the final ``docker run`` argv, recorded in the manifest."""
+
+    def run_args(self) -> list[str]: ...
+
+
+@runtime_checkable
+class SupportsPerSlotContext(Protocol):
+    """Engines with parallel slots: context window available per agent."""
+
+    def per_slot_context(self) -> int | None: ...

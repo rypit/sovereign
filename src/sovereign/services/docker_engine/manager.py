@@ -225,7 +225,7 @@ class DockerEngineManager(ActivityMixin, Provisioner):
             return False
         return result.returncode == 0 and bool(result.stdout.strip())
 
-    def _run_args(self) -> list[str]:
+    def run_args(self) -> list[str]:
         args = [
             "run",
             "-d",
@@ -244,7 +244,7 @@ class DockerEngineManager(ActivityMixin, Provisioner):
     # --- Lifecycle ---
     def start(self) -> None:
         self._run_docker(["rm", "-f", self._container_name()], check=False)
-        self._run_docker(self._run_args(), timeout=60, check=True)
+        self._run_docker(self.run_args(), timeout=60, check=True)
 
     def stop(self) -> None:
         self._run_docker(["rm", "-f", self._container_name()], check=False)

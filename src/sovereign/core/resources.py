@@ -13,6 +13,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from sovereign.config import Priority
+from sovereign.core.base_manager import SupportsMemoryEstimate
 
 if TYPE_CHECKING:
     from sovereign.config import ServiceEntry
@@ -91,9 +92,8 @@ def estimate_service_memory(manager: ServiceManager, entry: ServiceEntry) -> flo
     the model file + KV cache); falls back to a declared ``config.memory_gb`` hint;
     otherwise 0.0 (unknown → admitted, so we only ever refuse on real estimates).
     """
-    estimate_fn = getattr(manager, "estimated_memory_gb", None)
-    if callable(estimate_fn):
-        return float(estimate_fn())
+    if isinstance(manager, SupportsMemoryEstimate):
+        return float(manager.estimated_memory_gb())
     if entry.memory_gb is not None:
         return float(entry.memory_gb)
     return 0.0

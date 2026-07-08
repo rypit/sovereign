@@ -45,10 +45,11 @@ class FakeManager:
         self._prepare_model_raises = prepare_model_raises
         self.resolved_with = None
         self.activity = ""
-        # A native engine exposes prepare_model (pre-download); shadow it with None
-        # to model managers (docker_engine, older fakes) that don't have the hook.
-        if not has_prepare_model:
-            self.prepare_model = None
+        # A native engine exposes prepare_model (pre-download); managers without
+        # the capability (docker_engine, older fakes) simply lack the attribute,
+        # which is what the SupportsModelPreparation isinstance check keys on.
+        if has_prepare_model:
+            self.prepare_model = self._prepare_model
 
     def estimated_memory_gb(self) -> float:
         return self._mem_gb
@@ -58,7 +59,7 @@ class FakeManager:
         if self._prepare_delay:
             time.sleep(self._prepare_delay)  # runs in a worker thread during boot
 
-    def prepare_model(self) -> None:
+    def _prepare_model(self) -> None:
         self._log.append((self.name, "prepare_model"))
         if self._prepare_model_raises:
             raise RuntimeError(f"download failed for {self.name}")
