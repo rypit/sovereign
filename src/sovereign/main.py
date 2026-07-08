@@ -52,6 +52,8 @@ harness_app = typer.Typer(help="Inspect and invoke configured harnesses.")
 app.add_typer(harness_app, name="harness")
 bench_app = typer.Typer(help="Benchmark engine x model x harness combinations.")
 app.add_typer(bench_app, name="bench")
+models_app = typer.Typer(help="Inspect and prune the shared HuggingFace model cache.")
+app.add_typer(models_app, name="models")
 console = Console()
 
 _DEFAULT_BENCH_SPEC = Path("bench.yaml")
@@ -75,6 +77,7 @@ _STATE_COLORS = {
     "degraded": "yellow",
     "starting": "cyan",
     "provisioning": "cyan",
+    "downloading": "cyan",
     "failed": "red",
     "stopped": "dim",
 }
@@ -402,7 +405,7 @@ def _metric_cell(text: str, spark: str) -> str:
     return f"{text} {spark}" if spark else text
 
 
-_SPINNER_STATES = {"provisioning", "starting"}
+_SPINNER_STATES = {"provisioning", "downloading", "starting"}
 
 
 def _status_cell(state: str) -> str | Spinner:
@@ -423,6 +426,7 @@ def _dashboard(status: dict, history: MetricHistory | None = None):
     table.add_column("DURATION")
     table.add_column("CPU %")
     table.add_column("MEM (MB)")
+    table.add_column("EST (GB)")
     table.add_column("ENDPOINT")
 
     activity_lines: list[str] = []
@@ -436,6 +440,8 @@ def _dashboard(status: dict, history: MetricHistory | None = None):
         duration = _duration_cell(svc.get("since"))
         endpoint = svc.get("endpoint") or "-"
         descriptor = svc.get("descriptor") or "-"
+        estimated = svc.get("estimated_gb")
+        est = f"{estimated:.1f}" if estimated is not None else "-"
         table.add_row(
             name,
             descriptor,
@@ -443,6 +449,7 @@ def _dashboard(status: dict, history: MetricHistory | None = None):
             duration,
             _metric_cell(cpu, cpu_spark),
             _metric_cell(mem, mem_spark),
+            est,
             endpoint,
         )
 
@@ -450,10 +457,29 @@ def _dashboard(status: dict, history: MetricHistory | None = None):
         if activity:
             activity_lines.append(f"  {name}  [{_status_label(state)}] {activity}")
 
-    if not activity_lines:
+    footer = _budget_footer(status.get("budget"))
+    if not activity_lines and footer is None:
         return table
-    body = Text("\n".join(activity_lines), style="dim")
-    return Group(table, Text("Activity:", style="bold"), body)
+    parts: list = [table]
+    if activity_lines:
+        parts += [Text("Activity:", style="bold"), Text("\n".join(activity_lines), style="dim")]
+    if footer is not None:
+        parts.append(footer)
+    return Group(*parts)
+
+
+def _budget_footer(budget: dict | None):
+    """A one-line unified-memory summary, or None when the status predates budgets."""
+    if not budget:
+        return None
+    reserved = budget.get("reserved_gb", 0.0)
+    usable = budget.get("usable_gb", 0.0)
+    available = budget.get("available_gb", 0.0)
+    return Text(
+        f"Memory: {reserved:.1f} reserved / {usable:.0f} usable GB "
+        f"— {available:.1f} GB headroom",
+        style="bold",
+    )
 
 
 @app.command()
@@ -823,6 +849,175 @@ def bench_compare(
             pareto_cell,
         )
     console.print(table)
+
+
+def _fmt_bytes(n: float) -> str:
+    """Human-readable byte size (GB for anything model-sized)."""
+    gb = n / (1024**3)
+    if gb >= 1:
+        return f"{gb:.1f} GB"
+    return f"{n / (1024**2):.0f} MB"
+
+
+@models_app.callback(invoke_without_command=True)
+def models_main(ctx: typer.Context) -> None:
+    """List the shared HuggingFace model cache (default) or prune a repo."""
+    if ctx.invoked_subcommand is None:
+        models_list()
+
+
+@models_app.command("list")
+def models_list() -> None:
+    """List cached HuggingFace repos by size (REPO / SIZE / NFILES / LAST_ACCESSED)."""
+    from huggingface_hub import scan_cache_dir
+
+    try:
+        cache = scan_cache_dir()
+    except Exception as exc:  # noqa: BLE001 - missing/corrupt cache is not fatal
+        console.print(f"[yellow]No HuggingFace cache to scan: {exc}[/yellow]")
+        return
+    repos = sorted(cache.repos, key=lambda r: r.size_on_disk, reverse=True)
+    if not repos:
+        console.print("[dim]HuggingFace cache is empty.[/dim]")
+        return
+
+    table = Table(title="HuggingFace model cache")
+    table.add_column("REPO")
+    table.add_column("SIZE")
+    table.add_column("NFILES")
+    table.add_column("LAST_ACCESSED")
+    for repo in repos:
+        last = datetime.fromtimestamp(repo.last_accessed, tz=UTC).strftime("%Y-%m-%d")
+        table.add_row(repo.repo_id, _fmt_bytes(repo.size_on_disk), str(repo.nb_files), last)
+    console.print(table)
+    console.print(f"[bold]Total: {_fmt_bytes(cache.size_on_disk)}[/bold]")
+
+
+@models_app.command("prune")
+def models_prune(
+    repo: str = typer.Argument(..., help="Repo id to delete from the cache (all revisions)."),
+) -> None:
+    """Delete every revision of a cached repo, freeing its disk space."""
+    from huggingface_hub import scan_cache_dir
+
+    cache = scan_cache_dir()
+    match = next((r for r in cache.repos if r.repo_id == repo), None)
+    if match is None:
+        console.print(f"[red]No cached repo '{repo}'. Run `sovereign models list`.[/red]")
+        raise typer.Exit(1)
+
+    console.print(f"{repo}: {_fmt_bytes(match.size_on_disk)} across {match.nb_files} files")
+    if not typer.confirm("Delete all cached revisions?"):
+        raise typer.Exit(0)
+    strategy = cache.delete_revisions(*[rev.commit_hash for rev in match.revisions])
+    strategy.execute()
+    console.print(f"[green]Freed {_fmt_bytes(strategy.expected_freed_size)}.[/green]")
+
+
+_VERDICT_COLORS = {"OK": "green", "REFUSED": "red", "ROUTING ERROR": "red", "CONFIG ERROR": "red"}
+
+
+@app.command()
+def plan(
+    file: Optional[Path] = typer.Option(  # noqa: UP045 - Typer needs Optional at runtime
+        _DEFAULT_CONFIG, "-f", "--file", help="Stack variant file to plan."
+    ),
+) -> None:
+    """Dry-run a stack: route models, estimate memory, and check the budget. No downloads."""
+    from pydantic import ValidationError
+
+    from sovereign.core.models import (
+        ModelResolutionError,
+        estimate_model_bytes_with_source,
+        parse_model_ref,
+        resolve_entry_base_type,
+    )
+    from sovereign.core.resources import ResourceBudgeter, ResourceExhaustedError
+    from sovereign.services.llama_cpp.config import LlamaCppConfig
+
+    _load_dotenv()
+    try:
+        config = load_config(file)
+    except ConfigError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1) from exc
+
+    budgeter = ResourceBudgeter(
+        config.resources.max_unified_memory_gb, config.resources.safety_margin_gb
+    )
+
+    table = Table(title=f"Plan for {file}")
+    for col in ("SERVICE", "BASE_TYPE", "MODEL", "SOURCE", "EST GB", "VERDICT"):
+        table.add_column(col)
+
+    all_ok = True
+    for entry in config.services:
+        model = entry.config.get("model") or "-"
+        requested_auto = entry.base_type == "auto"
+
+        # Route (auto entries need HF metadata / the routing cache).
+        try:
+            base_type = resolve_entry_base_type(entry, _DEFAULT_STATE_DIR)
+        except ModelResolutionError:
+            all_ok = False
+            _plan_row(table, entry.name, entry.base_type, model, "-", None, "ROUTING ERROR")
+            continue
+        base_type_display = f"{base_type} (auto)" if requested_auto else base_type
+
+        # Estimate memory: a declared override wins; else metadata for native engines.
+        source = "-"
+        if entry.memory_gb is not None:
+            est_gb: float | None = float(entry.memory_gb)
+            source = "declared"
+        elif base_type in ("llama_cpp", "mlx_lm"):
+            kind = "gguf" if base_type == "llama_cpp" else "snapshot"
+            weight_bytes_, source = estimate_model_bytes_with_source(
+                parse_model_ref(str(model)), kind
+            )
+            est_gb = (weight_bytes_ / (1024**3)) if weight_bytes_ is not None else None
+            if base_type == "llama_cpp":
+                try:
+                    lc = LlamaCppConfig.model_validate(entry.config)
+                except ValidationError:
+                    all_ok = False
+                    _plan_row(
+                        table, entry.name, base_type_display, model, source, None, "CONFIG ERROR"
+                    )
+                    continue
+                kv_gb = (lc.context_size or 0) * lc.kv_bytes_per_token / (1024**3)
+                if kv_gb:
+                    est_gb = (est_gb or 0.0) + kv_gb
+        else:
+            est_gb = None
+            source = "unknown"
+
+        # Admit against the running budget.
+        try:
+            budgeter.admit(entry.name, est_gb or 0.0)
+            verdict = "OK"
+        except ResourceExhaustedError:
+            all_ok = False
+            verdict = "REFUSED"
+        _plan_row(table, entry.name, base_type_display, model, source, est_gb, verdict)
+
+    console.print(table)
+    footer = _budget_footer(
+        {
+            "usable_gb": budgeter.usable_gb,
+            "reserved_gb": round(budgeter.reserved_gb, 2),
+            "available_gb": round(budgeter.available_gb, 2),
+        }
+    )
+    if footer is not None:
+        console.print(footer)
+    if not all_ok:
+        raise typer.Exit(1)
+
+
+def _plan_row(table, name, base_type, model, source, est_gb, verdict) -> None:
+    color = _VERDICT_COLORS.get(verdict, "white")
+    est = f"{est_gb:.1f}" if est_gb is not None else "-"
+    table.add_row(name, base_type, str(model), source, est, f"[{color}]{verdict}[/{color}]")
 
 
 @app.command()

@@ -641,3 +641,115 @@ def test_bench_compare_json_output(tmp_path) -> None:
     result = runner.invoke(app, ["bench", "compare", "--state-dir", str(tmp_path), "--json"])
     assert result.exit_code == 0
     assert '"engine": "engine"' in result.stdout
+
+
+# --- sovereign plan (M5) ---
+import types  # noqa: E402
+
+from sovereign.core import models as models_mod  # noqa: E402
+
+_PLAN_YAML = """
+version: "1.1"
+resources:
+  max_unified_memory_gb: {mem}
+  safety_margin_gb: 0
+services:
+  - name: engine
+    base_type: {base_type}
+    health_check: {{type: http, endpoint: /health, port: 8080}}
+    config:
+      model: mlx-community/foo-4bit
+"""
+
+
+def _write_plan_config(tmp_path, *, mem=64, base_type="auto") -> Path:
+    p = tmp_path / "stack.yaml"
+    p.write_text(_PLAN_YAML.format(mem=mem, base_type=base_type))
+    return p
+
+
+def test_plan_fits(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(models_mod, "resolve_entry_base_type", lambda e, s: "mlx_lm")
+    monkeypatch.setattr(
+        models_mod, "estimate_model_bytes_with_source", lambda ref, kind: (8 * 1024**3, "hub")
+    )
+    result = runner.invoke(app, ["plan", "-f", str(_write_plan_config(tmp_path, mem=64))])
+    assert result.exit_code == 0
+    assert "mlx_lm (auto)" in result.stdout  # routed type flagged
+    assert "OK" in result.stdout
+    assert "headroom" in result.stdout  # budget footer
+
+
+def test_plan_refused_when_over_budget(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(models_mod, "resolve_entry_base_type", lambda e, s: "mlx_lm")
+    monkeypatch.setattr(
+        models_mod, "estimate_model_bytes_with_source", lambda ref, kind: (200 * 1024**3, "hub")
+    )
+    result = runner.invoke(app, ["plan", "-f", str(_write_plan_config(tmp_path, mem=16))])
+    assert result.exit_code == 1
+    assert "REFUSED" in result.stdout
+
+
+def test_plan_routing_error(tmp_path, monkeypatch) -> None:
+    def boom(entry, state_dir):
+        raise models_mod.RoutingError("cannot route offline")
+
+    monkeypatch.setattr(models_mod, "resolve_entry_base_type", boom)
+    result = runner.invoke(app, ["plan", "-f", str(_write_plan_config(tmp_path))])
+    assert result.exit_code == 1
+    assert "ROUTING ERROR" in result.stdout
+
+
+# --- sovereign models (M5) ---
+def _fake_repo(repo_id: str, size: int, nb_files: int = 3):
+    return types.SimpleNamespace(
+        repo_id=repo_id,
+        size_on_disk=size,
+        nb_files=nb_files,
+        last_accessed=0.0,
+        revisions=[types.SimpleNamespace(commit_hash="abc123")],
+    )
+
+
+def test_models_list(monkeypatch) -> None:
+    import huggingface_hub
+
+    cache = types.SimpleNamespace(
+        repos=[_fake_repo("org/big", 20 * 1024**3), _fake_repo("org/small", 1 * 1024**3)],
+        size_on_disk=21 * 1024**3,
+    )
+    monkeypatch.setattr(huggingface_hub, "scan_cache_dir", lambda: cache)
+    result = runner.invoke(app, ["models", "list"])
+    assert result.exit_code == 0
+    assert "org/big" in result.stdout
+    assert "org/small" in result.stdout
+    assert "Total:" in result.stdout
+
+
+def test_models_prune_confirms_and_deletes(monkeypatch) -> None:
+    import huggingface_hub
+
+    strategy = types.SimpleNamespace(
+        expected_freed_size=20 * 1024**3, execute=lambda: None
+    )
+    deleted: list = []
+    cache = types.SimpleNamespace(
+        repos=[_fake_repo("org/big", 20 * 1024**3)],
+        size_on_disk=20 * 1024**3,
+        delete_revisions=lambda *hashes: deleted.append(hashes) or strategy,
+    )
+    monkeypatch.setattr(huggingface_hub, "scan_cache_dir", lambda: cache)
+    result = runner.invoke(app, ["models", "prune", "org/big"], input="y\n")
+    assert result.exit_code == 0
+    assert deleted == [("abc123",)]
+    assert "Freed" in result.stdout
+
+
+def test_models_prune_unknown_repo(monkeypatch) -> None:
+    import huggingface_hub
+
+    cache = types.SimpleNamespace(repos=[], size_on_disk=0)
+    monkeypatch.setattr(huggingface_hub, "scan_cache_dir", lambda: cache)
+    result = runner.invoke(app, ["models", "prune", "org/ghost"])
+    assert result.exit_code == 1
+    assert "No cached repo" in result.stdout

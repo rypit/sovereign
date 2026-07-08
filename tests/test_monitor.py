@@ -77,7 +77,7 @@ _STATUS = {
 
 
 def _render(table) -> str:
-    console = Console(record=True, width=120)
+    console = Console(record=True, width=160)
     console.print(table)
     return console.export_text()
 
@@ -204,6 +204,36 @@ def test_dashboard_renders_activity_area() -> None:
     text = _render(_dashboard(status))
     assert "Activity:" in text
     assert "pulling open-webui — 3/8 layers" in text
+
+
+# --- M5: budget footer, EST column, download progress ---
+def test_dashboard_renders_est_column_and_budget_footer() -> None:
+    status = {
+        "budget": {"usable_gb": 120.0, "reserved_gb": 27.0, "available_gb": 93.0},
+        "services": {
+            "mlx_heavy": {
+                "state": "downloading",
+                "descriptor": "mlx-community/Qwen3.6-27B-8bit",
+                "estimated_gb": 27.0,
+                "metrics": {},
+                "activity": "downloading mlx-community/Qwen3.6-27B-8bit: 3.2/17.8 GB (18%)",
+            },
+        },
+    }
+    text = _render(_dashboard(status))
+    assert "EST (GB)" in text
+    assert "27.0" in text  # estimate column value
+    assert "93.0 GB headroom" in text  # budget footer
+    assert "120 usable GB" in text
+    # DOWNLOADING activity flows through the activity area.
+    assert "3.2/17.8 GB (18%)" in text
+
+
+def test_dashboard_tolerates_status_without_budget() -> None:
+    # Old status.json (pre-M5) has no "budget" / "estimated_gb" keys.
+    text = _render(_dashboard(_STATUS))
+    assert "headroom" not in text  # no footer without a budget
+    assert "RUNNING" in text  # still renders normally
 
 
 def test_dashboard_activity_shown_for_ready_service() -> None:
