@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Any
 
 from sovereign.bench.cells import cell_key, is_complete, read_cell_result
 from sovereign.bench.grading import grade_task, prepare_workspace
-from sovereign.bench.runner import _stack_identity
+from sovereign.bench.runner import stack_identity
 from sovereign.bench.suites import load_suite
 from sovereign.config import load_config
 from sovereign.core.base_harness import Task
@@ -54,7 +54,7 @@ def _registry_from_manifest(manifest: dict[str, Any]) -> ServiceRegistry:
 def _perf_gate_status(spec: BenchSpec, stack: str, bench_dir: Path) -> bool | None:
     """`None` when no perf cell is recorded yet (funnel can't be enforced)."""
     key = cell_key(
-        stack=_stack_identity(stack),
+        stack=stack_identity(stack),
         harness="_none",
         suite="_none",
         seed=spec.seed,

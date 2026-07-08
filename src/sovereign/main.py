@@ -1,8 +1,9 @@
 """Typer entry point for the Sovereign CLI.
 
-Commands are stubs at this stage (Phases 0–2); their real implementations land in
-later phases per the roadmap (§12). The command surface is defined now so the CLI
-shape stays stable as internals fill in.
+Thin command layer: parsing, table rendering, and exit codes live here; the real
+logic lives in the orchestrator (`up`/`serve`/`down`), :mod:`sovereign.core.planning`
+(`plan`), :mod:`sovereign.dashboard` (`up`/`monitor` rendering), and the bench
+package (`bench`).
 """
 
 from __future__ import annotations
@@ -13,18 +14,14 @@ import os
 import subprocess
 import sys
 import time
-from collections import deque
-from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Optional
 
 import typer
-from rich.console import Console, Group
+from rich.console import Console
 from rich.live import Live
-from rich.spinner import Spinner
 from rich.table import Table
-from rich.text import Text
 
 from sovereign import __version__
 from sovereign.bench.cleanroom import make_cleanroom_executor
@@ -34,19 +31,26 @@ from sovereign.bench.quality import make_quality_executor
 from sovereign.bench.report import build_comparison, flag_pareto
 from sovereign.bench.runner import combine_executors, run_bench
 from sovereign.bench.spec import BenchMode, BenchSpecError, load_bench_spec
-from sovereign.config import ConfigError, load_config
+from sovereign.config import ConfigError, SovereignConfig, load_config
 from sovereign.core.base_harness import Task
 from sovereign.core.provisioning import ProvisioningError
 from sovereign.core.resolver import ResolvedEndpoint, Resolver, ServiceRegistry
+from sovereign.dashboard import (
+    STATE_COLORS,
+    MetricHistory,
+    budget_footer,
+    dashboard,
+    dashboard_task_factory,
+    load_dashboard_status,
+)
 from sovereign.orchestrator import BootError, serve_forever
-from sovereign.utils.state import file_hash, read_json, write_json
+from sovereign.utils.state import file_hash, mark_stack_stopped, read_json
 from sovereign.utils.teardown import stop_service_handle
 
 app = typer.Typer(
     name="sovereign",
     help="A declarative control plane for local LLM infrastructure on Apple Silicon.",
     no_args_is_help=True,
-    add_completion=False,
 )
 harness_app = typer.Typer(help="Inspect and invoke configured harnesses.")
 app.add_typer(harness_app, name="harness")
@@ -71,55 +75,24 @@ _STATE_DIR_OPTION = typer.Option(
     _DEFAULT_STATE_DIR, "--state-dir", help="Where Sovereign keeps state/logs."
 )
 
-_STATE_COLORS = {
-    "ready": "green",
-    "running": "green",
-    "degraded": "yellow",
-    "starting": "cyan",
-    "provisioning": "cyan",
-    "downloading": "cyan",
-    "failed": "red",
-    "stopped": "dim",
-}
-
-
-def _not_implemented(command: str) -> None:
-    console.print(f"[yellow]`sovereign {command}` is not implemented yet.[/yellow]")
-
-
 def _stdout_is_tty() -> bool:
     """Whether stdout is an interactive terminal (vs. a pipe or launchd log)."""
     return sys.stdout.isatty()
 
 
-def _dashboard_task_factory(interval: float = 1.0, live_console: Console | None = None):
-    """An extra serve task that renders the live dashboard from in-process state."""
-
-    async def task(orch, stop: asyncio.Event) -> None:
-        history = MetricHistory()
-        snapshot = orch.status_snapshot()
-        history.record(snapshot)
-        with Live(
-            _dashboard(snapshot, history=history),
-            console=live_console or console,
-            refresh_per_second=12,
-        ) as live:
-            while not stop.is_set():
-                snapshot = orch.status_snapshot()
-                history.record(snapshot)
-                live.update(_dashboard(snapshot, history=history))
-                try:
-                    await asyncio.wait_for(stop.wait(), timeout=interval)
-                except TimeoutError:
-                    pass
-
-    return task
-
-
 def _print_transition(name: str, old, new) -> None:
     """Headless boot/runtime progress: one line per state change (for daemon logs)."""
-    color = _STATE_COLORS.get(str(new), "white")
+    color = STATE_COLORS.get(str(new), "white")
     console.print(f"  [dim]{name}[/dim]: {old} → [{color}]{new}[/{color}]")
+
+
+def _load_config_or_exit(file: Path) -> SovereignConfig:
+    """Load a stack file, printing the ConfigError and exiting 1 on failure."""
+    try:
+        return load_config(file)
+    except ConfigError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1) from exc
 
 
 def _load_dotenv(path: Path = Path(".env")) -> None:
@@ -135,7 +108,7 @@ def _load_dotenv(path: Path = Path(".env")) -> None:
         os.environ.setdefault(key.strip(), value)
 
 
-def _boot_and_serve(file: Path, *, dashboard: bool) -> None:
+def _boot_and_serve(file: Path, *, with_dashboard: bool) -> None:
     """Load a variant, boot the stack, and run until interrupted."""
     if lock_path(_DEFAULT_STATE_DIR).exists():
         console.print(
@@ -144,16 +117,12 @@ def _boot_and_serve(file: Path, *, dashboard: bool) -> None:
         )
         raise typer.Exit(1)
     _load_dotenv()
-    try:
-        config = load_config(file)
-    except ConfigError as exc:
-        console.print(f"[red]{exc}[/red]")
-        raise typer.Exit(1) from exc
+    config = _load_config_or_exit(file)
 
     console.print(f"[green]Booting stack from {file}[/green]")
     # Foreground: the live dashboard shows transitions. Headless: print them instead.
-    extra_tasks = [_dashboard_task_factory()] if dashboard else []
-    on_transition = None if dashboard else _print_transition
+    extra_tasks = [dashboard_task_factory(live_console=console)] if with_dashboard else []
+    on_transition = None if with_dashboard else _print_transition
     try:
         asyncio.run(
             serve_forever(
@@ -178,7 +147,7 @@ def serve(
     ),
 ) -> None:
     """Run Sovereign as a foreground process (launchd entry point) — always headless."""
-    _boot_and_serve(file, dashboard=False)
+    _boot_and_serve(file, with_dashboard=False)
 
 
 @app.command()
@@ -191,7 +160,7 @@ def up(
     ),
 ) -> None:
     """Boot the stack; show the live dashboard when run in a terminal."""
-    _boot_and_serve(file, dashboard=_stdout_is_tty())
+    _boot_and_serve(file, with_dashboard=_stdout_is_tty())
 
 
 @app.command()
@@ -215,9 +184,7 @@ def down(
         console.print(f"  {name}: {result}")
 
     # Reflect the teardown in state.json so `status` agrees.
-    state["services"] = {name: "stopped" for name in state.get("services", {})}
-    state["runtime"] = {}
-    write_json(state_path, state)
+    mark_stack_stopped(state_path)
     console.print("[green]Stack stopped.[/green]")
 
 
@@ -237,7 +204,7 @@ def status(
     table.add_column("SERVICE")
     table.add_column("STATE")
     for name, service_state in state.get("services", {}).items():
-        color = _STATE_COLORS.get(service_state, "white")
+        color = STATE_COLORS.get(service_state, "white")
         table.add_row(name, f"[{color}]{service_state}[/{color}]")
     console.print(table)
 
@@ -294,194 +261,6 @@ def logs(
     raise typer.Exit(1)
 
 
-_STATUS_LABEL = {"ready": "RUNNING"}
-
-
-def _status_label(state: str) -> str:
-    return _STATUS_LABEL.get(state, state.upper())
-
-
-def _load_dashboard_status(state_dir: Path) -> dict | None:
-    """Prefer the live status.json; fall back to state.json (states only)."""
-    status_path = state_dir / "status.json"
-    if status_path.exists():
-        return read_json(status_path)
-    state_path = state_dir / "state.json"
-    if state_path.exists():
-        state = read_json(state_path)
-        return {
-            "services": {
-                name: {"state": svc_state, "metrics": {}}
-                for name, svc_state in state.get("services", {}).items()
-            }
-        }
-    return None
-
-
-def _format_duration(seconds: float) -> str:
-    """Compact elapsed time: "42s", "3m 12s", "1h 04m", "2d 05h"."""
-    seconds = int(seconds)
-    if seconds < 60:
-        return f"{seconds}s"
-    minutes, secs = divmod(seconds, 60)
-    if minutes < 60:
-        return f"{minutes}m {secs:02d}s"
-    hours, minutes = divmod(minutes, 60)
-    if hours < 24:
-        return f"{hours}h {minutes:02d}m"
-    days, hours = divmod(hours, 24)
-    return f"{days}d {hours:02d}h"
-
-
-def _duration_cell(since: str | None) -> str:
-    """Elapsed time since an ISO timestamp, or "-" when unknown."""
-    if not since:
-        return "-"
-    try:
-        started = datetime.fromisoformat(since)
-    except (TypeError, ValueError):
-        return "-"
-    elapsed = (datetime.now(UTC) - started).total_seconds()
-    return _format_duration(max(0.0, elapsed))
-
-
-_HISTORY_SECONDS = 60.0  # trailing window kept per service per metric; tune here
-
-
-class MetricHistory:
-    """Rolling ~60s-window per-service, per-metric history for sparklines.
-
-    Constructed once per dashboard session (once in monitor(), once per
-    _dashboard_task_factory() task invocation) — never a module-level global,
-    so state never leaks across unrelated sessions or test invocations. Never
-    exposed as a user-facing parameter; always defaults to _HISTORY_SECONDS.
-    """
-
-    def __init__(self, window_seconds: float = _HISTORY_SECONDS) -> None:
-        self._window = window_seconds
-        self._data: dict[str, dict[str, deque[tuple[float, float]]]] = {}
-
-    def record(self, status: dict) -> None:
-        now = time.monotonic()
-        services = status.get("services", {})
-        for stale in set(self._data) - set(services):
-            del self._data[stale]
-        for name, svc in services.items():
-            metrics = svc.get("metrics") or {}
-            buckets = self._data.setdefault(name, {})
-            for key in ("cpu_percent", "memory_mb"):
-                if key in metrics:
-                    dq = buckets.setdefault(key, deque())
-                    dq.append((now, metrics[key]))
-                    cutoff = now - self._window
-                    while dq and dq[0][0] < cutoff:
-                        dq.popleft()
-
-    def values(self, service: str, metric: str) -> list[float]:
-        return [v for _, v in self._data.get(service, {}).get(metric, ())]
-
-
-_SPARK_CHARS = "▁▂▃▄▅▆▇█"
-_SPARK_WIDTH = 12  # rendered sparkline width; tune here
-
-
-def _sparkline(values: Sequence[float]) -> str:
-    """A trailing Unicode-block sparkline, min-max scaled to the visible window."""
-    values = list(values)[-_SPARK_WIDTH:]
-    if len(values) < 2:
-        return ""
-    lo, hi = min(values), max(values)
-    if hi == lo:
-        mid = _SPARK_CHARS[len(_SPARK_CHARS) // 2]
-        return mid * len(values)
-    span = hi - lo
-    return "".join(
-        _SPARK_CHARS[min(int((v - lo) / span * len(_SPARK_CHARS)), len(_SPARK_CHARS) - 1)]
-        for v in values
-    )
-
-
-def _metric_cell(text: str, spark: str) -> str:
-    return f"{text} {spark}" if spark else text
-
-
-_SPINNER_STATES = {"provisioning", "downloading", "starting"}
-
-
-def _status_cell(state: str) -> str | Spinner:
-    """Plain colored label for steady states; an animated spinner while coming online."""
-    color = _STATE_COLORS.get(state, "white")
-    markup = f"[{color}]{_status_label(state)}[/{color}]"
-    if state in _SPINNER_STATES:
-        return Spinner("dots", text=Text.from_markup(markup))
-    return markup
-
-
-def _dashboard(status: dict, history: MetricHistory | None = None):
-    """Render the §8 dashboard table, plus a live "Provisioning" activity area."""
-    table = Table(title=f"Sovereign Control Plane v{__version__}", title_justify="left")
-    table.add_column("SERVICE")
-    table.add_column("DESCRIPTOR")
-    table.add_column("STATUS")
-    table.add_column("DURATION")
-    table.add_column("CPU %")
-    table.add_column("MEM (MB)")
-    table.add_column("EST (GB)")
-    table.add_column("ENDPOINT")
-
-    activity_lines: list[str] = []
-    for name, svc in status.get("services", {}).items():
-        state = svc.get("state", "unknown")
-        metrics = svc.get("metrics") or {}
-        cpu = f"{metrics['cpu_percent']:.1f}%" if "cpu_percent" in metrics else "-"
-        mem = f"{metrics['memory_mb']:.0f}" if "memory_mb" in metrics else "-"
-        cpu_spark = _sparkline(history.values(name, "cpu_percent")) if history else ""
-        mem_spark = _sparkline(history.values(name, "memory_mb")) if history else ""
-        duration = _duration_cell(svc.get("since"))
-        endpoint = svc.get("endpoint") or "-"
-        descriptor = svc.get("descriptor") or "-"
-        estimated = svc.get("estimated_gb")
-        est = f"{estimated:.1f}" if estimated is not None else "-"
-        table.add_row(
-            name,
-            descriptor,
-            _status_cell(state),
-            duration,
-            _metric_cell(cpu, cpu_spark),
-            _metric_cell(mem, mem_spark),
-            est,
-            endpoint,
-        )
-
-        activity = (svc.get("activity") or "").strip()
-        if activity:
-            activity_lines.append(f"  {name}  [{_status_label(state)}] {activity}")
-
-    footer = _budget_footer(status.get("budget"))
-    if not activity_lines and footer is None:
-        return table
-    parts: list = [table]
-    if activity_lines:
-        parts += [Text("Activity:", style="bold"), Text("\n".join(activity_lines), style="dim")]
-    if footer is not None:
-        parts.append(footer)
-    return Group(*parts)
-
-
-def _budget_footer(budget: dict | None):
-    """A one-line unified-memory summary, or None when the status predates budgets."""
-    if not budget:
-        return None
-    reserved = budget.get("reserved_gb", 0.0)
-    usable = budget.get("usable_gb", 0.0)
-    available = budget.get("available_gb", 0.0)
-    return Text(
-        f"Memory: {reserved:.1f} reserved / {usable:.0f} usable GB "
-        f"— {available:.1f} GB headroom",
-        style="bold",
-    )
-
-
 @app.command()
 def monitor(
     interval: float = typer.Option(2.0, "--interval", help="Refresh interval (seconds)."),
@@ -489,7 +268,7 @@ def monitor(
     state_dir: Path = _STATE_DIR_OPTION,
 ) -> None:
     """Live, top-style view of running services (Ctrl+C to exit)."""
-    status = _load_dashboard_status(state_dir)
+    status = load_dashboard_status(state_dir)
     if status is None:
         console.print("No running stack (no status.json). Run [bold]sovereign up[/bold].")
         raise typer.Exit(0)
@@ -498,16 +277,16 @@ def monitor(
     history.record(status)
 
     if once:
-        console.print(_dashboard(status, history=history))
+        console.print(dashboard(status, history=history))
         return
 
-    with Live(_dashboard(status, history=history), console=console, refresh_per_second=12) as live:
+    with Live(dashboard(status, history=history), console=console, refresh_per_second=12) as live:
         try:
             while True:
                 time.sleep(interval)
-                status = _load_dashboard_status(state_dir) or status
+                status = load_dashboard_status(state_dir) or status
                 history.record(status)
-                live.update(_dashboard(status, history=history))
+                live.update(dashboard(status, history=history))
         except KeyboardInterrupt:  # pragma: no cover - interactive
             pass
 
@@ -525,13 +304,8 @@ def _config_path_for_harness_cli(file: Path | None, state_dir: Path) -> Path:
     return _DEFAULT_CONFIG
 
 
-def _load_harness_config(file: Path | None, state_dir: Path):
-    path = _config_path_for_harness_cli(file, state_dir)
-    try:
-        return load_config(path)
-    except ConfigError as exc:
-        console.print(f"[red]{exc}[/red]")
-        raise typer.Exit(1) from exc
+def _load_harness_config(file: Path | None, state_dir: Path) -> SovereignConfig:
+    return _load_config_or_exit(_config_path_for_harness_cli(file, state_dir))
 
 
 def _registry_from_manifest(manifest: dict) -> ServiceRegistry:
@@ -676,11 +450,7 @@ def _provision_targets(file: Path | None) -> dict[str, type]:
     if file is None:
         return registered
 
-    try:
-        config = load_config(file)
-    except ConfigError as exc:
-        console.print(f"[red]{exc}[/red]")
-        raise typer.Exit(1) from exc
+    config = _load_config_or_exit(file)
 
     from sovereign.hf import ModelResolutionError, resolve_entry_base_type
 
@@ -931,11 +701,7 @@ def plan(
     from sovereign.core.planning import plan_stack
 
     _load_dotenv()
-    try:
-        config = load_config(file)
-    except ConfigError as exc:
-        console.print(f"[red]{exc}[/red]")
-        raise typer.Exit(1) from exc
+    config = _load_config_or_exit(file)
 
     stack_plan = plan_stack(config, state_dir)
 
@@ -956,7 +722,7 @@ def plan(
             console.print(f"  [dim]{svc.name}: {svc.error}[/dim]", soft_wrap=True)
 
     budget = stack_plan.budget
-    footer = _budget_footer(
+    footer = budget_footer(
         {
             "usable_gb": budget.usable_gb,
             "reserved_gb": round(budget.reserved_gb, 2),

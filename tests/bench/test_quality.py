@@ -140,7 +140,7 @@ def test_unknown_harness_raises(tmp_path) -> None:
 
 def test_gated_when_perf_cell_failed_threshold(tmp_path) -> None:
     from sovereign.bench.cells import cell_key, write_cell_result
-    from sovereign.bench.runner import _stack_identity
+    from sovereign.bench.runner import stack_identity
 
     _write_manifest(tmp_path)
     stack = _write_stack(tmp_path)
@@ -148,7 +148,7 @@ def test_gated_when_perf_cell_failed_threshold(tmp_path) -> None:
     spec = BenchSpec(stacks=[stack], harnesses=["h1"], suites=[str(suite)], trials=1)
 
     perf_key = cell_key(
-        stack=_stack_identity(stack), harness="_none", suite="_none", seed=0, trials=1
+        stack=stack_identity(stack), harness="_none", suite="_none", seed=0, trials=1
     )
     write_cell_result(tmp_path / "benchmarks", perf_key, {"gate_passed": False})
 
