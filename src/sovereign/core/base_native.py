@@ -26,6 +26,9 @@ import psutil
 from sovereign.config import ServiceEntry
 from sovereign.core.base_config import SovereignBaseModel
 from sovereign.core.base_manager import ActivityMixin
+
+# Defined in models.py; imported here for backwards compatibility.
+from sovereign.core.models import local_model_bytes, looks_local  # noqa: F401
 from sovereign.core.provisioning import Provisioner
 from sovereign.core.resolver import ConsumerKind, ResolvedEndpoint
 from sovereign.core.resources import priority_to_nice
@@ -74,21 +77,6 @@ def macos_phys_footprint(pid: int) -> int | None:
         return _parse_phys_footprint(buf.raw)
     except (OSError, AttributeError, struct.error):
         return None
-
-
-def looks_local(model: str) -> bool:
-    """Whether ``model`` refers to a local path (vs. a HuggingFace repo id)."""
-    return model.startswith(("/", "~", ".")) or Path(os.path.expanduser(model)).exists()
-
-
-def local_model_bytes(model: str) -> int:
-    """Bytes on disk for a local model path; 0 for a HuggingFace repo id or missing path."""
-    p = Path(os.path.expanduser(model))
-    if p.is_dir():
-        return sum(f.stat().st_size for f in p.rglob("*") if f.is_file())
-    if p.is_file():
-        return p.stat().st_size
-    return 0
 
 
 def check_local_artifact(value: str, *, kind: str, service: str) -> None:
