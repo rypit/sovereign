@@ -43,6 +43,9 @@ def _service_entry(orch: Orchestrator, name: str) -> dict[str, Any]:
         "dependencies": list(entry.dependencies),
         "co_resident": [n for n in orch.service_names if n != name],
     }
+    # Record when the (now-concrete) base_type was chosen by auto routing.
+    if orch.requested_base_types.get(name) == "auto":
+        item["requested_base_type"] = "auto"
 
     if name in orch.registry:
         endpoint = orch.registry.get(name)

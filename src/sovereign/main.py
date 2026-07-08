@@ -653,7 +653,23 @@ def _provision_targets(file: Path | None) -> dict[str, type]:
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(1) from exc
 
-    declared = {e.base_type for e in (*config.services, *config.harnesses)}
+    from sovereign.core.models import ModelResolutionError, resolve_entry_base_type
+
+    declared: set[str] = {h.base_type for h in config.harnesses}
+    for svc in config.services:
+        if svc.base_type != "auto":
+            declared.add(svc.base_type)
+            continue
+        # Route auto entries to their concrete engine; if that can't be determined
+        # (offline, no cache), provision the safe superset of both native engines.
+        try:
+            declared.add(resolve_entry_base_type(svc, _DEFAULT_STATE_DIR))
+        except ModelResolutionError:
+            declared.update({"llama_cpp", "mlx_lm"})
+            console.print(
+                f"  [dim]{svc.name}: base_type 'auto' unresolved offline — "
+                "provisioning both llama_cpp and mlx_lm.[/dim]"
+            )
     unknown = declared - registered.keys()
     if unknown:
         console.print(f"[red]Unknown base_type(s) in {file}: {', '.join(sorted(unknown))}[/red]")

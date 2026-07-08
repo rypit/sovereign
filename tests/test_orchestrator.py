@@ -297,6 +297,43 @@ def test_manager_without_prepare_model_skips_downloading() -> None:
     assert orch.states["engine"] is ServiceState.READY
 
 
+# --- auto base_type routing (M4) ---
+def test_build_routes_auto_base_type(monkeypatch) -> None:
+    import sovereign.orchestrator as orch_mod
+
+    monkeypatch.setattr(
+        orch_mod, "resolve_entry_base_type", lambda entry, state_dir: "mlx_lm"
+    )
+    cfg = _config([{"name": "engine", "base_type": "auto", "config": {"model": "org/m"}}])
+    seen: list[str] = []
+    orch = _orch(cfg)
+    # Capture the base_type the manager factory actually receives.
+    orig = orch._manager_factory
+
+    def factory(entry):
+        seen.append(entry.base_type)
+        return orig(entry)
+
+    orch._manager_factory = factory
+    orch.build()
+    assert seen == ["mlx_lm"]  # resolved before instantiation
+    assert orch.requested_base_types == {"engine": "auto"}
+
+
+def test_build_auto_routing_uses_cache_offline(tmp_path, monkeypatch) -> None:
+    from sovereign.core import models as models_mod
+    from sovereign.core.models import RoutingCache
+
+    RoutingCache(tmp_path / "models.json").put(
+        "org/m", base_type="llama_cpp", weight_bytes=None
+    )
+    monkeypatch.setattr(models_mod, "fetch_repo_info", lambda repo_id: None)  # offline
+    cfg = _config([{"name": "engine", "base_type": "auto", "config": {"model": "org/m"}}])
+    orch = _orch(cfg, state_dir=tmp_path)
+    orch.build()
+    assert orch.entry("engine").base_type == "llama_cpp"  # from the cache
+
+
 # --- reconciliation ---
 def test_reconcile_detects_health_loss() -> None:
     cfg = _config([{"name": "engine", "base_type": "x"}])

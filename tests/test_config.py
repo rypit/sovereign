@@ -92,3 +92,30 @@ def test_extra_field_rejected() -> None:
 def test_load_config_wraps_missing_file() -> None:
     with pytest.raises(ConfigError, match="cannot read config file"):
         load_config(Path("/nonexistent/sovereign.yaml"))
+
+
+# --- auto base_type routing (M4) ---
+def test_auto_base_type_with_model_ok() -> None:
+    data = _base_stack(
+        services=[{"name": "a", "base_type": "auto", "config": {"model": "org/repo"}}]
+    )
+    cfg = SovereignConfig.model_validate(data)
+    assert cfg.services[0].base_type == "auto"
+
+
+def test_omitted_base_type_defaults_to_auto() -> None:
+    data = _base_stack(services=[{"name": "a", "config": {"model": "org/repo"}}])
+    cfg = SovereignConfig.model_validate(data)
+    assert cfg.services[0].base_type == "auto"
+
+
+def test_auto_base_type_without_model_rejected() -> None:
+    data = _base_stack(services=[{"name": "a", "base_type": "auto"}])
+    with pytest.raises(ValueError, match="requires config.model"):
+        SovereignConfig.model_validate(data)
+
+
+def test_explicit_base_type_needs_no_model() -> None:
+    data = _base_stack(services=[{"name": "a", "base_type": "llama_cpp"}])
+    cfg = SovereignConfig.model_validate(data)  # must not raise
+    assert cfg.services[0].base_type == "llama_cpp"
