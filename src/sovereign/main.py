@@ -571,9 +571,9 @@ def _load_harness(name: str, file: Optional[Path], state_dir: Path):  # noqa: UP
         console.print(f"[red]Unknown harness '{name}'; known: {known}[/red]")
         raise typer.Exit(1)
 
-    import sovereign.harnesses  # noqa: F401 - populate the registry
-    from sovereign.core.registry import get_harness
+    from sovereign.core.registry import get_harness, populate_registries
 
+    populate_registries()
     try:
         harness_cls = get_harness(entry.base_type)
     except KeyError as exc:
@@ -665,10 +665,13 @@ def harness_invoke(
 
 def _provision_targets(file: Path | None) -> dict[str, type]:
     """base_type -> class to provision: a stack file's declared types, or everything."""
-    import sovereign.harnesses  # noqa: F401 - populate the registries
-    import sovereign.services  # noqa: F401
-    from sovereign.core.registry import all_harnesses, all_service_managers
+    from sovereign.core.registry import (
+        all_harnesses,
+        all_service_managers,
+        populate_registries,
+    )
 
+    populate_registries()
     registered: dict[str, type] = {**all_service_managers(), **all_harnesses()}
     if file is None:
         return registered

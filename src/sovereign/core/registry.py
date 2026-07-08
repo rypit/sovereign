@@ -5,8 +5,9 @@ Orchestrator looks up a ``base_type`` here to find which Manager/Harness class t
 instantiate, which is what lets two ``llama_cpp`` instances run side by side.
 
 Concrete services/harnesses register themselves via the decorators below, invoked
-as a side effect of importing their package. None are registered yet — they arrive
-in Phases 3+ (services) and the harness track.
+as a side effect of importing their package. Call :func:`populate_registries`
+before any lookup — it imports every in-tree integration package (which
+auto-discover their subpackages), so registration can never be silently skipped.
 """
 
 from __future__ import annotations
@@ -51,6 +52,17 @@ def register_harness(base_type: str):
         return cls
 
     return decorator
+
+
+def populate_registries() -> None:
+    """Import every in-tree integration package so its ``@register_*`` decorators run.
+
+    The single entry point for registry population — the imports are lazy (inside
+    the function) to avoid a cycle with the integration modules, which import this
+    module for the decorators. Idempotent: Python caches the imports.
+    """
+    import sovereign.harnesses  # noqa: F401, PLC0415 - registration side effect
+    import sovereign.services  # noqa: F401, PLC0415 - registration side effect
 
 
 def get_service_manager(base_type: str) -> type[ServiceManager]:
