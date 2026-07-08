@@ -19,7 +19,7 @@ The default stack also runs **SearXNG**, wired into Open WebUI for web search.
 
 The MVP orchestration spine is implemented and tested (Phases 0–8 and 10 of the
 roadmap), and **both post-MVP tracks — harnesses and benchmarking — are complete**
-(419 tests passing):
+(CI is the source of truth for the test count):
 
 - Core contracts (`ServiceManager` / `Harness` Protocols, `base_type` registry),
   `sovereign.yaml` parsing, and the full Typer CLI (`up`/`down`/`status`/`logs`/
@@ -117,9 +117,26 @@ uv run sovereign models list        # what's in the shared HF cache
 
 ```bash
 uv run sovereign --help    # CLI surface
-uv run pytest -q           # tests
-uv run ruff check .        # lint
+make test                  # uv run pytest -q
+make lint                  # uv run ruff check .
+make typecheck             # uv run mypy
+make check                 # all of the above (what CI runs)
 ```
+
+CI runs the suite on Linux (Python 3.11–3.13) **and** on a macOS arm64 runner,
+the product's actual target platform. See [`CLAUDE.md`](./CLAUDE.md) for an
+architecture map and codebase conventions (useful for humans too).
+
+### Runtime state
+
+All runtime state lives under `.sovereign/` **relative to the directory you run
+Sovereign from** — `state.json` (service states + teardown handles),
+`status.json` (live dashboard snapshot), `manifest.json` (resolved-stack
+fingerprint), `logs/`, and `benchmarks/`. Separate CLI invocations (`status`,
+`monitor`, `down`, `harness invoke`) coordinate through these files, so run
+them from the same directory as `sovereign up` — or pass `--state-dir`.
+Downloaded models are *not* here; they live in the shared HuggingFace cache
+(`sovereign models list`).
 
 ### Harnesses & benchmarking
 
