@@ -4,7 +4,7 @@
 
 This is the consolidated plan. v1.1 folds in the harness/benchmark/stack-capture work: it restates the decisions already locked in, adds the two new entity types the design grew (Harnesses and Jobs), corrects ComfyUI to a native service, and lays out a phased build order with concrete exit criteria for each phase.
 
-> **Progress snapshot — updated 2026-07-07.** The MVP orchestration spine (Phases 0–8 and 10) is implemented and green, and **both post-MVP tracks (harnesses, benchmarking) are now complete** — 375 tests pass. Remaining work: finish Phase 9 (`launchd` install/uninstall) and Phase 11 (`comfyui`). **Open Decision #1 is now resolved: Sovereign is strictly local — LiteLLM and Claude Code are dropped.** Per-phase status is tracked inline in §12; the service/harness catalog status is in §10; the harness/bench tracks have their own detailed phase breakdown in [`harness-bench-implementation-plan.md`](./harness-bench-implementation-plan.md).
+> **Progress snapshot — updated 2026-07-07.** The MVP orchestration spine (Phases 0–8 and 10) is implemented and green, and **both post-MVP tracks (harnesses, benchmarking) are now complete** — the full suite is green (CI is the source of truth for the count). Remaining work: finish Phase 9 (`launchd` install/uninstall) and Phase 11 (`comfyui`). **Open Decision #1 is now resolved: Sovereign is strictly local — LiteLLM and Claude Code are dropped.** Per-phase status is tracked inline in §12; the service/harness catalog status is in §10; the harness/bench tracks have their own detailed phase breakdown in [`harness-bench-implementation-plan.md`](./harness-bench-implementation-plan.md).
 
 ---
 
@@ -480,7 +480,7 @@ Each phase has a concrete exit criterion — don't move on until it's true.
 **Phase 11 — Catalog expansion.** 🟡 **Partial** — `searxng` ✅ and `mlx_lm` ✅ are done; **`comfyui` (native) is still needed.** `litellm` is dropped (strictly-local, §11 Open Decision #1). Remaining after ComfyUI: convenience services that clear the "real module, not a wrapper" bar.
 *Exit: each addition is a new `services/<name>/` folder with zero Orchestrator changes.*
 
-**Phase 12 — Testing & hardening.** 🟡 **Ongoing** — `tests/` mirrors `src/` and **375 tests pass** with mock `ServiceManager`/`Harness` implementations (no Docker or real models needed); Ruff clean.
+**Phase 12 — Testing & hardening.** 🟡 **Ongoing** — `tests/` mirrors `src/` and **the full suite passes** with mock `ServiceManager`/`Harness` implementations (no Docker or real models needed); Ruff clean.
 
 ### Two parallel post-MVP tracks (roughly alongside Phase 11)
 

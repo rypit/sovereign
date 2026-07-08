@@ -4,7 +4,7 @@
 
 ## Context
 
-Sovereign's MVP orchestration spine is done (201 tests, Phases 0–8 + 10). The v1.1 design doc already specifies the two remaining post-MVP tracks — **harnesses** (coding agents configured against and invoked on the local stack) and **benchmarking** (perf + agentic-quality sweeps over engine × model × harness cells) — and the scaffolding is deliberately stubbed in.
+Sovereign's MVP orchestration spine is done (Phases 0–8 + 10; the suite is green). The v1.1 design doc already specifies the two remaining post-MVP tracks — **harnesses** (coding agents configured against and invoked on the local stack) and **benchmarking** (perf + agentic-quality sweeps over engine × model × harness cells) — and the scaffolding is deliberately stubbed in.
 
 **Already exists (build on, don't recreate):**
 
