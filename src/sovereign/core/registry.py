@@ -55,6 +55,10 @@ def register_harness(base_type: str):
 
 def get_service_manager(base_type: str) -> type[ServiceManager]:
     """Look up a registered service manager class, or raise a clear error."""
+    if base_type == "auto":
+        raise KeyError(
+            "base_type 'auto' must be resolved by routing before manager lookup"
+        )
     try:
         return _SERVICE_MANAGERS[base_type]
     except KeyError:

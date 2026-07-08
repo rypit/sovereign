@@ -23,6 +23,7 @@ from pathlib import Path
 
 from sovereign.config import ServiceEntry, SovereignConfig
 from sovereign.core.base_manager import ServiceManager
+from sovereign.core.models import resolve_entry_base_type
 from sovereign.core.resolver import ConsumerKind, Resolver, ServiceRegistry
 from sovereign.core.resources import (
     ResourceBudgeter,
@@ -98,6 +99,8 @@ class Orchestrator:
 
         self.managers: dict[str, ServiceManager] = {}
         self.harnesses: dict[str, object] = {}
+        #: name -> "auto" for services whose base_type was routed at build time.
+        self.requested_base_types: dict[str, str] = {}
         self.states: dict[str, ServiceState] = {}
         self.state_since: dict[str, str] = {}
         self.metrics: dict[str, dict] = {}
@@ -151,6 +154,13 @@ class Orchestrator:
     def _build(self) -> None:
         if self._built:
             return
+        # Resolve `base_type: auto` (or omitted) to a concrete engine via HF metadata
+        # before instantiating managers. Routing errors propagate as build failures
+        # with actionable messages; the resolved type is written to the routing cache.
+        for entry in self.config.services:
+            if entry.base_type == "auto":
+                self.requested_base_types[entry.name] = "auto"
+                entry.base_type = resolve_entry_base_type(entry, self.state_dir)
         for entry in self.config.services:
             self.managers[entry.name] = self._manager_factory(entry)
             self.states[entry.name] = ServiceState.PENDING

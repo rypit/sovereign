@@ -11,6 +11,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from sovereign.config import ServiceEntry
+from sovereign.core import models as models_mod
 from sovereign.core.models import (
     ModelAccessError,
     ModelNotFoundError,
@@ -23,6 +25,7 @@ from sovereign.core.models import (
     estimate_model_bytes,
     fetch_repo_info,
     parse_model_ref,
+    resolve_entry_base_type,
     route_base_type,
     select_gguf_files,
     weight_bytes,
@@ -445,6 +448,51 @@ def test_routing_cache_miss_returns_none(tmp_path):
 def test_routing_cache_missing_file_ok(tmp_path):
     cache = RoutingCache(tmp_path / "nonexistent.json")
     assert cache.get("anything") is None
+
+
+# ---------------------------------------------------------------------------
+# resolve_entry_base_type
+# ---------------------------------------------------------------------------
+
+
+def _svc(model: str, base_type: str = "auto") -> ServiceEntry:
+    return ServiceEntry(name="svc", base_type=base_type, config={"model": model})
+
+
+def test_resolve_entry_explicit_base_type_untouched(tmp_path):
+    entry = _svc("org/model", base_type="llama_cpp")
+    assert resolve_entry_base_type(entry, tmp_path) == "llama_cpp"
+
+
+def test_resolve_entry_online_routes_and_writes_cache(tmp_path, monkeypatch):
+    info = _repo("mlx-community/foo", tags=("mlx",), siblings=(("model.safetensors", 100),))
+    monkeypatch.setattr(models_mod, "fetch_repo_info", lambda repo_id: info)
+    entry = _svc("mlx-community/foo")
+    assert resolve_entry_base_type(entry, tmp_path) == "mlx_lm"
+    # Written to the routing cache for deterministic offline restarts.
+    cached = RoutingCache(tmp_path / "models.json").get("mlx-community/foo")
+    assert cached is not None
+    assert cached["base_type"] == "mlx_lm"
+
+
+def test_resolve_entry_offline_uses_cache(tmp_path, monkeypatch):
+    RoutingCache(tmp_path / "models.json").put(
+        "org/model", base_type="llama_cpp", weight_bytes=None
+    )
+    monkeypatch.setattr(models_mod, "fetch_repo_info", lambda repo_id: None)  # offline
+    assert resolve_entry_base_type(_svc("org/model"), tmp_path) == "llama_cpp"
+
+
+def test_resolve_entry_offline_without_cache_raises(tmp_path, monkeypatch):
+    monkeypatch.setattr(models_mod, "fetch_repo_info", lambda repo_id: None)  # offline
+    with pytest.raises(RoutingError, match="offline"):
+        resolve_entry_base_type(_svc("org/model"), tmp_path)
+
+
+def test_resolve_entry_local_never_needs_network(tmp_path):
+    (tmp_path / "m.gguf").write_bytes(b"gguf")
+    entry = _svc(str(tmp_path / "m.gguf"))
+    assert resolve_entry_base_type(entry, tmp_path) == "llama_cpp"
 
 
 # ---------------------------------------------------------------------------

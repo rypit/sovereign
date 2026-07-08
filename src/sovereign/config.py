@@ -55,7 +55,9 @@ class ServiceEntry(SovereignBaseModel):
     """One supervised service in the stack."""
 
     name: str
-    base_type: str
+    #: Which engine serves this service. ``"auto"`` (the default, also when omitted)
+    #: routes to ``llama_cpp``/``mlx_lm`` from the model's HuggingFace metadata.
+    base_type: str = "auto"
     priority: Priority | None = None
     dependencies: list[str] = Field(default_factory=list)
 
@@ -74,6 +76,14 @@ class ServiceEntry(SovereignBaseModel):
     config: dict[str, Any] = Field(default_factory=dict)
 
     _check_name = field_validator("name", "base_type")(validate_identifier)
+
+    @model_validator(mode="after")
+    def _check_auto_routing(self) -> ServiceEntry:
+        if self.base_type == "auto" and not self.config.get("model"):
+            raise ValueError(
+                f"service '{self.name}': base_type 'auto' (or omitted) requires config.model"
+            )
+        return self
 
 
 class HarnessEntry(SovereignBaseModel):
