@@ -60,7 +60,7 @@ def _passthrough_download(monkeypatch):
     def _fake(ref, kind, *, progress=None):
         return ref.local_path if ref.is_local else Path(ref.raw)
 
-    monkeypatch.setattr(native_mod, "download_model", _fake)
+    monkeypatch.setattr(models_mod, "download_model", _fake)
 
 
 def _prepared(config: dict | None = None) -> LlamaCppManager:
