@@ -14,11 +14,13 @@ instantiating a manager/harness (which would require a full ``ServiceEntry``).
 from __future__ import annotations
 
 import inspect
+import logging
 import shutil
 import subprocess
-import sys
 from pathlib import Path
 from typing import ClassVar
+
+log = logging.getLogger(__name__)
 
 # Generous timeouts: `brew bundle` may build/download large formulae (Node),
 # and install commands may hit slow registries on first run.
@@ -114,7 +116,7 @@ class Provisioner:
                     f"({brewfile}), but `brew` was not found. Install it from "
                     "https://brew.sh and retry."
                 )
-            print(f"provisioning {cls.__name__}: brew bundle --file {brewfile}", file=sys.stderr)
+            log.info("provisioning %s: brew bundle --file %s", cls.__name__, brewfile)
             code, detail = _run(
                 ["brew", "bundle", "--file", str(brewfile)], timeout=BREW_TIMEOUT
             )
@@ -124,7 +126,7 @@ class Provisioner:
                 )
 
         for cmd in cls.provisioning_commands:
-            print(f"provisioning {cls.__name__}: {' '.join(cmd)}", file=sys.stderr)
+            log.info("provisioning %s: %s", cls.__name__, " ".join(cmd))
             code, detail = _run(list(cmd), timeout=COMMAND_TIMEOUT)
             if code != 0:
                 raise ProvisioningError(f"{cls.__name__}: `{' '.join(cmd)}` failed: {detail}")

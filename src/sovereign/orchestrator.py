@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 import signal
 from collections.abc import Callable, Coroutine, Mapping, Sequence
 from datetime import UTC, datetime
@@ -39,6 +40,8 @@ from sovereign.core.status import StatusSnapshot
 from sovereign.hf import resolve_entry_base_type
 from sovereign.utils.manifest import write_manifest
 from sovereign.utils.state import file_hash, write_json
+
+log = logging.getLogger(__name__)
 
 # Default cadences (§6.2/§6.3): 2s health polling, 2s metrics (fresh enough for sparklines).
 _HEALTH_INTERVAL = 2.0
@@ -218,6 +221,7 @@ class Orchestrator:
         old = self.states.get(name, ServiceState.PENDING)
         self.states[name] = state
         if old is not state:
+            log.debug("%s: %s -> %s", name, old, state)
             self.state_since[name] = datetime.now(UTC).isoformat()
             if self._on_transition is not None:
                 self._on_transition(name, old, state)
@@ -262,6 +266,12 @@ class Orchestrator:
         )
         try:
             self.budgeter.admit(name, estimated)
+            log.debug(
+                "admitted %s at %.1f GB (%.1f GB still available)",
+                name,
+                estimated,
+                self.budgeter.available_gb,
+            )
         except ResourceExhaustedError:
             self._set_state(name, ServiceState.FAILED)
             raise
@@ -369,6 +379,7 @@ class Orchestrator:
             self.budgeter.release(name)  # free before re-admitting on reboot
             await self._boot_service(name)
         except Exception:  # noqa: BLE001 - a failed restart leaves it DEGRADED/FAILED
+            log.warning("restart of %s failed", name, exc_info=True)
             self._set_state(name, ServiceState.FAILED)
 
     @staticmethod
@@ -387,7 +398,7 @@ class Orchestrator:
             try:
                 await asyncio.to_thread(manager.stop)
             except Exception:  # noqa: BLE001 - keep tearing the rest down
-                pass
+                log.warning("stop of %s failed; continuing teardown", name, exc_info=True)
             self.budgeter.release(name)
             self._set_state(name, ServiceState.STOPPED)
         self.persist()

@@ -43,6 +43,7 @@ from sovereign.dashboard import (
     dashboard_task_factory,
     load_dashboard_status,
 )
+from sovereign.logging_config import configure_logging
 from sovereign.orchestrator import BootError, serve_forever
 from sovereign.utils.state import file_hash, mark_stack_stopped, read_json
 from sovereign.utils.teardown import stop_service_handle
@@ -59,6 +60,15 @@ app.add_typer(bench_app, name="bench")
 models_app = typer.Typer(help="Inspect and prune the shared HuggingFace model cache.")
 app.add_typer(models_app, name="models")
 console = Console()
+
+
+@app.callback()
+def _configure(
+    verbose: bool = typer.Option(
+        False, "--verbose", "-v", help="Debug logging (state transitions, admission, HF cache)."
+    ),
+) -> None:
+    configure_logging(verbose)
 
 _DEFAULT_BENCH_SPEC = Path("bench.yaml")
 _BENCH_STATE_COLORS = {
