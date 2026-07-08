@@ -3,20 +3,19 @@
 Runs ``llama-server`` as a native subprocess (bare metal, for real Metal
 acceleration — §2.1) via the shared :class:`NativeEngineManager` lifecycle:
 subprocess + HTTP health + ``psutil`` metrics. The model can be a local GGUF
-path or a HuggingFace repo id (``<user>/<model>[:quant]``), which llama-server
-downloads and caches on first start.
+path or a HuggingFace repo id (``org/name[:quant]`` or ``org/name/file.gguf``),
+downloaded by Sovereign into the shared HF cache before launch (DOWNLOADING
+state); the server always starts from the resolved local path.
 """
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 from sovereign.config import ServiceEntry
 from sovereign.core.base_native import (
     NativeEngineManager,
     check_local_artifact,
-    looks_local,
 )
 from sovereign.core.registry import register_service
 from sovereign.services.llama_cpp.config import (
@@ -68,11 +67,7 @@ class LlamaCppManager(NativeEngineManager):
     # --- flag generation ---
     def get_start_args(self) -> list[str]:
         """Translate the validated config into a ``llama-server`` argv (§7)."""
-        args = [self.config.binary]
-        if looks_local(self.config.model):
-            args += ["--model", os.path.expanduser(self.config.model)]
-        else:
-            args += ["--hf-repo", self.config.model]
+        args = [self.config.binary, "--model", self.resolved_model_path()]
         args += ["--host", self.host, "--port", str(self.port)]
         if self.config.gpu_layers is not None:
             args += ["-ngl", str(self.config.gpu_layers)]
@@ -87,10 +82,7 @@ class LlamaCppManager(NativeEngineManager):
         if self.config.served_model_name:
             args += ["--alias", self.config.served_model_name]
         if self.config.draft_model is not None:
-            if looks_local(self.config.draft_model):
-                args += ["--model-draft", os.path.expanduser(self.config.draft_model)]
-            else:
-                args += ["--hf-repo-draft", self.config.draft_model]
+            args += ["--model-draft", self.resolved_draft_model_path()]
         if self.config.num_draft_tokens is not None:
             args += ["--draft-max", str(self.config.num_draft_tokens)]
 

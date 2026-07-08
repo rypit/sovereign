@@ -19,6 +19,14 @@ if TYPE_CHECKING:
 
 def _model_fingerprint(model_path: str) -> dict[str, Any] | None:
     path = Path(model_path).expanduser()
+    if path.is_dir():
+        # MLX snapshots are directories: fingerprint the recursive size + newest mtime.
+        files = [f for f in path.rglob("*") if f.is_file()]
+        if not files:
+            return None
+        size = sum(f.stat().st_size for f in files)
+        mtime = max(int(f.stat().st_mtime) for f in files)
+        return {"path": str(path), "size": size, "mtime": mtime}
     if not path.is_file():
         return None
     stat = path.stat()
@@ -46,16 +54,24 @@ def _service_entry(orch: Orchestrator, name: str) -> dict[str, Any]:
         if endpoint.model is not None:
             item["endpoint"]["model"] = endpoint.model
 
-    # Final resolved flags/args, if the manager exposes them.
+    # Final resolved flags/args, if the manager exposes them. A native engine's
+    # get_start_args() raises RuntimeError before prepare_model() has run (e.g. when
+    # persisting a FAILED boot); omit start_args rather than fail the manifest.
     if hasattr(manager, "get_start_args"):
-        item["start_args"] = manager.get_start_args()
+        try:
+            item["start_args"] = manager.get_start_args()
+        except RuntimeError:
+            pass
     elif hasattr(manager, "_run_args") and getattr(manager, "resolved_env", None) is not None:
         try:
             item["run_args"] = manager._run_args()
         except Exception:  # noqa: BLE001 - manifest detail is best-effort
             pass
 
-    model_path = entry.config.get("model")
+    # Prefer the manager's resolved local path (a downloaded HF snapshot/gguf) so
+    # repo-id models fingerprint too; fall back to the declared config value.
+    resolved = getattr(manager, "model_path", None)
+    model_path = str(resolved) if resolved is not None else entry.config.get("model")
     if isinstance(model_path, str):
         fingerprint = _model_fingerprint(model_path)
         if fingerprint is not None:

@@ -14,10 +14,8 @@ import shutil
 import struct
 import subprocess
 import sys
-import threading
 import urllib.error
 import urllib.request
-from collections.abc import Callable
 from pathlib import Path
 from typing import Any, ClassVar, Literal
 
@@ -30,6 +28,7 @@ from sovereign.core.base_manager import ActivityMixin
 # Defined in models.py; the local-path helpers are re-exported here for
 # backwards compatibility, plus the metadata/estimation surface used below.
 from sovereign.core.models import (  # noqa: F401
+    download_model,
     estimate_model_bytes,
     fetch_repo_info,
     local_model_bytes,
@@ -130,16 +129,13 @@ class NativeEngineManager(ActivityMixin, Provisioner):
 
         self.process: subprocess.Popen[bytes] | None = None
         self._log_file = None
-        self._tailer: threading.Thread | None = None
-        self._tailer_stop: threading.Event | None = None
+        # Resolved local paths, populated by prepare_model() before start().
+        self.model_path: Path | None = None
+        self.draft_model_path: Path | None = None
 
     # --- engine-specific surface ---
     def get_start_args(self) -> list[str]:
         raise NotImplementedError
-
-    def _tail_target(self) -> Callable[[Path, threading.Event], None] | None:
-        """Optional log-tailer callable for download-progress activity."""
-        return None
 
     # --- resource estimation helpers ---
     def _model_bytes(self, model: str) -> int:
@@ -147,6 +143,33 @@ class NativeEngineManager(ActivityMixin, Provisioner):
         metadata), for admission control. Unknown (offline+uncached) → 0."""
         ref = parse_model_ref(model)
         return estimate_model_bytes(ref, self.model_artifact_kind) or 0
+
+    # --- pre-download (DOWNLOADING state) ---
+    def prepare_model(self) -> None:
+        """Resolve the model (and draft model) to local paths, downloading from the
+        HuggingFace cache if needed. Runs in the orchestrator's DOWNLOADING state;
+        byte-level progress is surfaced as activity. Local refs resolve in place."""
+        self.model_path = download_model(
+            parse_model_ref(self.config.model),
+            self.model_artifact_kind,
+            progress=self.set_activity,
+        )
+        draft = getattr(self.config, "draft_model", None)
+        if draft is not None:
+            self.draft_model_path = download_model(
+                parse_model_ref(draft), self.model_artifact_kind, progress=self.set_activity
+            )
+        self.clear_activity()
+
+    def resolved_model_path(self) -> str:
+        if self.model_path is None:
+            raise RuntimeError(f"prepare_model() must run before start for '{self.name}'")
+        return str(self.model_path)
+
+    def resolved_draft_model_path(self) -> str:
+        if self.draft_model_path is None:
+            raise RuntimeError(f"prepare_model() must run before start for '{self.name}'")
+        return str(self.draft_model_path)
 
     # --- wiring ---
     def api_model_name(self) -> str:
@@ -188,18 +211,6 @@ class NativeEngineManager(ActivityMixin, Provisioner):
         )
         self._apply_priority()
 
-        target = self._tail_target()
-        if target is not None:
-            stop = threading.Event()
-            self._tailer_stop = stop
-            self._tailer = threading.Thread(
-                target=target,
-                args=(log_path, stop),
-                daemon=True,
-                name=f"{self.base_type}-tailer-{self.name}",
-            )
-            self._tailer.start()
-
     def _apply_priority(self) -> None:
         """Best-effort QoS: deprioritise lower-priority engines via os.nice (§7)."""
         nice = priority_to_nice(self.priority)
@@ -221,12 +232,6 @@ class NativeEngineManager(ActivityMixin, Provisioner):
         if self._log_file is not None:
             self._log_file.close()
             self._log_file = None
-        if self._tailer_stop is not None:
-            self._tailer_stop.set()
-        if self._tailer is not None:
-            self._tailer.join(timeout=2.0)
-            self._tailer = None
-            self._tailer_stop = None
         self.clear_activity()
         self.process = None
 

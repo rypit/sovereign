@@ -50,6 +50,26 @@ def _manager(config: dict | None = None) -> LlamaCppManager:
     return LlamaCppManager(_entry(config))
 
 
+@pytest.fixture(autouse=True)
+def _passthrough_download(monkeypatch):
+    """Neutralise the real HF download: resolve local refs in place and treat a repo
+    id as if it downloaded to a path equal to the ref, so argv assertions stay
+    readable. Applied suite-wide so no test reaches the network on prepare_model()."""
+    from pathlib import Path
+
+    def _fake(ref, kind, *, progress=None):
+        return ref.local_path if ref.is_local else Path(ref.raw)
+
+    monkeypatch.setattr(native_mod, "download_model", _fake)
+
+
+def _prepared(config: dict | None = None) -> LlamaCppManager:
+    """A manager with prepare_model() already run (model paths resolved)."""
+    m = _manager(config)
+    m.prepare_model()
+    return m
+
+
 class FakeProc:
     def __init__(self, pid: int = 4242, poll_value: int | None = None):
         self.pid = pid
@@ -97,8 +117,19 @@ def test_port_and_path_taken_from_health_check() -> None:
 
 
 # --- flag generation ---
+def test_get_start_args_before_prepare_raises() -> None:
+    with pytest.raises(RuntimeError, match="prepare_model"):
+        _manager({"model": "/models/x.gguf"}).get_start_args()
+
+
+def test_prepare_model_sets_paths() -> None:
+    m = _prepared({"model": "org/repo:Q4_K_M", "draft_model": "org/tiny-draft"})
+    assert str(m.model_path) == "org/repo:Q4_K_M"
+    assert str(m.draft_model_path) == "org/tiny-draft"
+
+
 def test_get_start_args_full_flag_mapping() -> None:
-    m = _manager(
+    m = _prepared(
         {
             "model": "/models/llama3-70b.gguf",
             "gpu_layers": 48,
@@ -124,44 +155,53 @@ def test_get_start_args_full_flag_mapping() -> None:
 
 
 def test_get_start_args_minimal_omits_optional_flags() -> None:
-    args = _manager().get_start_args()
+    args = _prepared().get_start_args()
     for flag in ["-ngl", "-t", "-c", "-np", "--api-key"]:
         assert flag not in args
 
 
 def test_get_start_args_expands_home(monkeypatch) -> None:
     monkeypatch.setenv("HOME", "/home/tester")
-    args = _manager({"model": "~/models/x.gguf"}).get_start_args()
+    args = _prepared({"model": "~/models/x.gguf"}).get_start_args()
     assert "/home/tester/models/x.gguf" in args
 
 
-def test_get_start_args_hf_repo_uses_hf_flag() -> None:
-    args = _manager({"model": "ggml-org/gemma-3-1b-it-GGUF"}).get_start_args()
-    assert args[args.index("--hf-repo") + 1] == "ggml-org/gemma-3-1b-it-GGUF"
-    assert "--model" not in args
+def test_get_start_args_hf_repo_resolves_to_local_path() -> None:
+    args = _prepared({"model": "ggml-org/gemma-3-1b-it-GGUF"}).get_start_args()
+    assert args[args.index("--model") + 1] == "ggml-org/gemma-3-1b-it-GGUF"  # resolved path
+
+
+def test_argv_never_contains_hf_repo() -> None:
+    # HF repo ids are pre-downloaded and launched from the resolved path — the
+    # server never sees --hf-repo / --hf-repo-draft.
+    args = _prepared(
+        {"model": "ggml-org/gemma-3-1b-it-GGUF", "draft_model": "org/tiny-draft"}
+    ).get_start_args()
+    assert "--hf-repo" not in args
+    assert "--hf-repo-draft" not in args
 
 
 def test_get_start_args_local_draft_model(tmp_path) -> None:
     draft = tmp_path / "draft.gguf"
     draft.write_bytes(b"x")
-    args = _manager({"model": "/models/x.gguf", "draft_model": str(draft)}).get_start_args()
+    args = _prepared({"model": "/models/x.gguf", "draft_model": str(draft)}).get_start_args()
     assert args[args.index("--model-draft") + 1] == str(draft)
 
 
 def test_get_start_args_hf_draft_model() -> None:
-    args = _manager(
+    args = _prepared(
         {"model": "/models/x.gguf", "draft_model": "org/tiny-draft"}
     ).get_start_args()
-    assert args[args.index("--hf-repo-draft") + 1] == "org/tiny-draft"
+    assert args[args.index("--model-draft") + 1] == "org/tiny-draft"  # resolved path
 
 
 def test_get_start_args_num_draft_tokens() -> None:
-    args = _manager({"model": "/models/x.gguf", "num_draft_tokens": 2}).get_start_args()
+    args = _prepared({"model": "/models/x.gguf", "num_draft_tokens": 2}).get_start_args()
     assert args[args.index("--draft-max") + 1] == "2"
 
 
 def test_get_start_args_draft_flags_absent_when_unset() -> None:
-    args = _manager().get_start_args()
+    args = _prepared().get_start_args()
     assert "--model-draft" not in args
     assert "--hf-repo-draft" not in args
     assert "--draft-max" not in args
@@ -169,12 +209,14 @@ def test_get_start_args_draft_flags_absent_when_unset() -> None:
 
 # --- served_model_name / api_model_name (harness+bench wiring) ---
 def test_served_model_name_emits_alias_flag() -> None:
-    args = _manager({"model": "/models/x.gguf", "served_model_name": "llama3-70b"}).get_start_args()
+    args = _prepared(
+        {"model": "/models/x.gguf", "served_model_name": "llama3-70b"}
+    ).get_start_args()
     assert args[args.index("--alias") + 1] == "llama3-70b"
 
 
 def test_alias_flag_absent_when_unset() -> None:
-    args = _manager().get_start_args()
+    args = _prepared().get_start_args()
     assert "--alias" not in args
 
 
@@ -314,7 +356,7 @@ def test_start_launches_process_with_argv(tmp_path, monkeypatch) -> None:
         return FakeProc()
 
     monkeypatch.setattr(native_mod.subprocess, "Popen", fake_popen)
-    m = _manager({"model": "/models/x.gguf", "log_dir": str(tmp_path / "logs")})
+    m = _prepared({"model": "/models/x.gguf", "log_dir": str(tmp_path / "logs")})
     m.start()
     assert captured["args"] == m.get_start_args()
     assert m.process is not None
@@ -325,7 +367,7 @@ def test_start_launches_process_with_argv(tmp_path, monkeypatch) -> None:
 def test_stop_terminates_running_process(tmp_path, monkeypatch) -> None:
     proc = FakeProc(poll_value=None)
     monkeypatch.setattr(native_mod.subprocess, "Popen", lambda *a, **k: proc)
-    m = _manager({"model": "/x.gguf", "log_dir": str(tmp_path)})
+    m = _prepared({"model": "/x.gguf", "log_dir": str(tmp_path)})
     m.start()
     m.stop()
     assert proc.terminated is True
@@ -337,7 +379,7 @@ def test_stop_kills_on_timeout(tmp_path, monkeypatch) -> None:
     proc = FakeProc(poll_value=None)
     proc.wait_raises = subprocess.TimeoutExpired(cmd="llama-server", timeout=_stop())
     monkeypatch.setattr(native_mod.subprocess, "Popen", lambda *a, **k: proc)
-    m = _manager({"model": "/x.gguf", "log_dir": str(tmp_path)})
+    m = _prepared({"model": "/x.gguf", "log_dir": str(tmp_path)})
     m.start()
     m.stop()
     assert proc.terminated is True
@@ -504,6 +546,7 @@ def _caching_manager(caching: dict, config: dict | None = None) -> LlamaCppManag
 
 def test_prompt_caching_flags_added_when_enabled() -> None:
     m = _caching_manager({"enabled": True, "cache_path": "/tmp/c", "kv_cache_type": "q8_0"})
+    m.prepare_model()
     args = m.get_start_args()
     assert args[args.index("--slot-save-path") + 1] == "/tmp/c"
     assert args[args.index("--cache-type-k") + 1] == "q8_0"
@@ -512,6 +555,7 @@ def test_prompt_caching_flags_added_when_enabled() -> None:
 
 def test_prompt_caching_no_flags_when_disabled() -> None:
     m = _caching_manager({"enabled": False, "cache_path": "/tmp/c"})
+    m.prepare_model()
     assert "--slot-save-path" not in m.get_start_args()
 
 

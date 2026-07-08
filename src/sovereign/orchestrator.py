@@ -40,6 +40,7 @@ _METRICS_INTERVAL = 2.0
 class ServiceState(StrEnum):
     PENDING = "pending"
     PROVISIONING = "provisioning"
+    DOWNLOADING = "downloading"
     STARTING = "starting"
     READY = "ready"
     DEGRADED = "degraded"
@@ -241,6 +242,19 @@ class Orchestrator:
         except ResourceExhaustedError:
             self._set_state(name, ServiceState.FAILED)
             raise
+
+        # Pre-download the model (DOWNLOADING) so the server launches from a
+        # resolved local path. Cached models return in ms — the state is entered
+        # unconditionally when the hook exists for a deterministic machine; managers
+        # without the hook (FakeManager, docker_engine) skip it.
+        prepare_model = getattr(manager, "prepare_model", None)
+        if callable(prepare_model):
+            self._set_state(name, ServiceState.DOWNLOADING)
+            try:
+                await asyncio.to_thread(prepare_model)
+            except Exception:
+                self._set_state(name, ServiceState.FAILED)
+                raise
 
         self._resolve_manager(manager)
 
