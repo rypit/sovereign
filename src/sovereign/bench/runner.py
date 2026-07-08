@@ -95,7 +95,7 @@ def combine_executors(perf_executor: CellExecutor, quality_executor: CellExecuto
     return executor
 
 
-def _stack_identity(stack: str) -> dict[str, Any]:
+def stack_identity(stack: str) -> dict[str, Any]:
     path = Path(stack)
     if path.is_file():
         return {"path": str(path), "hash": file_hash(path)}
@@ -112,13 +112,13 @@ def enumerate_cells(spec: BenchSpec) -> list[Job]:
     harnesses = spec.harnesses or ["_none"]
     jobs: list[Job] = []
     for stack in spec.stacks:
-        stack_identity = _stack_identity(stack)
+        identity = stack_identity(stack)
         stack_label = Path(stack).stem
         for harness in harnesses:
             for suite in suites:
                 suite_label = Path(suite).stem if suite != "_none" else suite
                 key = cell_key(
-                    stack=stack_identity,
+                    stack=identity,
                     harness=harness,
                     suite=suite,
                     seed=spec.seed,

@@ -35,6 +35,7 @@ from sovereign.core.resources import (
     ResourceExhaustedError,
     estimate_service_memory,
 )
+from sovereign.core.status import StatusSnapshot
 from sovereign.hf import resolve_entry_base_type
 from sovereign.utils.manifest import write_manifest
 from sovereign.utils.state import file_hash, write_json
@@ -163,14 +164,18 @@ class Orchestrator:
         # Resolve `base_type: auto` (or omitted) to a concrete engine via HF metadata
         # before instantiating managers. Routing errors propagate as build failures
         # with actionable messages; the resolved type is written to the routing cache.
-        for entry in self.config.services:
+        # The caller's config object is never mutated — the orchestrator keeps its
+        # own resolved copies in self._entries, so a config can be re-planned later.
+        for name in self._service_names:
+            entry = self._entries[name]
             if entry.base_type == "auto":
-                self.requested_base_types[entry.name] = "auto"
-                entry.base_type = resolve_entry_base_type(entry, self.state_dir)
-        for entry in self.config.services:
-            self.managers[entry.name] = self._manager_factory(entry)
-            self.states[entry.name] = ServiceState.PENDING
-            self.state_since[entry.name] = datetime.now(UTC).isoformat()
+                self.requested_base_types[name] = "auto"
+                resolved = resolve_entry_base_type(entry, self.state_dir)
+                self._entries[name] = entry.model_copy(update={"base_type": resolved})
+        for name in self._service_names:
+            self.managers[name] = self._manager_factory(self._entries[name])
+            self.states[name] = ServiceState.PENDING
+            self.state_since[name] = datetime.now(UTC).isoformat()
         for entry in self.config.harnesses:
             try:
                 self.harnesses[entry.name] = self._harness_factory(entry)
@@ -235,7 +240,9 @@ class Orchestrator:
                 for name in self._service_names:
                     tg.create_task(run(name))
         except BaseExceptionGroup as group:
-            raise BootError(str(_first_exception(group))) from _first_exception(group)
+            # Report every concurrent failure, not just the first branch's.
+            leaves = _leaf_exceptions(group)
+            raise BootError("; ".join(str(exc) for exc in leaves)) from leaves[0]
 
         self._materialize_harnesses()
         self._boot_complete = True
@@ -409,8 +416,8 @@ class Orchestrator:
         )
         self.write_status()
 
-    def status_snapshot(self) -> dict:
-        """Live dashboard snapshot (§8) — the shape `main._dashboard()` consumes."""
+    def status_snapshot(self) -> StatusSnapshot:
+        """Live dashboard snapshot (§8) — the schema `sovereign.dashboard` renders."""
         reservations = self.budgeter.reservations()
         return {
             "updated_at": datetime.now(UTC).isoformat(),
@@ -443,12 +450,15 @@ class Orchestrator:
         write_json(self.state_dir / "status.json", self.status_snapshot())
 
 
-def _first_exception(group: BaseExceptionGroup) -> BaseException:
+def _leaf_exceptions(group: BaseExceptionGroup) -> list[BaseException]:
+    """Flatten a (possibly nested) exception group into its leaf exceptions."""
+    leaves: list[BaseException] = []
     for exc in group.exceptions:
         if isinstance(exc, BaseExceptionGroup):
-            return _first_exception(exc)
-        return exc
-    return group
+            leaves.extend(_leaf_exceptions(exc))
+        else:
+            leaves.append(exc)
+    return leaves or [group]
 
 
 ExtraTask = Callable[["Orchestrator", asyncio.Event], "Coroutine"]

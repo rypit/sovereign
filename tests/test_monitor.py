@@ -12,17 +12,17 @@ from rich.spinner import Spinner
 from typer.testing import CliRunner
 
 from sovereign import __version__, main
-from sovereign.main import (
+from sovereign.dashboard import (
     MetricHistory,
-    _dashboard,
-    _dashboard_task_factory,
-    _duration_cell,
-    _format_duration,
-    _load_dashboard_status,
-    _sparkline,
-    _status_cell,
-    app,
+    dashboard,
+    dashboard_task_factory,
+    duration_cell,
+    format_duration,
+    load_dashboard_status,
+    sparkline,
+    status_cell,
 )
+from sovereign.main import app
 from sovereign.utils.state import write_json
 
 runner = CliRunner()
@@ -30,30 +30,30 @@ runner = CliRunner()
 
 # --- duration formatting ---
 def test_format_duration_seconds() -> None:
-    assert _format_duration(42) == "42s"
+    assert format_duration(42) == "42s"
 
 
 def test_format_duration_minutes() -> None:
-    assert _format_duration(3 * 60 + 12) == "3m 12s"
+    assert format_duration(3 * 60 + 12) == "3m 12s"
 
 
 def test_format_duration_hours() -> None:
-    assert _format_duration(3600 + 4 * 60) == "1h 04m"
+    assert format_duration(3600 + 4 * 60) == "1h 04m"
 
 
 def test_duration_cell_none_renders_dash() -> None:
-    assert _duration_cell(None) == "-"
+    assert duration_cell(None) == "-"
 
 
 def test_duration_cell_unparseable_renders_dash() -> None:
-    assert _duration_cell("not-a-timestamp") == "-"
+    assert duration_cell("not-a-timestamp") == "-"
 
 
 def test_duration_cell_future_timestamp_clamps_to_zero() -> None:
     from datetime import UTC, datetime, timedelta
 
     future = (datetime.now(UTC) + timedelta(minutes=5)).isoformat()
-    assert _duration_cell(future) == "0s"
+    assert duration_cell(future) == "0s"
 
 _STATUS = {
     "updated_at": "2026-07-05T00:00:00+00:00",
@@ -83,7 +83,7 @@ def _render(table) -> str:
 
 
 def test_dashboard_matches_mockup_shape() -> None:
-    text = _render(_dashboard(_STATUS))
+    text = _render(dashboard(_STATUS))
     assert f"Sovereign Control Plane v{__version__}" in text
     for header in (
         "SERVICE", "DESCRIPTOR", "STATUS", "DURATION", "CPU %", "MEM (MB)", "ENDPOINT",
@@ -103,25 +103,25 @@ def test_dashboard_matches_mockup_shape() -> None:
 
 # --- sparklines ---
 def test_sparkline_empty_for_fewer_than_two_points() -> None:
-    assert _sparkline([]) == ""
-    assert _sparkline([1.0]) == ""
+    assert sparkline([]) == ""
+    assert sparkline([1.0]) == ""
 
 
 def test_sparkline_flat_when_all_equal() -> None:
-    assert _sparkline([5.0, 5.0, 5.0]) == "▅▅▅"
+    assert sparkline([5.0, 5.0, 5.0]) == "▅▅▅"
 
 
 def test_sparkline_scales_min_to_max() -> None:
-    spark = _sparkline([0.0, 100.0])
+    spark = sparkline([0.0, 100.0])
     assert spark[0] == "▁"
     assert spark[-1] == "█"
 
 
 def test_sparkline_capped_to_render_width() -> None:
     values = list(range(30))
-    result = _sparkline(values)
+    result = sparkline(values)
     assert len(result) == 12
-    assert result == _sparkline(values[-12:])
+    assert result == sparkline(values[-12:])
 
 
 # --- MetricHistory ---
@@ -165,19 +165,19 @@ def test_metric_history_instances_share_no_state() -> None:
 
 # --- _status_cell ---
 def test_status_cell_spinner_for_transitional_states() -> None:
-    assert isinstance(_status_cell("provisioning"), Spinner)
-    assert isinstance(_status_cell("starting"), Spinner)
+    assert isinstance(status_cell("provisioning"), Spinner)
+    assert isinstance(status_cell("starting"), Spinner)
 
 
 def test_status_cell_plain_markup_for_steady_states() -> None:
-    assert _status_cell("ready") == "[green]RUNNING[/green]"
-    assert _status_cell("stopped") == "[dim]STOPPED[/dim]"
-    assert _status_cell("failed") == "[red]FAILED[/red]"
+    assert status_cell("ready") == "[green]RUNNING[/green]"
+    assert status_cell("stopped") == "[dim]STOPPED[/dim]"
+    assert status_cell("failed") == "[red]FAILED[/red]"
 
 
 # --- backward-compat regression: no sparkline artifacts without history ---
 def test_dashboard_without_history_has_no_sparkline_artifacts() -> None:
-    text = _render(_dashboard(_STATUS))
+    text = _render(dashboard(_STATUS))
     assert "RUNNING" in text
     assert "12.4%" in text
     assert "14500" in text
@@ -187,7 +187,7 @@ def test_dashboard_without_history_has_no_sparkline_artifacts() -> None:
 
 
 def test_dashboard_with_empty_history_has_no_sparkline_artifacts() -> None:
-    text = _render(_dashboard(_STATUS, history=MetricHistory()))
+    text = _render(dashboard(_STATUS, history=MetricHistory()))
     assert not any(ch in text for ch in "▁▂▃▄▅▆▇█")
 
 
@@ -201,7 +201,7 @@ def test_dashboard_renders_activity_area() -> None:
             }
         }
     }
-    text = _render(_dashboard(status))
+    text = _render(dashboard(status))
     assert "Activity:" in text
     assert "pulling open-webui — 3/8 layers" in text
 
@@ -220,7 +220,7 @@ def test_dashboard_renders_est_column_and_budget_footer() -> None:
             },
         },
     }
-    text = _render(_dashboard(status))
+    text = _render(dashboard(status))
     assert "EST (GB)" in text
     assert "27.0" in text  # estimate column value
     assert "93.0 GB headroom" in text  # budget footer
@@ -231,7 +231,7 @@ def test_dashboard_renders_est_column_and_budget_footer() -> None:
 
 def test_dashboard_tolerates_status_without_budget() -> None:
     # Old status.json (pre-M5) has no "budget" / "estimated_gb" keys.
-    text = _render(_dashboard(_STATUS))
+    text = _render(dashboard(_STATUS))
     assert "headroom" not in text  # no footer without a budget
     assert "RUNNING" in text  # still renders normally
 
@@ -247,7 +247,7 @@ def test_dashboard_activity_shown_for_ready_service() -> None:
             }
         }
     }
-    text = _render(_dashboard(status))
+    text = _render(dashboard(status))
     assert "Activity:" in text
     assert "downloading model: 3/8 files (38%)" in text
 
@@ -259,7 +259,7 @@ def test_dashboard_no_activity_area_when_idle() -> None:
             "engine": {"state": "ready", "metrics": {}, "activity": ""}
         }
     }
-    text = _render(_dashboard(status))
+    text = _render(dashboard(status))
     assert "Provisioning:" not in text
 
 
@@ -284,7 +284,7 @@ def test_monitor_falls_back_to_state_json(tmp_path) -> None:
         tmp_path / "state.json",
         {"services": {"docker_engine": "ready"}, "variant_file": None, "variant_hash": None},
     )
-    status = _load_dashboard_status(tmp_path)
+    status = load_dashboard_status(tmp_path)
     assert status["services"]["docker_engine"]["state"] == "ready"
     result = runner.invoke(
         app, ["monitor", "--once", "--state-dir", str(tmp_path)], env={"COLUMNS": "200"}
@@ -306,7 +306,7 @@ def test_dashboard_task_renders_from_snapshot_and_exits() -> None:
     stop = asyncio.Event()
     stop.set()  # exit immediately after the initial frame
 
-    task = _dashboard_task_factory(interval=0.01, live_console=rec)
+    task = dashboard_task_factory(interval=0.01, live_console=rec)
     asyncio.run(asyncio.wait_for(task(fake_orch, stop), timeout=2))
     assert calls["n"] >= 1  # rendered at least the initial frame from live state
 
