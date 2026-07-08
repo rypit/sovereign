@@ -22,7 +22,13 @@ from enum import StrEnum
 from pathlib import Path
 
 from sovereign.config import ServiceEntry, SovereignConfig
-from sovereign.core.base_manager import ServiceManager
+from sovereign.core.base_manager import (
+    ServiceManager,
+    SupportsEndpoint,
+    SupportsModelPreparation,
+    SupportsResolve,
+    SupportsRuntimeHandle,
+)
 from sovereign.core.resolver import ConsumerKind, Resolver, ServiceRegistry
 from sovereign.core.resources import (
     ResourceBudgeter,
@@ -257,11 +263,10 @@ class Orchestrator:
         # resolved local path. Cached models return in ms — the state is entered
         # unconditionally when the hook exists for a deterministic machine; managers
         # without the hook (FakeManager, docker_engine) skip it.
-        prepare_model = getattr(manager, "prepare_model", None)
-        if callable(prepare_model):
+        if isinstance(manager, SupportsModelPreparation):
             self._set_state(name, ServiceState.DOWNLOADING)
             try:
-                await asyncio.to_thread(prepare_model)
+                await asyncio.to_thread(manager.prepare_model)
             except Exception:
                 self._set_state(name, ServiceState.FAILED)
                 raise
@@ -293,14 +298,12 @@ class Orchestrator:
         return float(health_check.timeout_seconds) if health_check else 60.0
 
     def _resolve_manager(self, manager: ServiceManager) -> None:
-        resolve = getattr(manager, "resolve", None)
-        if callable(resolve):
-            resolve(self.resolver)
+        if isinstance(manager, SupportsResolve):
+            manager.resolve(self.resolver)
 
     def _register_endpoint(self, name: str, manager: ServiceManager) -> None:
-        endpoint_fn = getattr(manager, "endpoint", None)
-        if callable(endpoint_fn):
-            endpoint = endpoint_fn()
+        if isinstance(manager, SupportsEndpoint):
+            endpoint = manager.endpoint()
             if endpoint is not None:
                 previous = self.registry.get(name) if name in self.registry else None
                 self.registry.register(name, endpoint)
@@ -386,9 +389,8 @@ class Orchestrator:
     def _runtime_handles(self) -> dict[str, dict]:
         handles: dict[str, dict] = {}
         for name, manager in self.managers.items():
-            handle_fn = getattr(manager, "runtime_handle", None)
-            if callable(handle_fn):
-                handle = handle_fn()
+            if isinstance(manager, SupportsRuntimeHandle):
+                handle = manager.runtime_handle()
                 if handle:
                     handles[name] = handle
         return handles

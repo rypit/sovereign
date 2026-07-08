@@ -71,23 +71,23 @@ def test_resolve_rewrites_loopback_to_host_gateway() -> None:
     assert m.resolved_env == {"OPENAI_API_BASE_URL": "http://host.docker.internal:11435"}
 
 
-# --- _run_args ---
+# --- run_args ---
 def test_run_args_port_mapping_defaults_container_port() -> None:
     m = _manager({"image": "img:latest", "port": 8888})
-    args = m._run_args()
+    args = m.run_args()
     assert "-p" in args and "8888:8888" in args
 
 
 def test_run_args_port_mapping_explicit_container_port() -> None:
     m = _manager({"image": "img:latest", "port": 8888, "container_port": 8080})
-    args = m._run_args()
+    args = m.run_args()
     assert "8888:8080" in args
 
 
 def test_run_args_include_resolved_env() -> None:
     m = _manager(env={"OPENAI_API_BASE_URL": "{{ llama_heavy_v1.endpoint }}"})
     m.resolve(_resolver_with_llama())
-    args = m._run_args()
+    args = m.run_args()
     i = args.index("-e")
     assert args[i + 1] == "OPENAI_API_BASE_URL=http://host.docker.internal:11435"
 
@@ -96,7 +96,7 @@ def test_run_args_expands_bind_mount_host_path(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
     volumes = ["~/.sovereign/searxng:/etc/searxng"]
     m = _manager({"image": "img:latest", "port": 8888, "volumes": volumes})
-    args = m._run_args()
+    args = m.run_args()
     vi = args.index("-v")
     assert args[vi + 1] == f"{tmp_path}/.sovereign/searxng:/etc/searxng"
 
@@ -104,14 +104,14 @@ def test_run_args_expands_bind_mount_host_path(tmp_path, monkeypatch) -> None:
 def test_run_args_leaves_named_volume_untouched() -> None:
     volumes = ["sovereign_open_webui:/app/backend/data"]
     m = _manager({"image": "img:latest", "port": 3000, "volumes": volumes})
-    args = m._run_args()
+    args = m.run_args()
     vi = args.index("-v")
     assert args[vi + 1] == "sovereign_open_webui:/app/backend/data"
 
 
 def test_run_args_image_last() -> None:
     m = _manager({"image": "ghcr.io/open-webui/open-webui:main", "port": 3000})
-    args = m._run_args()
+    args = m.run_args()
     assert args[-1] == "ghcr.io/open-webui/open-webui:main"
 
 

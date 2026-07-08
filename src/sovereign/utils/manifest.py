@@ -11,6 +11,11 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from sovereign.core.base_manager import (
+    SupportsPerSlotContext,
+    SupportsRunArgs,
+    SupportsStartArgs,
+)
 from sovereign.utils.state import write_json
 
 if TYPE_CHECKING:
@@ -60,14 +65,17 @@ def _service_entry(orch: Orchestrator, name: str) -> dict[str, Any]:
     # Final resolved flags/args, if the manager exposes them. A native engine's
     # get_start_args() raises RuntimeError before prepare_model() has run (e.g. when
     # persisting a FAILED boot); omit start_args rather than fail the manifest.
-    if hasattr(manager, "get_start_args"):
+    if isinstance(manager, SupportsStartArgs):
         try:
             item["start_args"] = manager.get_start_args()
         except RuntimeError:
             pass
-    elif hasattr(manager, "_run_args") and getattr(manager, "resolved_env", None) is not None:
+    elif (
+        isinstance(manager, SupportsRunArgs)
+        and getattr(manager, "resolved_env", None) is not None
+    ):
         try:
-            item["run_args"] = manager._run_args()
+            item["run_args"] = manager.run_args()
         except Exception:  # noqa: BLE001 - manifest detail is best-effort
             pass
 
@@ -83,7 +91,7 @@ def _service_entry(orch: Orchestrator, name: str) -> dict[str, Any]:
     reserved = orch.budgeter.reservations().get(name)
     if reserved is not None:
         item["estimated_memory_gb"] = round(reserved, 2)
-    if hasattr(manager, "per_slot_context"):
+    if isinstance(manager, SupportsPerSlotContext):
         per_slot = manager.per_slot_context()
         if per_slot is not None:
             item["per_slot_context"] = per_slot
