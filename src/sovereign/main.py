@@ -925,18 +925,10 @@ def plan(
     file: Optional[Path] = typer.Option(  # noqa: UP045 - Typer needs Optional at runtime
         _DEFAULT_CONFIG, "-f", "--file", help="Stack variant file to plan."
     ),
+    state_dir: Path = _STATE_DIR_OPTION,
 ) -> None:
     """Dry-run a stack: route models, estimate memory, and check the budget. No downloads."""
-    from pydantic import ValidationError
-
-    from sovereign.core.resources import ResourceBudgeter, ResourceExhaustedError
-    from sovereign.hf import (
-        ModelResolutionError,
-        estimate_model_bytes_with_source,
-        parse_model_ref,
-        resolve_entry_base_type,
-    )
-    from sovereign.services.llama_cpp.config import LlamaCppConfig
+    from sovereign.core.planning import plan_stack
 
     _load_dotenv()
     try:
@@ -945,82 +937,36 @@ def plan(
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(1) from exc
 
-    budgeter = ResourceBudgeter(
-        config.resources.max_unified_memory_gb, config.resources.safety_margin_gb
-    )
+    stack_plan = plan_stack(config, state_dir)
 
     table = Table(title=f"Plan for {file}")
     for col in ("SERVICE", "BASE_TYPE", "MODEL", "SOURCE", "EST GB", "VERDICT"):
         table.add_column(col)
-
-    all_ok = True
-    for entry in config.services:
-        model = entry.config.get("model") or "-"
-        requested_auto = entry.base_type == "auto"
-
-        # Route (auto entries need HF metadata / the routing cache).
-        try:
-            base_type = resolve_entry_base_type(entry, _DEFAULT_STATE_DIR)
-        except ModelResolutionError:
-            all_ok = False
-            _plan_row(table, entry.name, entry.base_type, model, "-", None, "ROUTING ERROR")
-            continue
-        base_type_display = f"{base_type} (auto)" if requested_auto else base_type
-
-        # Estimate memory: a declared override wins; else metadata for native engines.
-        source = "-"
-        if entry.memory_gb is not None:
-            est_gb: float | None = float(entry.memory_gb)
-            source = "declared"
-        elif base_type in ("llama_cpp", "mlx_lm"):
-            kind = "gguf" if base_type == "llama_cpp" else "snapshot"
-            weight_bytes_, source = estimate_model_bytes_with_source(
-                parse_model_ref(str(model)), kind
-            )
-            est_gb = (weight_bytes_ / (1024**3)) if weight_bytes_ is not None else None
-            if base_type == "llama_cpp":
-                try:
-                    lc = LlamaCppConfig.model_validate(entry.config)
-                except ValidationError:
-                    all_ok = False
-                    _plan_row(
-                        table, entry.name, base_type_display, model, source, None, "CONFIG ERROR"
-                    )
-                    continue
-                kv_gb = (lc.context_size or 0) * lc.kv_bytes_per_token / (1024**3)
-                if kv_gb:
-                    est_gb = (est_gb or 0.0) + kv_gb
-        else:
-            est_gb = None
-            source = "unknown"
-
-        # Admit against the running budget.
-        try:
-            budgeter.admit(entry.name, est_gb or 0.0)
-            verdict = "OK"
-        except ResourceExhaustedError:
-            all_ok = False
-            verdict = "REFUSED"
-        _plan_row(table, entry.name, base_type_display, model, source, est_gb, verdict)
-
+    for svc in stack_plan.services:
+        base_type = f"{svc.base_type} (auto)" if svc.requested_auto else svc.base_type
+        color = _VERDICT_COLORS.get(svc.verdict, "white")
+        est = f"{svc.estimated_gb:.1f}" if svc.estimated_gb is not None else "-"
+        table.add_row(
+            svc.name, base_type, svc.model, svc.source, est, f"[{color}]{svc.verdict}[/{color}]"
+        )
     console.print(table)
+
+    for svc in stack_plan.services:
+        if svc.error:
+            console.print(f"  [dim]{svc.name}: {svc.error}[/dim]", soft_wrap=True)
+
+    budget = stack_plan.budget
     footer = _budget_footer(
         {
-            "usable_gb": budgeter.usable_gb,
-            "reserved_gb": round(budgeter.reserved_gb, 2),
-            "available_gb": round(budgeter.available_gb, 2),
+            "usable_gb": budget.usable_gb,
+            "reserved_gb": round(budget.reserved_gb, 2),
+            "available_gb": round(budget.available_gb, 2),
         }
     )
     if footer is not None:
         console.print(footer)
-    if not all_ok:
+    if not stack_plan.ok:
         raise typer.Exit(1)
-
-
-def _plan_row(table, name, base_type, model, source, est_gb, verdict) -> None:
-    color = _VERDICT_COLORS.get(verdict, "white")
-    est = f"{est_gb:.1f}" if est_gb is not None else "-"
-    table.add_row(name, base_type, str(model), source, est, f"[{color}]{verdict}[/{color}]")
 
 
 @app.command()
