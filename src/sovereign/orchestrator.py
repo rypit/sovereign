@@ -22,7 +22,7 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
 
-from sovereign.config import ServiceEntry, SovereignConfig
+from sovereign.config import HarnessEntry, ServiceEntry, SovereignConfig
 from sovereign.core.base_manager import (
     ServiceManager,
     SupportsEndpoint,
@@ -90,7 +90,7 @@ class Orchestrator:
         config: SovereignConfig,
         *,
         manager_factory: ManagerFactory | None = None,
-        harness_factory: Callable[[ServiceEntry], object] | None = None,
+        harness_factory: Callable[[HarnessEntry], object] | None = None,
         env: Mapping[str, str] | None = None,
         variant_file: str | Path | None = None,
         state_dir: str | Path = ".sovereign",
@@ -150,7 +150,7 @@ class Orchestrator:
         populate_registries()
         return get_service_manager(entry.base_type)(entry)
 
-    def _default_harness_factory(self, entry: ServiceEntry) -> object:
+    def _default_harness_factory(self, entry: HarnessEntry) -> object:
         from sovereign.core.registry import get_harness, populate_registries
 
         populate_registries()
@@ -179,9 +179,9 @@ class Orchestrator:
             self.managers[name] = self._manager_factory(self._entries[name])
             self.states[name] = ServiceState.PENDING
             self.state_since[name] = datetime.now(UTC).isoformat()
-        for entry in self.config.harnesses:
+        for harness_entry in self.config.harnesses:
             try:
-                self.harnesses[entry.name] = self._harness_factory(entry)
+                self.harnesses[harness_entry.name] = self._harness_factory(harness_entry)
             except (KeyError, ImportError):
                 pass  # harness base_type not registered yet (harness track)
         self._built = True

@@ -107,7 +107,7 @@ class SovereignConfig(SovereignBaseModel):
 
     @model_validator(mode="after")
     def _check_names_and_dependencies(self) -> SovereignConfig:
-        entries = [*self.services, *self.harnesses]
+        entries: list[ServiceEntry | HarnessEntry] = [*self.services, *self.harnesses]
         names = [e.name for e in entries]
 
         # 1. Names unique across services *and* harnesses combined.

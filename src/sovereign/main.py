@@ -157,7 +157,7 @@ def serve(
     ),
 ) -> None:
     """Run Sovereign as a foreground process (launchd entry point) — always headless."""
-    _boot_and_serve(file, with_dashboard=False)
+    _boot_and_serve(file or _DEFAULT_CONFIG, with_dashboard=False)
 
 
 @app.command()
@@ -170,7 +170,7 @@ def up(
     ),
 ) -> None:
     """Boot the stack; show the live dashboard when run in a terminal."""
-    _boot_and_serve(file, with_dashboard=_stdout_is_tty())
+    _boot_and_serve(file or _DEFAULT_CONFIG, with_dashboard=_stdout_is_tty())
 
 
 @app.command()
@@ -711,7 +711,7 @@ def plan(
     from sovereign.core.planning import plan_stack
 
     _load_dotenv()
-    config = _load_config_or_exit(file)
+    config = _load_config_or_exit(file or _DEFAULT_CONFIG)
 
     stack_plan = plan_stack(config, state_dir)
 

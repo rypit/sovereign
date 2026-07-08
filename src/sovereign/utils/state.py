@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -18,7 +19,7 @@ def file_hash(path: str | Path) -> str:
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
-def write_json(path: str | Path, data: dict[str, Any]) -> None:
+def write_json(path: str | Path, data: Mapping[str, Any]) -> None:
     """Write ``data`` as pretty JSON, creating parent dirs as needed."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)

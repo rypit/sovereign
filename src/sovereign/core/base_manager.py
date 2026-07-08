@@ -13,6 +13,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
+    from sovereign.config import ServiceEntry
     from sovereign.core.resolver import ResolvedEndpoint, Resolver
 
 
@@ -52,6 +53,9 @@ class ServiceManager(Protocol):
     dependencies: list[str]
     #: Human-readable current-activity line (see :class:`ActivityMixin`).
     activity: str
+
+    def __init__(self, entry: ServiceEntry) -> None:
+        """Managers are constructed from their service entry (the registry's contract)."""
 
     # --- Lifecycle ---
     def start(self) -> None:

@@ -25,6 +25,7 @@ class MlxLmManager(NativeEngineManager):
 
     base_type = "mlx_lm"
     config_cls = MlxLmConfig
+    config: MlxLmConfig
     model_artifact_kind = "snapshot"
     binary_hint = "It ships with the `mlx-lm` dependency — run `uv sync`."
 
