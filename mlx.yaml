@@ -1,0 +1,31 @@
+# A minimal MLX stack — a tiny model you can boot on Apple Silicon to see the
+# HF-native pipeline end to end:
+#
+#   uv run sovereign plan -f mlx.yaml   # dry-run: routes + estimates, no download
+#   uv run sovereign up   -f mlx.yaml   # DOWNLOADING (byte progress) -> STARTING -> READY
+#
+# `base_type` is omitted, so it defaults to `auto`: Sovereign reads the repo's
+# HuggingFace metadata (mlx-community / safetensors) and routes it to `mlx_lm`.
+# The model is pre-downloaded into the shared HF cache before the server starts,
+# so `timeout_seconds` only has to cover model load, not the download.
+
+version: "1.1"
+
+resources:
+  max_unified_memory_gb: 16     # adjust to your machine
+  safety_margin_gb: 2
+  default_priority: medium
+
+services:
+  - name: mlx_smol
+    # base_type omitted -> auto (routed to mlx_lm from HF metadata)
+    priority: high
+    health_check:
+      type: http
+      endpoint: /health
+      port: 8080
+      timeout_seconds: 120
+    config:
+      model: "mlx-community/SmolLM-135M-Instruct-4bit"
+      host: 127.0.0.1
+    dependencies: []
