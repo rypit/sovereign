@@ -18,7 +18,6 @@ from pathlib import Path
 from sovereign.core.base_native import (
     NativeEngineManager,
     check_local_artifact,
-    local_model_bytes,
 )
 from sovereign.core.registry import register_service
 from sovereign.services.mlx_lm.config import MlxLmConfig
@@ -33,23 +32,24 @@ class MlxLmManager(NativeEngineManager):
 
     base_type = "mlx_lm"
     config_cls = MlxLmConfig
+    model_artifact_kind = "snapshot"
     binary_hint = "It ships with the `mlx-lm` dependency — run `uv sync`."
 
     # --- resource estimation (§7) ---
     def estimated_memory_gb(self) -> float:
-        """Estimate resident memory from the local model weights (or an override).
+        """Estimate resident memory from the model weights (or an override).
 
         Includes the draft model when speculative decoding is configured — both models
         live in unified memory simultaneously. A declared ``prompt_cache_bytes`` is a
         hard KV-cache reservation that also lives in unified memory. For HuggingFace
-        repo ids (not yet downloaded) the footprint is unknown and contributes 0.0
-        (admitted).
+        repo ids the estimate comes from repo metadata (weight-file sizes); unknown
+        (offline + uncached) contributes 0.0.
         """
         if self.memory_override_gb is not None:
             return round(self.memory_override_gb, 2)
-        total = local_model_bytes(self.config.model)
+        total = self._model_bytes(self.config.model)
         if self.config.draft_model is not None:
-            total += local_model_bytes(self.config.draft_model)
+            total += self._model_bytes(self.config.draft_model)
         if self.config.prompt_cache_bytes is not None:
             total += self.config.prompt_cache_bytes
         return round(total / (1024**3), 2)

@@ -231,7 +231,11 @@ class Orchestrator:
         await asyncio.to_thread(manager.prepare_environment)
 
         # Admission control (§7): refuse-to-boot rather than let macOS swap.
-        estimated = estimate_service_memory(manager, self._entries[name])
+        # The estimate may still hit the network (metadata fetch) if the
+        # PROVISIONING prefetch missed, so keep it off the event loop.
+        estimated = await asyncio.to_thread(
+            estimate_service_memory, manager, self._entries[name]
+        )
         try:
             self.budgeter.admit(name, estimated)
         except ResourceExhaustedError:

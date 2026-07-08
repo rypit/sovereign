@@ -19,7 +19,7 @@ import urllib.error
 import urllib.request
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Literal
 
 import psutil
 
@@ -27,8 +27,15 @@ from sovereign.config import ServiceEntry
 from sovereign.core.base_config import SovereignBaseModel
 from sovereign.core.base_manager import ActivityMixin
 
-# Defined in models.py; imported here for backwards compatibility.
-from sovereign.core.models import local_model_bytes, looks_local  # noqa: F401
+# Defined in models.py; the local-path helpers are re-exported here for
+# backwards compatibility, plus the metadata/estimation surface used below.
+from sovereign.core.models import (  # noqa: F401
+    estimate_model_bytes,
+    fetch_repo_info,
+    local_model_bytes,
+    looks_local,
+    parse_model_ref,
+)
 from sovereign.core.provisioning import Provisioner
 from sovereign.core.resolver import ConsumerKind, ResolvedEndpoint
 from sovereign.core.resources import priority_to_nice
@@ -98,6 +105,9 @@ class NativeEngineManager(ActivityMixin, Provisioner):
 
     base_type: ClassVar[str]
     config_cls: ClassVar[type[SovereignBaseModel]]
+    #: Which HF artifact this engine consumes — an MLX/safetensors *snapshot* or a
+    #: single *gguf* file. Drives metadata-based memory estimation and download.
+    model_artifact_kind: ClassVar[Literal["snapshot", "gguf"]]
     consumer_kind = ConsumerKind.NATIVE
     #: Optional extra sentence appended to the missing-binary error.
     binary_hint: ClassVar[str] = ""
@@ -130,6 +140,13 @@ class NativeEngineManager(ActivityMixin, Provisioner):
     def _tail_target(self) -> Callable[[Path, threading.Event], None] | None:
         """Optional log-tailer callable for download-progress activity."""
         return None
+
+    # --- resource estimation helpers ---
+    def _model_bytes(self, model: str) -> int:
+        """Weight-byte estimate for one model ref (local disk, HF cache, or repo
+        metadata), for admission control. Unknown (offline+uncached) → 0."""
+        ref = parse_model_ref(model)
+        return estimate_model_bytes(ref, self.model_artifact_kind) or 0
 
     # --- wiring ---
     def api_model_name(self) -> str:
@@ -255,6 +272,12 @@ class NativeEngineManager(ActivityMixin, Provisioner):
             raise FileNotFoundError(message)
         # A local model path must exist; a HuggingFace repo id is fetched on start.
         check_local_artifact(self.config.model, kind=f"{self.base_type} model", service=self.name)
+        # Best-effort metadata prefetch so admission's memoised estimate is warm.
+        # A gated/missing repo fails loudly here (in PROVISIONING) with an
+        # actionable message; a transient/offline miss returns None and is fine.
+        for value in (self.config.model, getattr(self.config, "draft_model", None)):
+            if value and not looks_local(value):
+                fetch_repo_info(parse_model_ref(value).repo_id)
 
     def adjust_resources(self, memory_limit_mb: int) -> None:
         """No-op by default; engines override when they can shrink under pressure."""
