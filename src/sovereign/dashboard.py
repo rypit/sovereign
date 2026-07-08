@@ -12,10 +12,10 @@ from __future__ import annotations
 import asyncio
 import time
 from collections import deque
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from rich.console import Console, Group, RenderableType
 from rich.live import Live
@@ -107,7 +107,7 @@ class MetricHistory:
         self._window = window_seconds
         self._data: dict[str, dict[str, deque[tuple[float, float]]]] = {}
 
-    def record(self, status: dict) -> None:
+    def record(self, status: Mapping[str, Any]) -> None:
         now = time.monotonic()
         services = status.get("services", {})
         for stale in set(self._data) - set(services):
@@ -163,7 +163,7 @@ def status_cell(state: str) -> str | Spinner:
     return markup
 
 
-def dashboard(status: dict, history: MetricHistory | None = None) -> RenderableType:
+def dashboard(status: Mapping[str, Any], history: MetricHistory | None = None) -> RenderableType:
     """Render the §8 dashboard table, plus a live "Provisioning" activity area."""
     table = Table(title=f"Sovereign Control Plane v{__version__}", title_justify="left")
     table.add_column("SERVICE")

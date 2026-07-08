@@ -31,6 +31,7 @@ class LlamaCppManager(NativeEngineManager):
 
     base_type = "llama_cpp"
     config_cls = LlamaCppConfig
+    config: LlamaCppConfig
     model_artifact_kind = "gguf"
     #: Provisioned via the package Brewfile (`brew "llama.cpp"`) when missing.
     provisioning_binary = "llama-server"

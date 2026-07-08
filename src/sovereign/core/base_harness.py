@@ -70,6 +70,9 @@ class Harness(Protocol):
     #: Names of services that must be ``READY`` before this harness is usable.
     dependencies: list[str]
 
+    def __init__(self, entry: HarnessEntry) -> None:
+        """Harnesses are constructed from their entry (the registry's contract)."""
+
     def prepare_environment(self) -> None:
         """Pre-flight/provisioning hook run before ``materialize()``.
 

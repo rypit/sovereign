@@ -74,7 +74,7 @@ class ClineCliHarness(BaseHarness):
         return Path(configured).expanduser()
 
     def _resolved(self, key: str, default: str) -> str:
-        return (self.resolved_config or {}).get(key, default)
+        return str((self.resolved_config or {}).get(key, default))
 
     def materialize(self) -> None:
         """Write the resolved provider settings into an isolated ``CLINE_DIR``."""
@@ -141,10 +141,12 @@ class ClineCliHarness(BaseHarness):
                 timeout=self.config.timeout_seconds,
             )
         except subprocess.TimeoutExpired as exc:
+            raw = exc.stdout
+            output = raw.decode(errors="replace") if isinstance(raw, bytes) else (raw or "")
             return RunResult(
                 task_id=task.id,
                 success=False,
-                output=exc.stdout or "",
+                output=output,
                 metadata={"error": "timeout"},
             )
 

@@ -17,7 +17,7 @@ import sys
 import urllib.error
 import urllib.request
 from pathlib import Path
-from typing import Any, ClassVar, Literal
+from typing import IO, Any, ClassVar, Literal
 
 import psutil
 
@@ -26,7 +26,7 @@ import psutil
 # caller sees it. Pure helpers are imported by name.
 from sovereign import hf as hf_models
 from sovereign.config import ServiceEntry
-from sovereign.core.base_config import SovereignBaseModel
+from sovereign.core.base_config import NativeEngineConfig
 from sovereign.core.base_manager import ActivityMixin
 from sovereign.core.provisioning import Provisioner
 from sovereign.core.resolver import ConsumerKind, ResolvedEndpoint
@@ -97,7 +97,7 @@ class NativeEngineManager(ActivityMixin, Provisioner):
     """
 
     base_type: ClassVar[str]
-    config_cls: ClassVar[type[SovereignBaseModel]]
+    config_cls: ClassVar[type[NativeEngineConfig]]
     #: Which HF artifact this engine consumes — an MLX/safetensors *snapshot* or a
     #: single *gguf* file. Drives metadata-based memory estimation and download.
     model_artifact_kind: ClassVar[Literal["snapshot", "gguf"]]
@@ -108,7 +108,7 @@ class NativeEngineManager(ActivityMixin, Provisioner):
     def __init__(self, entry: ServiceEntry) -> None:
         self.name = entry.name
         self.dependencies = entry.dependencies
-        self.config = self.config_cls.model_validate(entry.config)
+        self.config: NativeEngineConfig = self.config_cls.model_validate(entry.config)
 
         if entry.health_check is None:
             raise ValueError(
@@ -122,7 +122,7 @@ class NativeEngineManager(ActivityMixin, Provisioner):
         self.memory_override_gb = entry.memory_gb
 
         self.process: subprocess.Popen[bytes] | None = None
-        self._log_file = None
+        self._log_file: IO[str] | None = None
         # Resolved local paths, populated by prepare_model() before start().
         self.model_path: Path | None = None
         self.draft_model_path: Path | None = None
@@ -148,7 +148,7 @@ class NativeEngineManager(ActivityMixin, Provisioner):
             self.model_artifact_kind,
             progress=self.set_activity,
         )
-        draft = getattr(self.config, "draft_model", None)
+        draft = self.config.draft_model
         if draft is not None:
             self.draft_model_path = hf_models.download_model(
                 parse_model_ref(draft), self.model_artifact_kind, progress=self.set_activity
@@ -172,8 +172,7 @@ class NativeEngineManager(ActivityMixin, Provisioner):
         ``served_model_name`` overrides when set; otherwise the configured
         ``model`` (local path or HF repo id) is the name clients must send.
         """
-        served = getattr(self.config, "served_model_name", None)
-        return served or self.config.model
+        return self.config.served_model_name or self.config.model
 
     def endpoint(self) -> ResolvedEndpoint:
         """The address consumers reach this engine at (registered when READY)."""
@@ -274,9 +273,11 @@ class NativeEngineManager(ActivityMixin, Provisioner):
         # Best-effort metadata prefetch so admission's memoised estimate is warm.
         # A gated/missing repo fails loudly here (in PROVISIONING) with an
         # actionable message; a transient/offline miss returns None and is fine.
-        for value in (self.config.model, getattr(self.config, "draft_model", None)):
+        for value in (self.config.model, self.config.draft_model):
             if value and not looks_local(value):
-                hf_models.fetch_repo_info(parse_model_ref(value).repo_id)
+                ref = parse_model_ref(value)
+                if ref.repo_id is not None:
+                    hf_models.fetch_repo_info(ref.repo_id)
 
     def adjust_resources(self, memory_limit_mb: int) -> None:
         """No-op by default; engines override when they can shrink under pressure."""

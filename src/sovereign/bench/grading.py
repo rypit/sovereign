@@ -56,6 +56,8 @@ def prepare_workspace(task: SuiteTask, suite: Suite, workspace_dir: Path) -> Pat
             ["commit", "-m", "sovereign-bench: fixture baseline", "--allow-empty"], workspace_dir
         )
     else:
+        if task.repo.git_url is None:
+            raise ValueError(f"task {task.id}: repo needs either a fixture path or a git_url")
         _run_git(["clone", task.repo.git_url, str(workspace_dir)], workspace_dir.parent)
         if task.repo.rev:
             _run_git(["checkout", task.repo.rev], workspace_dir)
@@ -68,6 +70,13 @@ def _has_diff(workspace_dir: Path) -> tuple[bool, str]:
     diff_stat = diff.stdout.strip()
     has_changes = bool(diff_stat) or bool(status.stdout.strip())
     return has_changes, diff_stat
+
+
+def _decoded(stream: str | bytes | None) -> str:
+    """TimeoutExpired carries bytes even in text mode; normalise to str."""
+    if stream is None:
+        return ""
+    return stream.decode(errors="replace") if isinstance(stream, bytes) else stream
 
 
 def grade_task(task: SuiteTask, workspace_dir: Path) -> dict[str, Any]:
@@ -98,7 +107,7 @@ def grade_task(task: SuiteTask, workspace_dir: Path) -> dict[str, Any]:
         output = proc.stdout + proc.stderr
     except subprocess.TimeoutExpired as exc:
         exit_code = None
-        output = (exc.stdout or "") + (exc.stderr or "")
+        output = _decoded(exc.stdout) + _decoded(exc.stderr)
 
     return {
         "has_diff": has_diff,

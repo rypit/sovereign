@@ -28,7 +28,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 import httpx  # a hard dependency of huggingface_hub>=1.0 (its transport layer)
 from huggingface_hub import HfApi, hf_hub_download, snapshot_download
@@ -321,6 +321,7 @@ def cached_model_path(ref: ModelRef, kind: Literal["snapshot", "gguf"]) -> Path 
     """Return the local cache path if the model is already downloaded, else None."""
     if ref.is_local:
         return ref.local_path
+    assert ref.repo_id is not None  # non-local refs always carry a repo id
 
     if kind == "snapshot":
         try:
@@ -482,7 +483,7 @@ def _make_progress_tqdm(progress: Callable[[str], None], label: str) -> type[_Ba
             progress(msg)
 
     class _ProgressTqdm(_BaseTqdm):
-        def __init__(self, *args: object, **kwargs: object) -> None:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
             kwargs.setdefault("disable", False)  # keep the counter live off-TTY
             kwargs.setdefault("file", io.StringIO())  # swallow the rendered bar
             super().__init__(*args, **kwargs)
