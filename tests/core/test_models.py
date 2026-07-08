@@ -596,3 +596,107 @@ def test_progress_aggregator_caps_at_100_percent():
     msg = _ProgressAggregator("org/model").update(11 * 1024**3, 10 * 1024**3, now=0.0)
     assert msg is not None
     assert "100%" in msg
+
+
+# ---------------------------------------------------------------------------
+# Xet download progress, end to end and offline.
+#
+# Drives the REAL hf_hub_download + xet_get code path with the two seams
+# huggingface_hub's own test suite mocks (tests/test_xet_download.py in the
+# hub sdist): get_hf_file_metadata (forces the Xet branch without a metadata
+# HEAD) and utils._xet.get_xet_session (replaces the Rust transfer engine).
+# The fake session fires progress_callback exactly like hf_xet does, proving
+# Xet byte progress reaches the tqdm_class download_model passes in.
+# ---------------------------------------------------------------------------
+
+_XET_FILE_SIZE = 64 * 1024**2  # 64 MiB, written sparse
+
+
+class _FakeXetDownloadGroup:
+    """Stands in for hf_xet's file-download group: writes the file sparse and
+    reports cumulative bytes through progress_callback, as the real engine does."""
+
+    def __init__(self, progress_callback):
+        self._cb = progress_callback
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def start_download_file(self, file_info, path: str) -> None:
+        with open(path, "wb") as f:
+            f.truncate(_XET_FILE_SIZE)
+        import types
+
+        for done in (_XET_FILE_SIZE // 4, _XET_FILE_SIZE // 2, _XET_FILE_SIZE):
+            self._cb(types.SimpleNamespace(total_bytes_completed=done), None)
+
+
+class _FakeXetSession:
+    def new_file_download_group(self, **kwargs):
+        return _FakeXetDownloadGroup(kwargs["progress_callback"])
+
+
+def test_download_model_xet_progress_end_to_end(tmp_path, monkeypatch):
+    import huggingface_hub.constants as hf_constants
+    from huggingface_hub.file_download import HfFileMetadata
+    from huggingface_hub.utils import XetFileData
+
+    cache = tmp_path / "hub"
+    cache.mkdir()
+    monkeypatch.setattr(hf_constants, "HF_HUB_CACHE", str(cache))  # hub call-time default
+    monkeypatch.setenv("HF_HUB_CACHE", str(cache))  # our _blobs_dir/_cached_bytes
+
+    fname = "model.Q4_K_M.gguf"
+    info = _repo(repo_id="org/model-GGUF", siblings=((fname, _XET_FILE_SIZE),))
+    monkeypatch.setattr(models_mod, "fetch_repo_info", lambda repo_id: info)
+
+    metadata = HfFileMetadata(
+        commit_hash="0" * 40,
+        etag="a" * 40,
+        location="https://example.invalid/never-fetched",
+        size=_XET_FILE_SIZE,
+        xet_file_data=XetFileData(file_hash="ab" * 32, refresh_route="https://example.invalid/r"),
+    )
+
+    messages: list[str] = []
+    with (
+        patch("huggingface_hub.file_download.get_hf_file_metadata", return_value=metadata),
+        patch("huggingface_hub.utils._xet.get_xet_session", return_value=_FakeXetSession()),
+    ):
+        path = models_mod.download_model(
+            parse_model_ref("org/model-GGUF"), "gguf", progress=messages.append
+        )
+
+    # The file really landed in the redirected cache via the Xet branch.
+    assert path.exists()
+    assert path.stat().st_size == _XET_FILE_SIZE
+    assert str(cache) in str(path)
+    # Xet's cumulative byte reports flowed through the tqdm_class into progress.
+    assert messages, "no progress messages captured"
+    assert any("(50%)" in m for m in messages)
+    assert "(100%)" in messages[-1]
+    assert all(m.startswith("downloading org/model-GGUF:") for m in messages)
+
+
+def test_progress_tqdm_handles_snapshot_style_growing_total(monkeypatch):
+    # snapshot_download creates the byte bar with total=0, then grows bar.total as
+    # each file's metadata arrives (see _AggregatedTqdm in _snapshot_download.py).
+    # The reporter must tolerate that and never divide by the stale zero.
+    from sovereign.core.models import _make_progress_tqdm
+
+    messages: list[str] = []
+    tqdm_cls = _make_progress_tqdm(messages.append, "org/model")
+    bar = tqdm_cls(total=0, unit="B", unit_scale=True)
+    bar.update(0)  # total still 0 → nothing useful to say, must not raise
+    assert messages == []
+    bar.total += 4 * 1024**3
+    bar.refresh()
+    bar.update(1 * 1024**3)
+    bar.total += 4 * 1024**3
+    bar.update(3 * 1024**3)
+    bar.close()
+    assert "(25%)" in messages[0]  # 1 of 4 GiB
+    assert "(50%)" in messages[-1]  # 4 of 8 GiB after the total grew
