@@ -719,7 +719,8 @@ def plan(
     for col in ("SERVICE", "BASE_TYPE", "MODEL", "SOURCE", "EST GB", "VERDICT"):
         table.add_column(col)
     for svc in stack_plan.services:
-        base_type = f"{svc.base_type} (auto)" if svc.requested_auto else svc.base_type
+        routed = svc.requested_auto and svc.base_type != "auto"
+        base_type = f"{svc.base_type} (auto)" if routed else svc.base_type
         color = _VERDICT_COLORS.get(svc.verdict, "white")
         est = f"{svc.estimated_gb:.1f}" if svc.estimated_gb is not None else "-"
         table.add_row(
