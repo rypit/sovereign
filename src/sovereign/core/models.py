@@ -5,7 +5,8 @@ Pure library — no typer, no manager imports. Provides:
 - Repo metadata fetch, memoised per process (never caches offline/transient failures)
 - GGUF file selection with shard grouping and quant disambiguation
 - Weight byte estimation from metadata or disk
-- Download with byte-level progress sampling (daemon thread + _DownloadProgressSampler)
+- Download with byte-level progress via a custom ``tqdm_class`` (works with the Xet
+  backend through ``hf_xet``, which reports transfer progress through the same bars)
 - Engine routing: mlx_lm vs llama_cpp, with persisted RoutingCache for offline restarts
 
 Helpers ``looks_local`` and ``local_model_bytes`` are defined here and re-exported
@@ -15,6 +16,7 @@ from ``base_native`` for backwards compatibility.
 from __future__ import annotations
 
 import contextlib
+import io
 import os
 import re
 import shutil
@@ -27,15 +29,12 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
-# Disable Xet backend before any huggingface_hub import: Xet stages chunks
-# outside blobs/, breaking the disk-poll progress sampler below. Verify in M6.
-os.environ.setdefault("HF_HUB_DISABLE_XET", "1")
-
 from huggingface_hub import HfApi, hf_hub_download, snapshot_download
 from huggingface_hub.errors import (
     GatedRepoError,
     RepositoryNotFoundError,
 )
+from tqdm.auto import tqdm as _BaseTqdm
 
 from sovereign.utils.state import read_json, write_json
 
@@ -396,39 +395,28 @@ def _blobs_dir(repo_id: str) -> Path:
     return cache_dir / repo_folder / "blobs"
 
 
-class _DownloadProgressSampler:
-    """Samples byte-level download progress from the HF cache blobs directory.
+class _ProgressAggregator:
+    """Formats a human progress line from cumulative byte counts.
 
-    Testable without threads: ``sample()`` is a pure function of disk state
-    given the blobs dir and expected byte count passed at construction.
+    Testable without tqdm or threads: ``update(current, total)`` is a pure
+    function of the counts (plus a monotonic clock, injectable for tests). Keeps
+    a small rolling window for a smoothed MB/s and an ETA.
     """
 
-    def __init__(self, blobs_dir: Path, expected_bytes: int, label: str) -> None:
-        self._blobs_dir = blobs_dir
-        self._expected = expected_bytes
+    def __init__(self, label: str) -> None:
         self._label = label
-        # (monotonic_time, bytes_so_far) rolling window for speed/ETA
-        self._window: list[tuple[float, int]] = []
+        self._window: list[tuple[float, int]] = []  # (monotonic_time, bytes)
 
-    def _current_bytes(self) -> int:
-        total = 0
-        with contextlib.suppress(OSError):
-            for p in self._blobs_dir.iterdir():
-                with contextlib.suppress(OSError):
-                    total += p.stat().st_size
-        return total
-
-    def sample(self) -> str | None:
-        """Return a progress string, or None if nothing useful can be said."""
-        if self._expected <= 0:
+    def update(self, current: int, total: int, *, now: float | None = None) -> str | None:
+        """Return a progress string, or None if nothing useful can be said yet."""
+        if total <= 0:
             return None
-        now = time.monotonic()
-        current = self._current_bytes()
+        now = time.monotonic() if now is None else now
         self._window.append((now, current))
         if len(self._window) > 5:
             self._window.pop(0)
 
-        pct = min(100.0, current / self._expected * 100)
+        pct = min(100.0, current / total * 100)
         speed_str = ""
         eta_str = ""
         if len(self._window) >= 2:
@@ -436,21 +424,61 @@ class _DownloadProgressSampler:
             elapsed = now - t0
             if elapsed > 0:
                 speed_bps = (current - b0) / elapsed
-                speed_mb = speed_bps / (1024 * 1024)
-                speed_str = f" — {speed_mb:.0f} MB/s"
-                remaining = self._expected - current
+                speed_str = f" — {speed_bps / (1024 * 1024):.0f} MB/s"
+                remaining = total - current
                 if speed_bps > 0 and remaining > 0:
-                    eta_sec = remaining / speed_bps
-                    mins, secs = divmod(int(eta_sec), 60)
+                    mins, secs = divmod(int(remaining / speed_bps), 60)
                     eta_str = f", ETA {mins}m{secs:02d}s"
 
-        current_gb = current / (1024**3)
-        expected_gb = self._expected / (1024**3)
         return (
             f"downloading {self._label}: "
-            f"{current_gb:.1f}/{expected_gb:.1f} GB "
+            f"{current / (1024**3):.1f}/{total / (1024**3):.1f} GB "
             f"({pct:.0f}%){speed_str}{eta_str}"
         )
+
+
+def _make_progress_tqdm(progress: Callable[[str], None], label: str) -> type[_BaseTqdm]:
+    """Build a ``tqdm`` subclass that forwards byte-download progress to ``progress``.
+
+    huggingface_hub (and hf_xet for Xet transfers) render download progress through
+    ``tqdm_class``; the byte bars carry ``unit="B"``. We aggregate the ``n``/``total``
+    of every live byte bar — one shared bar for ``snapshot_download``, one per shard
+    for ``hf_hub_download`` — into a single line. Subclassing vanilla ``tqdm`` (not
+    huggingface_hub's) keeps the counter live even when stdout isn't a TTY (the daemon
+    case); each bar renders into a throwaway buffer so nothing clutters the console.
+    """
+    live: set[_BaseTqdm] = set()
+    lock = threading.Lock()
+    agg = _ProgressAggregator(label)
+
+    def _emit() -> None:
+        with lock:
+            bars = [t for t in live if getattr(t, "unit", "") == "B" and (t.total or 0) > 0]
+            current = sum(int(t.n) for t in bars)
+            total = sum(int(t.total) for t in bars)
+        msg = agg.update(current, total)
+        if msg:
+            progress(msg)
+
+    class _ProgressTqdm(_BaseTqdm):
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            kwargs.setdefault("disable", False)  # keep the counter live off-TTY
+            kwargs.setdefault("file", io.StringIO())  # swallow the rendered bar
+            super().__init__(*args, **kwargs)
+            with lock:
+                live.add(self)
+
+        def update(self, n: float | None = 1) -> bool | None:
+            displayed = super().update(n)
+            _emit()
+            return displayed
+
+        def close(self) -> None:
+            with lock:
+                live.discard(self)
+            super().close()
+
+    return _ProgressTqdm
 
 
 def download_model(
@@ -493,30 +521,14 @@ def download_model(
                 f"need {needed_gb:.1f} GB, only {free_gb:.1f} GB free"
             )
 
-    # Progress sampling thread
-    stop_event = threading.Event()
-    sampler_thread: threading.Thread | None = None
-    if progress is not None and expected is not None and expected > 0:
-        blobs = _blobs_dir(ref.repo_id)
-        sampler = _DownloadProgressSampler(blobs, expected, ref.repo_id)
-
-        def _sample_loop() -> None:
-            while not stop_event.is_set():
-                msg = sampler.sample()
-                if msg:
-                    progress(msg)
-                stop_event.wait(timeout=0.5)
-
-        sampler_thread = threading.Thread(
-            target=_sample_loop,
-            daemon=True,
-            name=f"hf-progress-{ref.repo_id}",
-        )
-        sampler_thread.start()
+    # Byte-level progress via tqdm_class (also carries hf_xet transfer progress).
+    tqdm_class = _make_progress_tqdm(progress, ref.repo_id) if progress is not None else None
 
     try:
         if kind == "snapshot":
-            path = snapshot_download(ref.repo_id, ignore_patterns=_SNAPSHOT_IGNORE)
+            path = snapshot_download(
+                ref.repo_id, ignore_patterns=_SNAPSHOT_IGNORE, tqdm_class=tqdm_class
+            )
             return Path(path)
 
         # gguf: download all shards; re-fetch info if needed
@@ -527,7 +539,7 @@ def download_model(
         files = select_gguf_files(info, quant=ref.quant, filename=ref.filename)
         first_path: Path | None = None
         for fname in files:
-            p = hf_hub_download(ref.repo_id, fname)
+            p = hf_hub_download(ref.repo_id, fname, tqdm_class=tqdm_class)
             if first_path is None:
                 first_path = Path(p)
         assert first_path is not None
@@ -545,10 +557,6 @@ def download_model(
         raise ModelDownloadError(
             f"Download failed for '{ref.repo_id}': {exc}"
         ) from exc
-    finally:
-        stop_event.set()
-        if sampler_thread is not None:
-            sampler_thread.join(timeout=2.0)
 
 
 def _cached_bytes(repo_id: str) -> int:

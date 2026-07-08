@@ -18,7 +18,7 @@ from sovereign.core.models import (
     RepoInfo,
     RoutingCache,
     RoutingError,
-    _DownloadProgressSampler,
+    _ProgressAggregator,
     _repo_info_cache,
     estimate_model_bytes,
     fetch_repo_info,
@@ -515,50 +515,36 @@ def test_fetch_success_is_cached():
 
 
 # ---------------------------------------------------------------------------
-# _DownloadProgressSampler
+# _ProgressAggregator — formats a progress line from cumulative byte counts
+# (the tqdm_class that carries hf_xet/http transfer progress feeds it these).
 # ---------------------------------------------------------------------------
 
 
-def test_progress_sampler_basic(tmp_path, sparse_file):
-    blobs = tmp_path / "blobs"
-    blobs.mkdir()
-    expected = 10 * 1024**3  # 10 GB
-    sparse_file(blobs / "abc123", 2 * 1024**3)  # 2 GB downloaded
-
-    sampler = _DownloadProgressSampler(blobs, expected, "org/model")
-    msg = sampler.sample()
+def test_progress_aggregator_basic():
+    agg = _ProgressAggregator("org/model")
+    msg = agg.update(2 * 1024**3, 10 * 1024**3, now=0.0)
     assert msg is not None
     assert "20%" in msg
     assert "2.0/10.0 GB" in msg
 
 
-def test_progress_sampler_zero_expected_returns_none(tmp_path):
-    blobs = tmp_path / "blobs"
-    blobs.mkdir()
-    sampler = _DownloadProgressSampler(blobs, 0, "org/model")
-    assert sampler.sample() is None
+def test_progress_aggregator_zero_total_returns_none():
+    assert _ProgressAggregator("org/model").update(0, 0, now=0.0) is None
 
 
-def test_progress_sampler_includes_speed_after_two_samples(tmp_path, sparse_file):
-    blobs = tmp_path / "blobs"
-    blobs.mkdir()
-    expected = 4 * 1024**3
-    sparse_file(blobs / "part1", 1 * 1024**3)
-
-    sampler = _DownloadProgressSampler(blobs, expected, "org/model")
-    sampler.sample()  # first sample — no speed yet
-    # Grow the file so second sample shows progress
-    sparse_file(blobs / "part2", 1 * 1024**3)
-    msg = sampler.sample()
+def test_progress_aggregator_includes_speed_and_eta_after_two_samples():
+    agg = _ProgressAggregator("org/model")
+    agg.update(1 * 1024**3, 4 * 1024**3, now=0.0)  # first sample — no speed yet
+    # One second later, another 1 GB has arrived → ~1024 MB/s, 2 GB remaining.
+    msg = agg.update(2 * 1024**3, 4 * 1024**3, now=1.0)
     assert msg is not None
-    # Speed and ETA present once window has 2+ samples and bytes grew
     assert "MB/s" in msg
+    assert "ETA" in msg
 
 
-def test_progress_sampler_missing_blobs_dir(tmp_path):
-    blobs = tmp_path / "blobs_missing"
-    sampler = _DownloadProgressSampler(blobs, 1 * 1024**3, "org/model")
-    msg = sampler.sample()
-    # Should not crash; 0 bytes downloaded
+def test_progress_aggregator_caps_at_100_percent():
+    # Snapshot totals include tokenizer/config bytes, so current can momentarily
+    # exceed the weight-only expectation; the percentage must not run past 100.
+    msg = _ProgressAggregator("org/model").update(11 * 1024**3, 10 * 1024**3, now=0.0)
     assert msg is not None
-    assert "0%" in msg
+    assert "100%" in msg

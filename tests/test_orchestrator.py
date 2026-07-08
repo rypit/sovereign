@@ -32,6 +32,8 @@ class FakeManager:
         port: int = 0,
         mem_gb: float = 0.0,
         prepare_delay: float = 0.0,
+        has_prepare_model: bool = True,
+        prepare_model_raises: bool = False,
     ):
         self.name = entry.name
         self.dependencies = entry.dependencies
@@ -40,8 +42,13 @@ class FakeManager:
         self._port = port
         self._mem_gb = mem_gb
         self._prepare_delay = prepare_delay
+        self._prepare_model_raises = prepare_model_raises
         self.resolved_with = None
         self.activity = ""
+        # A native engine exposes prepare_model (pre-download); shadow it with None
+        # to model managers (docker_engine, older fakes) that don't have the hook.
+        if not has_prepare_model:
+            self.prepare_model = None
 
     def estimated_memory_gb(self) -> float:
         return self._mem_gb
@@ -50,6 +57,11 @@ class FakeManager:
         self._log.append((self.name, "prepare"))
         if self._prepare_delay:
             time.sleep(self._prepare_delay)  # runs in a worker thread during boot
+
+    def prepare_model(self) -> None:
+        self._log.append((self.name, "prepare_model"))
+        if self._prepare_model_raises:
+            raise RuntimeError(f"download failed for {self.name}")
 
     def start(self) -> None:
         self._log.append((self.name, "start"))
@@ -125,6 +137,8 @@ def _orch(
     ports = kwargs.pop("ports", {})
     mems = kwargs.pop("mems", {})
     prepare_delays = kwargs.pop("prepare_delays", {})
+    no_prepare_model = kwargs.pop("no_prepare_model", set())
+    prepare_model_raises = kwargs.pop("prepare_model_raises", set())
 
     def factory(entry: ServiceEntry) -> FakeManager:
         return FakeManager(
@@ -134,6 +148,8 @@ def _orch(
             port=ports.get(entry.name, 0),
             mem_gb=mems.get(entry.name, 0.0),
             prepare_delay=prepare_delays.get(entry.name, 0.0),
+            has_prepare_model=entry.name not in no_prepare_model,
+            prepare_model_raises=entry.name in prepare_model_raises,
         )
 
     if harness_log is not None and "harness_factory" not in kwargs:
@@ -226,6 +242,59 @@ def test_unhealthy_service_fails_boot() -> None:
     with pytest.raises(BootError, match="did not become healthy"):
         asyncio.run(orch.boot())
     assert orch.states["engine"] is ServiceState.FAILED
+
+
+# --- DOWNLOADING state (pre-download) ---
+def _transition_recorder(name_filter: str | None = None):
+    seen: list = []
+
+    def hook(name, old, new) -> None:
+        if name_filter is None or name == name_filter:
+            seen.append(new)
+
+    return seen, hook
+
+
+def test_boot_transitions_through_downloading() -> None:
+    cfg = _config([{"name": "engine", "base_type": "x"}])
+    seen, hook = _transition_recorder("engine")
+    orch = _orch(cfg, on_transition=hook)
+    asyncio.run(orch.boot())
+    assert seen == [
+        ServiceState.PROVISIONING,
+        ServiceState.DOWNLOADING,
+        ServiceState.STARTING,
+        ServiceState.READY,
+    ]
+
+
+def test_prepare_model_called_between_provision_and_start() -> None:
+    log: list = []
+    cfg = _config([{"name": "engine", "base_type": "x"}])
+    asyncio.run(_orch(cfg, log).boot())
+    assert log.index(("engine", "prepare")) < log.index(("engine", "prepare_model"))
+    assert log.index(("engine", "prepare_model")) < log.index(("engine", "start"))
+
+
+def test_download_failure_marks_failed() -> None:
+    log: list = []
+    cfg = _config([{"name": "engine", "base_type": "x"}])
+    seen, hook = _transition_recorder("engine")
+    orch = _orch(cfg, log, on_transition=hook, prepare_model_raises={"engine"})
+    with pytest.raises(BootError, match="download failed"):
+        asyncio.run(orch.boot())
+    assert orch.states["engine"] is ServiceState.FAILED
+    assert ServiceState.DOWNLOADING in seen
+    assert ("engine", "start") not in log  # never launched
+
+
+def test_manager_without_prepare_model_skips_downloading() -> None:
+    cfg = _config([{"name": "engine", "base_type": "x"}])
+    seen, hook = _transition_recorder("engine")
+    orch = _orch(cfg, on_transition=hook, no_prepare_model={"engine"})
+    asyncio.run(orch.boot())
+    assert ServiceState.DOWNLOADING not in seen
+    assert orch.states["engine"] is ServiceState.READY
 
 
 # --- reconciliation ---

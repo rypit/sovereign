@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import contextlib
 import subprocess
-import threading
 
 import pytest
 
@@ -47,6 +46,26 @@ def _entry(config: dict | None = None, with_health: bool = True) -> ServiceEntry
 
 def _manager(config: dict | None = None) -> MlxLmManager:
     return MlxLmManager(_entry(config))
+
+
+@pytest.fixture(autouse=True)
+def _passthrough_download(monkeypatch):
+    """Neutralise the real HF download: resolve local refs in place and treat a repo
+    id as if it downloaded to a path equal to the repo id, so argv assertions stay
+    readable. Applied suite-wide so no test reaches the network on prepare_model()."""
+    from pathlib import Path
+
+    def _fake(ref, kind, *, progress=None):
+        return ref.local_path if ref.is_local else Path(ref.raw)
+
+    monkeypatch.setattr(native_mod, "download_model", _fake)
+
+
+def _prepared(config: dict | None = None) -> MlxLmManager:
+    """A manager with prepare_model() already run (model paths resolved)."""
+    m = _manager(config)
+    m.prepare_model()
+    return m
 
 
 class FakeProc:
@@ -96,8 +115,19 @@ def test_port_and_path_from_health_check() -> None:
 
 
 # --- flag generation ---
+def test_get_start_args_before_prepare_raises() -> None:
+    with pytest.raises(RuntimeError, match="prepare_model"):
+        _manager({"model": "mlx-community/foo-4bit"}).get_start_args()
+
+
+def test_prepare_model_sets_paths() -> None:
+    m = _prepared({"model": "mlx-community/foo-4bit", "draft_model": "mlx-community/draft-4bit"})
+    assert str(m.model_path) == "mlx-community/foo-4bit"
+    assert str(m.draft_model_path) == "mlx-community/draft-4bit"
+
+
 def test_get_start_args_full_flag_mapping() -> None:
-    m = _manager(
+    m = _prepared(
         {
             "model": "mlx-community/foo-4bit",
             "max_tokens": 1024,
@@ -133,7 +163,7 @@ def test_get_start_args_full_flag_mapping() -> None:
 
 
 def test_get_start_args_minimal_omits_optional_flags() -> None:
-    args = _manager().get_start_args()
+    args = _prepared().get_start_args()
     for flag in [
         "--max-tokens", "--temp", "--top-p", "--decode-concurrency",
         "--prompt-cache-bytes", "--adapter-path", "--draft-model", "--num-draft-tokens",
@@ -143,7 +173,7 @@ def test_get_start_args_minimal_omits_optional_flags() -> None:
 
 
 def test_prompt_cache_bytes_flag() -> None:
-    m = _manager({"model": "mlx-community/foo", "prompt_cache_bytes": 4 * 1024**3})
+    m = _prepared({"model": "mlx-community/foo", "prompt_cache_bytes": 4 * 1024**3})
     args = m.get_start_args()
     assert args[args.index("--prompt-cache-bytes") + 1] == str(4 * 1024**3)
 
@@ -151,33 +181,33 @@ def test_prompt_cache_bytes_flag() -> None:
 def test_draft_model_flag(tmp_path) -> None:
     draft = tmp_path / "draft"
     draft.mkdir()
-    m = _manager({"model": "mlx-community/Llama-3.2-1B-Instruct-4bit",
-                  "draft_model": str(draft)})
+    m = _prepared({"model": "mlx-community/Llama-3.2-1B-Instruct-4bit",
+                   "draft_model": str(draft)})
     args = m.get_start_args()
     assert args[args.index("--draft-model") + 1] == str(draft)
 
 
 def test_num_draft_tokens_flag() -> None:
-    m = _manager({"model": "mlx-community/Llama-3.2-1B-Instruct-4bit",
-                  "num_draft_tokens": 5})
+    m = _prepared({"model": "mlx-community/Llama-3.2-1B-Instruct-4bit",
+                   "num_draft_tokens": 5})
     args = m.get_start_args()
     assert args[args.index("--num-draft-tokens") + 1] == "5"
 
 
 def test_draft_flags_absent_when_unset() -> None:
-    args = _manager().get_start_args()
+    args = _prepared().get_start_args()
     assert "--draft-model" not in args
     assert "--num-draft-tokens" not in args
 
 
-def test_get_start_args_repo_id_passes_through() -> None:
-    args = _manager({"model": "mlx-community/foo-4bit"}).get_start_args()
-    assert "mlx-community/foo-4bit" in args  # not mangled into a path
+def test_get_start_args_repo_id_resolves_to_snapshot_path() -> None:
+    args = _prepared({"model": "mlx-community/foo-4bit"}).get_start_args()
+    assert args[args.index("--model") + 1] == "mlx-community/foo-4bit"  # resolved path
 
 
 def test_get_start_args_expands_home(monkeypatch) -> None:
     monkeypatch.setenv("HOME", "/home/tester")
-    args = _manager({"model": "~/models/mlx-foo"}).get_start_args()
+    args = _prepared({"model": "~/models/mlx-foo"}).get_start_args()
     assert "/home/tester/models/mlx-foo" in args
 
 
@@ -346,7 +376,7 @@ def test_start_launches_process_with_argv(tmp_path, monkeypatch) -> None:
         return FakeProc()
 
     monkeypatch.setattr(native_mod.subprocess, "Popen", fake_popen)
-    m = _manager({"model": "mlx-community/foo", "log_dir": str(tmp_path / "logs")})
+    m = _prepared({"model": "mlx-community/foo", "log_dir": str(tmp_path / "logs")})
     m.start()
     assert captured["args"] == m.get_start_args()
     assert (tmp_path / "logs" / "mlx_fast.log").exists()
@@ -356,7 +386,7 @@ def test_start_launches_process_with_argv(tmp_path, monkeypatch) -> None:
 def test_stop_terminates_running_process(tmp_path, monkeypatch) -> None:
     proc = FakeProc(poll_value=None)
     monkeypatch.setattr(native_mod.subprocess, "Popen", lambda *a, **k: proc)
-    m = _manager({"model": "mlx-community/foo", "log_dir": str(tmp_path)})
+    m = _prepared({"model": "mlx-community/foo", "log_dir": str(tmp_path)})
     m.start()
     m.stop()
     assert proc.terminated is True
@@ -368,51 +398,10 @@ def test_stop_kills_on_timeout(tmp_path, monkeypatch) -> None:
     proc = FakeProc(poll_value=None)
     proc.wait_raises = subprocess.TimeoutExpired(cmd="mlx_lm.server", timeout=10)
     monkeypatch.setattr(native_mod.subprocess, "Popen", lambda *a, **k: proc)
-    m = _manager({"model": "mlx-community/foo", "log_dir": str(tmp_path)})
+    m = _prepared({"model": "mlx-community/foo", "log_dir": str(tmp_path)})
     m.start()
     m.stop()
     assert proc.killed is True
-
-
-# --- log tailer ---
-def test_tail_log_reports_download_progress(tmp_path) -> None:
-    log = tmp_path / "mlx_fast.log"
-    log.write_text(
-        "Starting httpd...\n"
-        "Fetching 8 files:  38%|███▊      | 3/8 [00:03<00:06,  1.22s/it]\n"
-    )
-    m = _manager()
-    stop = threading.Event()
-    t = threading.Thread(target=m._tail_log_for_activity, args=(log, stop), daemon=True)
-    t.start()
-    t.join(timeout=1.0)
-    stop.set()
-    assert m.activity == "downloading model: 3/8 files (38%)"
-
-
-def test_tail_log_clears_activity_at_100_percent(tmp_path) -> None:
-    log = tmp_path / "mlx_fast.log"
-    log.write_text(
-        "Fetching 8 files: 100%|██████████| 8/8 [00:03<00:00,  2.35it/s]\n"
-    )
-    m = _manager()
-    stop = threading.Event()
-    t = threading.Thread(target=m._tail_log_for_activity, args=(log, stop), daemon=True)
-    t.start()
-    t.join(timeout=1.0)
-    stop.set()
-    assert m.activity == ""
-
-
-def test_start_launches_tailer_thread(tmp_path, monkeypatch) -> None:
-    monkeypatch.setattr(native_mod.subprocess, "Popen", lambda *a, **k: FakeProc())
-    m = _manager({"model": "mlx-community/foo", "log_dir": str(tmp_path / "logs")})
-    m.start()
-    assert m._tailer is not None
-    assert m._tailer.is_alive()
-    m._tailer_stop.set()
-    m._tailer.join(timeout=1.0)
-    m.stop()
 
 
 # --- metrics ---
