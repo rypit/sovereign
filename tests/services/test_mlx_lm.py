@@ -16,9 +16,22 @@ import pytest
 import sovereign.services  # noqa: F401 - ensure registration side effect
 from sovereign.config import ServiceEntry
 from sovereign.core import base_native as native_mod
+from sovereign.core import models as models_mod
 from sovereign.core.base_manager import ServiceManager
+from sovereign.core.models import RepoInfo
 from sovereign.core.registry import get_service_manager
 from sovereign.services.mlx_lm.manager import MlxLmManager
+
+
+def _repo_info(repo_id: str, siblings: list[tuple[str, int | None]], tags=()) -> RepoInfo:
+    return RepoInfo(repo_id=repo_id, tags=tuple(tags), siblings=tuple(siblings))
+
+
+@pytest.fixture(autouse=True)
+def _offline_metadata(monkeypatch):
+    """Default HF metadata fetch to offline (None) so no test hits the network via
+    the prepare_environment prefetch or repo-id estimation; specific tests override."""
+    monkeypatch.setattr(models_mod, "fetch_repo_info", lambda repo_id: None)
 
 
 def _entry(config: dict | None = None, with_health: bool = True) -> ServiceEntry:
@@ -237,8 +250,24 @@ def test_estimated_memory_from_local_dir(tmp_path, sparse_file) -> None:
     assert m.estimated_memory_gb() == pytest.approx(2.0, abs=0.05)
 
 
-def test_estimated_memory_repo_id_unknown() -> None:
+def test_estimated_memory_repo_id_unknown(monkeypatch) -> None:
+    # Offline + uncached: metadata fetch returns None → contributes 0.0.
+    monkeypatch.setattr(models_mod, "fetch_repo_info", lambda repo_id: None)
     assert _manager({"model": "mlx-community/foo-4bit"}).estimated_memory_gb() == 0.0
+
+
+def test_estimated_memory_repo_id_from_metadata(monkeypatch) -> None:
+    info = _repo_info(
+        "mlx-community/foo-4bit",
+        [("model-00001-of-00002.safetensors", 3 * 1024**3),
+         ("model-00002-of-00002.safetensors", 1 * 1024**3),
+         ("config.json", 1000)],
+    )
+    monkeypatch.setattr(models_mod, "fetch_repo_info", lambda repo_id: info)
+    # 3 GiB + 1 GiB safetensors weights = 4.0 GB (config.json is not weight bytes).
+    assert _manager({"model": "mlx-community/foo-4bit"}).estimated_memory_gb() == pytest.approx(
+        4.0, abs=0.05
+    )
 
 
 def test_estimated_memory_includes_prompt_cache_bytes(tmp_path, sparse_file) -> None:
@@ -261,6 +290,7 @@ def test_estimated_memory_includes_local_draft_model(tmp_path, sparse_file) -> N
 
 
 def test_estimated_memory_repo_id_draft_contributes_zero(tmp_path, sparse_file) -> None:
+    # draft repo id is offline (autouse fixture) → contributes 0.0
     model_dir = tmp_path / "main"
     model_dir.mkdir()
     sparse_file(model_dir / "weights.safetensors", 2 * 1024**3)  # 2 GiB

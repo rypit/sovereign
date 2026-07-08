@@ -16,7 +16,6 @@ from sovereign.config import ServiceEntry
 from sovereign.core.base_native import (
     NativeEngineManager,
     check_local_artifact,
-    local_model_bytes,
     looks_local,
 )
 from sovereign.core.registry import register_service
@@ -33,6 +32,7 @@ class LlamaCppManager(NativeEngineManager):
 
     base_type = "llama_cpp"
     config_cls = LlamaCppConfig
+    model_artifact_kind = "gguf"
     #: Provisioned via the package Brewfile (`brew "llama.cpp"`) when missing.
     provisioning_binary = "llama-server"
 
@@ -42,15 +42,16 @@ class LlamaCppManager(NativeEngineManager):
 
     # --- resource estimation (§7) ---
     def estimated_memory_gb(self) -> float:
-        """Model (+ draft) weights on disk + KV cache, or a declared override.
+        """Model (+ draft) weights + KV cache, or a declared override.
 
-        HuggingFace repo ids not yet cached locally contribute 0.0 (admitted).
+        For HuggingFace repo ids the weight estimate comes from repo metadata
+        (selected GGUF file sizes); unknown (offline + uncached) contributes 0.0.
         """
         if self.memory_override_gb is not None:
             return round(self.memory_override_gb, 2)
-        total = local_model_bytes(self.config.model)
+        total = self._model_bytes(self.config.model)
         if self.config.draft_model is not None:
-            total += local_model_bytes(self.config.draft_model)
+            total += self._model_bytes(self.config.draft_model)
         return round(total / (1024**3) + self.estimated_kv_cache_gb(), 2)
 
     def estimated_kv_cache_gb(self) -> float:

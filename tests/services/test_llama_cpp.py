@@ -15,9 +15,22 @@ import pytest
 import sovereign.services  # noqa: F401 - ensure registration side effect
 from sovereign.config import ServiceEntry
 from sovereign.core import base_native as native_mod
+from sovereign.core import models as models_mod
 from sovereign.core.base_manager import ServiceManager
+from sovereign.core.models import RepoInfo
 from sovereign.core.registry import get_service_manager
 from sovereign.services.llama_cpp.manager import LlamaCppManager
+
+
+def _repo_info(repo_id: str, siblings: list[tuple[str, int | None]], tags=()) -> RepoInfo:
+    return RepoInfo(repo_id=repo_id, tags=tuple(tags), siblings=tuple(siblings))
+
+
+@pytest.fixture(autouse=True)
+def _offline_metadata(monkeypatch):
+    """Default HF metadata fetch to offline (None) so no test hits the network via
+    the prepare_environment prefetch or repo-id estimation; specific tests override."""
+    monkeypatch.setattr(models_mod, "fetch_repo_info", lambda repo_id: None)
 
 
 def _entry(config: dict | None = None, with_health: bool = True) -> ServiceEntry:
@@ -438,11 +451,24 @@ def test_estimated_memory_from_model_file_plus_kv(tmp_path, sparse_file) -> None
     assert m.estimated_memory_gb() == pytest.approx(6.0, abs=0.05)
 
 
-def test_estimated_memory_repo_id_is_kv_only() -> None:
+def test_estimated_memory_repo_id_is_kv_only(monkeypatch) -> None:
+    # Offline + uncached: weight bytes unknown → only the KV-cache term counts.
+    monkeypatch.setattr(models_mod, "fetch_repo_info", lambda repo_id: None)
     m = _manager(
         {"model": "org/repo", "context_size": 4096, "kv_bytes_per_token": 1024**2}
     )
     assert m.estimated_memory_gb() == pytest.approx(m.estimated_kv_cache_gb(), abs=0.001)
+
+
+def test_estimated_memory_repo_id_from_metadata(monkeypatch) -> None:
+    info = _repo_info(
+        "org/repo",
+        [("model.Q4_K_M.gguf", 2 * 1024**3), ("model.Q8_0.gguf", 4 * 1024**3)],
+    )
+    monkeypatch.setattr(models_mod, "fetch_repo_info", lambda repo_id: info)
+    # Bare repo, two quants: prefers Q4_K_M (2 GiB) + no KV (context unset) → ~2.0 GB.
+    m = _manager({"model": "org/repo"})
+    assert m.estimated_memory_gb() == pytest.approx(2.0, abs=0.05)
 
 
 def test_estimated_memory_includes_local_draft(tmp_path, sparse_file) -> None:
