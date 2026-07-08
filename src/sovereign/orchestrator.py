@@ -409,8 +409,14 @@ class Orchestrator:
 
     def status_snapshot(self) -> dict:
         """Live dashboard snapshot (§8) — the shape `main._dashboard()` consumes."""
+        reservations = self.budgeter.reservations()
         return {
             "updated_at": datetime.now(UTC).isoformat(),
+            "budget": {
+                "usable_gb": self.budgeter.usable_gb,
+                "reserved_gb": round(self.budgeter.reserved_gb, 2),
+                "available_gb": round(self.budgeter.available_gb, 2),
+            },
             "services": {
                 name: {
                     "state": str(self.states.get(name)),
@@ -422,6 +428,7 @@ class Orchestrator:
                         else None
                     ),
                     "descriptor": _service_descriptor(self._entries[name]),
+                    "estimated_gb": reservations.get(name),
                     "metrics": self.metrics.get(name, {}),
                     "activity": getattr(self.managers.get(name), "activity", "") or "",
                 }

@@ -351,34 +351,48 @@ def cached_model_path(ref: ModelRef, kind: Literal["snapshot", "gguf"]) -> Path 
     return first_path
 
 
-def estimate_model_bytes(ref: ModelRef, kind: Literal["snapshot", "gguf"]) -> int | None:
-    """Estimate model weight size in bytes via a fallback chain.
+EstimateSource = Literal["local", "cached", "hub", "unknown"]
 
-    Order: local disk → cached HF path on disk → HF repo metadata → None.
+
+def estimate_model_bytes_with_source(
+    ref: ModelRef, kind: Literal["snapshot", "gguf"]
+) -> tuple[int | None, EstimateSource]:
+    """Estimate model weight size in bytes plus where the number came from.
+
+    Fallback chain: local disk → cached HF path on disk → HF repo metadata → unknown.
+    ``sovereign plan`` surfaces the source so a dry-run says whether a model is already
+    on disk or would be fetched from the hub.
     """
     # 1. Local
     if ref.is_local:
         n = local_model_bytes(ref.raw)
-        return n or None
+        return (n or None), "local"
 
     # 2. Cached on disk
     cached = cached_model_path(ref, kind)
     if cached is not None:
         if cached.is_dir():
             total = sum(f.stat().st_size for f in cached.rglob("*") if f.is_file())
-            return total or None
+            return (total or None), "cached"
         if cached.is_file():
-            size = cached.stat().st_size
-            return size or None
+            return (cached.stat().st_size or None), "cached"
 
     # 3. Repo metadata
     if ref.repo_id is not None:
         info = fetch_repo_info(ref.repo_id)
         if info is not None:
-            return weight_bytes(info, kind, quant=ref.quant, filename=ref.filename)
+            return weight_bytes(info, kind, quant=ref.quant, filename=ref.filename), "hub"
 
     # 4. Unknown
-    return None
+    return None, "unknown"
+
+
+def estimate_model_bytes(ref: ModelRef, kind: Literal["snapshot", "gguf"]) -> int | None:
+    """Estimate model weight size in bytes via a fallback chain.
+
+    Order: local disk → cached HF path on disk → HF repo metadata → None.
+    """
+    return estimate_model_bytes_with_source(ref, kind)[0]
 
 
 # ---------------------------------------------------------------------------
