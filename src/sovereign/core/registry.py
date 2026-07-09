@@ -38,7 +38,7 @@ class _Router(Protocol):
 
 
 # The concrete router is registered as an import side effect of the inference-engine
-# package (see ``services/inference_engines/routing.py``), the same dependency-inversion
+# package (see ``services/inference/routing.py``), the same dependency-inversion
 # pattern as ``@register_service`` — core never imports the engine package by name.
 _ROUTER: _Router | None = None
 

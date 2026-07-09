@@ -1,14 +1,14 @@
-"""``docker_engine`` — the generic Docker container service (§12).
+"""``docker`` — the generic Docker container service (§12).
 
 Sovereign runs auxiliary services in Docker (§2.1), but Docker Desktop / OrbStack
 owns the daemon lifecycle on macOS, not Sovereign. So there is no standalone
 "engine" service to declare or depend on: any service naming ``base_type:
-docker_engine`` runs an arbitrary container from its own ``config:`` block, and
+docker`` runs an arbitrary container from its own ``config:`` block, and
 this manager verifies the daemon is reachable (as part of its own
 ``prepare_environment``) before pulling the image and starting the container.
 
 This module also hosts the shared Docker CLI helpers reused by every
-``docker_engine`` instance: ``run_docker``, ``stream_pull``, ``container_metrics``.
+``docker`` instance: ``run_docker``, ``stream_pull``, ``container_metrics``.
 """
 
 from __future__ import annotations
@@ -28,11 +28,11 @@ from sovereign.core.base_manager import ActivityMixin
 from sovereign.core.provisioning import Provisioner
 from sovereign.core.registry import register_service
 from sovereign.core.resolver import ConsumerKind, ResolvedEndpoint, Resolver, ServiceRegistry
-from sovereign.services.docker_engine.config import DockerEngineConfig, FileSpec
+from sovereign.services.docker.config import DockerConfig, FileSpec
 
 _HTTP_TIMEOUT = 2.0
 
-# --- Shared Docker CLI helpers (reused by every docker_engine instance) ---
+# --- Shared Docker CLI helpers (reused by every docker instance) ---
 
 # A `docker pull` progress line: "<layer-id>: <status>".
 _PULL_LINE = re.compile(r"^(?P<layer>[0-9a-f]{12,}): (?P<status>.+)$")
@@ -178,11 +178,11 @@ def materialize_file(spec: FileSpec, env: Mapping[str, str] | None = None) -> bo
     return True
 
 
-@register_service("docker_engine")
-class DockerEngineManager(ActivityMixin, Provisioner):
+@register_service("docker")
+class DockerManager(ActivityMixin, Provisioner):
     """Supervises a generic Docker container described entirely by its config."""
 
-    base_type = "docker_engine"
+    base_type = "docker"
     consumer_kind = ConsumerKind.DOCKER
     #: Provisioned via the package Brewfile (`cask "docker-desktop"`) when missing.
     provisioning_binary = "docker"
@@ -190,7 +190,7 @@ class DockerEngineManager(ActivityMixin, Provisioner):
     def __init__(self, entry: ServiceEntry) -> None:
         self.name = entry.name
         self.dependencies = entry.dependencies
-        self.config = DockerEngineConfig.model_validate(entry.config)
+        self.config = DockerConfig.model_validate(entry.config)
         self._raw_env: dict[str, Any] = dict(entry.env_overrides or {})
         self.resolved_env: dict[str, Any] = {}
         self.health_path = entry.health_check.endpoint if entry.health_check else "/"

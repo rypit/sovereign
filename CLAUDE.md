@@ -39,8 +39,8 @@ core/
   resources.py     memory budget / admission control (refuse-to-boot)
   provisioning.py  per-integration dependency install (Brewfile + commands)
 services/
-  docker_engine/         auxiliary services in Docker
-  inference_engines/     native engines + their shared base
+  docker/         auxiliary services in Docker
+  inference/     native engines + their shared base
     base.py              shared subprocess/health/metrics lifecycle (NativeEngineManager)
     hf.py                the HuggingFace pipeline: ref parsing, metadata, GGUF
                          selection, memory estimation, download, RoutingCache
@@ -55,7 +55,7 @@ utils/             state.json/manifest.json IO
 
 Dependency direction: `config` depends only on Pydantic (the "golden rule" —
 never subprocess/os/docker in a config module). The HF pipeline
-(`services/inference_engines/hf.py`) imports no managers; nothing above
+(`services/inference/hf.py`) imports no managers; nothing above
 `services/` imports it — the orchestrator/planner/CLI route through
 `core.registry.route_entry` and catch `core.errors`, so the engine-domain HF
 code stays a leaf. `orchestrator` imports `core/*`; nothing in `orchestrator`
@@ -66,17 +66,17 @@ imports `bench`.
 - **Registration**: integrations self-register via `@register_service("x")` /
   `@register_harness("x")` decorators. `services/__init__.py` walks its tree
   recursively (`pkgutil.walk_packages`, so nested groupings like
-  `inference_engines/llama_cpp` register too); `harnesses/__init__.py`
+  `inference/llama_cpp` register too); `harnesses/__init__.py`
   pkgutil-imports every subpackage; `core/registry.populate_registries()` is
   the one call every lookup path makes first. Adding an integration = dropping
   a folder with `__init__.py` + `config.py` + `manager.py` (plus optional
-  `Brewfile`) under `services/` (or `services/inference_engines/` for a native
+  `Brewfile`) under `services/` (or `services/inference/` for a native
   engine); no aggregator edit needed. Harness modules must import optional deps
   lazily (inside methods) — discovery imports them unconditionally.
 - **Optional manager capabilities** are Protocols in `core/base_manager.py`,
   checked with `isinstance()` — don't `getattr`-probe for hooks, and add new
   hooks to a Protocol so they stay visible.
-- **Test seams**: tests patch `sovereign.services.inference_engines.hf.<fn>`
+- **Test seams**: tests patch `sovereign.services.inference.hf.<fn>`
   (engines and the router call through the `hf_models`/`hf` module alias),
   `run_docker()` for Docker, and
   `urllib.request.urlopen` for health checks. `tests/conftest.py` autouse

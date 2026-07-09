@@ -82,7 +82,7 @@ sovereign/
 │       │   └── resources.py       # ResourceBudgeter (admission control)
 │       ├── services/
 │       │   ├── __init__.py        # imports + registers every service module
-│       │   ├── docker_engine/     # config.py + manager.py
+│       │   ├── docker/     # config.py + manager.py
 │       │   ├── llama_cpp/
 │       │   ├── open_webui/
 │       │   ├── searxng/           # Docker, dynamic env wiring
@@ -105,7 +105,7 @@ sovereign/
     ├── test_resources.py
     ├── test_bench.py
     ├── services/
-    │   ├── test_docker_engine.py
+    │   ├── test_docker.py
     │   ├── test_llama_cpp.py
     │   └── test_open_webui.py
     └── harnesses/
@@ -194,8 +194,8 @@ resources:
   default_priority: medium
 
 services:
-  - name: docker_engine
-    base_type: docker_engine
+  - name: docker
+    base_type: docker
     priority: critical
     dependencies: []
 
@@ -236,7 +236,7 @@ services:
       port: 3000
     env_overrides:
       OLLAMA_API_BASE_URL: "{{ llama_heavy_v1.endpoint }}"   # resolves to host.docker.internal for containers
-    dependencies: [docker_engine, llama_heavy_v1]
+    dependencies: [docker, llama_heavy_v1]
 
 harnesses:
   - name: cline_local
@@ -383,7 +383,7 @@ $ sovereign monitor
   SERVICE          STATUS      CPU %    MEM (MB)    DEPENDENCIES
   ──────────────────────────────────────────────────────────────
   llama_heavy_v1   [RUNNING]    12.4%    14500 MB    -
-  open_webui       [STARTING]    0.5%      850 MB    docker_engine, llama_heavy_v1
+  open_webui       [STARTING]    0.5%      850 MB    docker, llama_heavy_v1
   ──────────────────────────────────────────────────────────────
   [Press Ctrl+C to exit]
 ```
@@ -405,7 +405,7 @@ Panel/sparkline/plotext variants are deferred — the `get_metrics()` contract a
 
 | Entity | `base_type` | Kind | Layer | Status |
 |---|---|---|---|---|
-| Docker daemon interface | `docker_engine` | Service | Infrastructure | ✅ Implemented (Phase 3) |
+| Docker daemon interface | `docker` | Service | Infrastructure | ✅ Implemented (Phase 3) |
 | llama.cpp | `llama_cpp` | Service | Inference | ✅ Implemented (Phase 4) |
 | Open WebUI | `open_webui` | Service | Frontend | ✅ Implemented (Phase 5) |
 | SearXNG | `searxng` | Service | Convenience | ✅ Implemented — dynamic web-search env wiring into `open_webui`; 2nd Docker service, first multi-dependency test |
@@ -453,7 +453,7 @@ Each phase has a concrete exit criterion — don't move on until it's true.
 **Phase 2 — `sovereign.yaml` parsing.** ✅ **Complete.** Top-level `SovereignConfig`; `services: list[ServiceEntry]`, `harnesses: list[HarnessEntry]`; descriptive validation errors.
 *Exit: a fixture YAML with services + harnesses loads and validates in a test.*
 
-**Phase 3 — First service: `docker_engine`.** ✅ **Complete.** Thinnest possible manager — verify the daemon is reachable, expose `run_compose()`.
+**Phase 3 — First service: `docker`.** ✅ **Complete.** Thinnest possible manager — verify the daemon is reachable, expose `run_compose()`.
 *Exit: `is_healthy()` correctly reflects whether Docker Desktop/OrbStack is running.*
 
 **Phase 4 — First native engine: `llama_cpp`.** ✅ **Complete.** Real subprocess lifecycle, HTTP `is_healthy()`, `psutil` `get_metrics()`, `prepare_environment()` validating `model_path`.

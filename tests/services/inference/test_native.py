@@ -7,9 +7,9 @@ import struct
 
 import pytest
 
-from sovereign.services.inference_engines import base as base_native
-from sovereign.services.inference_engines.base import check_local_artifact, macos_phys_footprint
-from sovereign.services.inference_engines.hf import local_model_bytes, looks_local
+from sovereign.services.inference import base as base_native
+from sovereign.services.inference.base import check_local_artifact, macos_phys_footprint
+from sovereign.services.inference.hf import local_model_bytes, looks_local
 
 
 # --- looks_local ---

@@ -46,7 +46,7 @@ class FakeManager:
         self.resolved_with = None
         self.activity = ""
         # A native engine exposes prepare_model (pre-download); managers without
-        # the capability (docker_engine, older fakes) simply lack the attribute,
+        # the capability (docker, older fakes) simply lack the attribute,
         # which is what the SupportsModelPreparation isinstance check keys on.
         if has_prepare_model:
             self.prepare_model = self._prepare_model
@@ -320,8 +320,8 @@ def test_build_routes_auto_base_type(monkeypatch) -> None:
 
 
 def test_build_auto_routing_uses_cache_offline(tmp_path, monkeypatch) -> None:
-    from sovereign.services.inference_engines import hf as models_mod
-    from sovereign.services.inference_engines.hf import RoutingCache
+    from sovereign.services.inference import hf as models_mod
+    from sovereign.services.inference.hf import RoutingCache
 
     RoutingCache(tmp_path / "models.json").put(
         "org/m", base_type="llama_cpp", weight_bytes=None
@@ -442,7 +442,7 @@ def test_status_snapshot_descriptor_by_base_type() -> None:
         [
             {
                 "name": "webui",
-                "base_type": "docker_engine",
+                "base_type": "docker",
                 "config": {"image": "ghcr.io/open-webui/open-webui:main"},
             },
             {

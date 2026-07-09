@@ -13,8 +13,8 @@
 #                     (~3-4 GB, one time). Want an instant test with no download?
 #                     Delete the open_webui block below.
 #
-# Both are `base_type: docker_engine` — a generic container runner. The Docker
-# daemon is implicit infrastructure: each docker_engine service verifies it's
+# Both are `base_type: docker` — a generic container runner. The Docker
+# daemon is implicit infrastructure: each docker service verifies it's
 # reachable on its own, so there's no separate engine entry or dependency to
 # declare.
 
@@ -27,7 +27,7 @@ resources:
 
 services:
   - name: searxng
-    base_type: docker_engine
+    base_type: docker
     priority: medium
     health_check:
       type: http
@@ -54,7 +54,7 @@ services:
     dependencies: []
 
   - name: open_webui
-    base_type: docker_engine
+    base_type: docker
     priority: medium
     health_check:
       type: http

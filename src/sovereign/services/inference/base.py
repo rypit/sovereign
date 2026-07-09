@@ -23,7 +23,7 @@ import psutil
 
 # The runtime HF surface (metadata fetch, estimation, download) is called through
 # the module — one seam, so tests patch
-# `sovereign.services.inference_engines.hf.<fn>` and every caller sees it. Pure
+# `sovereign.services.inference.hf.<fn>` and every caller sees it. Pure
 # helpers are imported by name.
 from sovereign.config import ServiceEntry
 from sovereign.core.base_config import NativeEngineConfig
@@ -31,8 +31,8 @@ from sovereign.core.base_manager import ActivityMixin
 from sovereign.core.provisioning import Provisioner
 from sovereign.core.resolver import ConsumerKind, ResolvedEndpoint
 from sovereign.core.resources import priority_to_nice
-from sovereign.services.inference_engines import hf as hf_models
-from sovereign.services.inference_engines.hf import looks_local, parse_model_ref
+from sovereign.services.inference import hf as hf_models
+from sovereign.services.inference.hf import looks_local, parse_model_ref
 
 # Per-request health probe timeout (seconds) — distinct from the overall boot
 # timeout the Orchestrator enforces while polling.

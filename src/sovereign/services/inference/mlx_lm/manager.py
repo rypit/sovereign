@@ -13,14 +13,14 @@ import os
 from typing import TYPE_CHECKING
 
 from sovereign.core.registry import register_service
-from sovereign.services.inference_engines.base import (
+from sovereign.services.inference.base import (
     NativeEngineManager,
     check_local_artifact,
 )
-from sovereign.services.inference_engines.mlx_lm.config import MlxLmConfig
+from sovereign.services.inference.mlx_lm.config import MlxLmConfig
 
 if TYPE_CHECKING:
-    from sovereign.services.inference_engines.hf import ModelRef, RepoInfo
+    from sovereign.services.inference.hf import ModelRef, RepoInfo
 
 
 @register_service("mlx_lm")

@@ -578,7 +578,7 @@ def test_provision_unscoped_covers_all_registered() -> None:
     # full walk over every registered service + harness without side effects.
     result = runner.invoke(app, ["provision"])
     assert result.exit_code == 0, result.stdout
-    for base_type in ("llama_cpp", "docker_engine", "cline_cli", "mini_swe_agent"):
+    for base_type in ("llama_cpp", "docker", "cline_cli", "mini_swe_agent"):
         assert base_type in result.stdout
 
 
@@ -647,7 +647,7 @@ def test_bench_compare_json_output(tmp_path) -> None:
 import types  # noqa: E402
 
 from sovereign.core.errors import RoutingError  # noqa: E402
-from sovereign.services.inference_engines import hf as models_mod  # noqa: E402
+from sovereign.services.inference import hf as models_mod  # noqa: E402
 
 _PLAN_YAML = """
 version: "1.1"

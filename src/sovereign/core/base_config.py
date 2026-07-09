@@ -23,7 +23,7 @@ class SovereignBaseModel(BaseModel):
 class NativeEngineConfig(SovereignBaseModel):
     """Fields every native engine's ``config:`` block shares.
 
-    :class:`~sovereign.services.inference_engines.base.NativeEngineManager` programs against this
+    :class:`~sovereign.services.inference.base.NativeEngineManager` programs against this
     type; concrete engines subclass it, override ``binary``'s default, and add
     their own knobs.
     """

@@ -19,14 +19,14 @@ from typing import TYPE_CHECKING
 from sovereign.core.base_manager import RoutesModelRef
 from sovereign.core.errors import RoutingError
 from sovereign.core.registry import register_router
-from sovereign.services.inference_engines import hf
+from sovereign.services.inference import hf
 
 if TYPE_CHECKING:
     from pathlib import Path
 
     from sovereign.config import ServiceEntry
     from sovereign.core.base_manager import ServiceManager
-    from sovereign.services.inference_engines.hf import ModelRef, RepoInfo
+    from sovereign.services.inference.hf import ModelRef, RepoInfo
 
 log = logging.getLogger(__name__)
 

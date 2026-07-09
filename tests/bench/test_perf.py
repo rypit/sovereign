@@ -163,7 +163,7 @@ def test_passes_thresholds_no_thresholds_always_passes() -> None:
 def test_primary_engine_picks_first_with_model() -> None:
     manifest = {
         "services": [
-            {"name": "docker_engine"},
+            {"name": "docker"},
             {
                 "name": "engine",
                 "endpoint": {"scheme": "http", "host": "127.0.0.1", "port": 11435, "model": "m"},
@@ -175,7 +175,7 @@ def test_primary_engine_picks_first_with_model() -> None:
 
 
 def test_primary_engine_none_when_no_model_endpoint() -> None:
-    manifest = {"services": [{"name": "docker_engine"}]}
+    manifest = {"services": [{"name": "docker"}]}
     assert _primary_engine(manifest) is None
 
 
@@ -187,7 +187,7 @@ def _job() -> Job:
 
 
 def _write_manifest(state_dir, *, with_engine=True) -> None:
-    services = [{"name": "docker_engine"}]
+    services = [{"name": "docker"}]
     if with_engine:
         services.append(
             {
@@ -198,7 +198,7 @@ def _write_manifest(state_dir, *, with_engine=True) -> None:
                     "port": 11435,
                     "model": "llama3-70b",
                 },
-                "co_resident": ["docker_engine"],
+                "co_resident": ["docker"],
             }
         )
     write_json(
@@ -229,7 +229,7 @@ def test_run_perf_attach_cell_success(tmp_path, monkeypatch) -> None:
     result = asyncio.run(run_perf_attach_cell(_job(), spec, tmp_path))
     assert result["engine"] == "engine"
     assert result["variant_hash"] == "abc123"
-    assert result["co_resident"] == ["docker_engine"]
+    assert result["co_resident"] == ["docker"]
     assert result["gate_passed"] is True
 
 

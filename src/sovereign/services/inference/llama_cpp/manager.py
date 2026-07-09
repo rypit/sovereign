@@ -15,18 +15,18 @@ from typing import TYPE_CHECKING
 
 from sovereign.config import ServiceEntry
 from sovereign.core.registry import register_service
-from sovereign.services.inference_engines.base import (
+from sovereign.services.inference.base import (
     NativeEngineManager,
     check_local_artifact,
 )
-from sovereign.services.inference_engines.llama_cpp.config import (
+from sovereign.services.inference.llama_cpp.config import (
     VALID_KV_CACHE_TYPES,
     LlamaCppConfig,
     LlamaPolicy,
 )
 
 if TYPE_CHECKING:
-    from sovereign.services.inference_engines.hf import ModelRef, RepoInfo
+    from sovereign.services.inference.hf import ModelRef, RepoInfo
 
 
 @register_service("llama_cpp")

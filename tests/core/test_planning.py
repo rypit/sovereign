@@ -54,7 +54,7 @@ def test_plan_declared_memory_admits_and_labels_source(tmp_path) -> None:
         [
             {
                 "name": "webui",
-                "base_type": "docker_engine",
+                "base_type": "docker",
                 "memory_gb": 4,
                 "config": {"image": "img:latest", "port": 3000},
             }
@@ -72,7 +72,7 @@ def test_plan_refuses_over_budget_with_actionable_error(tmp_path) -> None:
         [
             {
                 "name": "big",
-                "base_type": "docker_engine",
+                "base_type": "docker",
                 "memory_gb": 32,
                 "config": {"image": "img:latest", "port": 3000},
             }

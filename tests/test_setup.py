@@ -30,7 +30,7 @@ def test_brewfile_declares_bootstrap_only() -> None:
     text = setup.BREWFILE.read_text()
     assert 'brew "uv"' in text
     assert 'brew "llama.cpp"' not in text  # moved to services/llama_cpp/Brewfile
-    assert 'cask "docker-desktop"' not in text  # moved to services/docker_engine/Brewfile
+    assert 'cask "docker-desktop"' not in text  # moved to services/docker/Brewfile
 
 
 def test_main_runs_bootstrap_then_provision(monkeypatch) -> None:
