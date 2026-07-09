@@ -283,7 +283,7 @@ class DockerManager(ActivityMixin, Provisioner):
                 stream_pull(
                     self.config.image,
                     binary=self.config.binary,
-                    on_progress=self.set_activity,
+                    on_progress=lambda line: self.set_activity([line]),
                 )
             finally:
                 self.clear_activity()

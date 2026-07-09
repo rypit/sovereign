@@ -33,9 +33,9 @@ class ActivityMixin:
 
     activity: tuple[str, ...] = ()
 
-    def set_activity(self, activity: str | Sequence[str]) -> None:
-        """Set the current activity — one line (``str``) or several (a sequence)."""
-        self.activity = (activity,) if isinstance(activity, str) else tuple(activity)
+    def set_activity(self, lines: Sequence[str]) -> None:
+        """Set the current activity to one or more lines (wrap a single line in a list)."""
+        self.activity = tuple(lines)
 
     def clear_activity(self) -> None:
         self.activity = ()
