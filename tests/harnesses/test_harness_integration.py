@@ -15,7 +15,7 @@ class FakeEngineManager:
     def __init__(self, entry) -> None:
         self.name = entry.name
         self.dependencies = entry.dependencies
-        self.activity = ""
+        self.activity = ()
 
     def prepare_environment(self) -> None: ...
     def start(self) -> None: ...

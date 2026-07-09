@@ -19,6 +19,16 @@ class BudgetStatus(TypedDict):
     available_gb: float
 
 
+class ActivityStatus(TypedDict):
+    """A service's current activity as discrete lines (empty when idle).
+
+    Structured rather than a newline-joined string so consumers render the lines
+    themselves — e.g. huggingface_hub's several concurrent download bars.
+    """
+
+    lines: list[str]
+
+
 class ServiceStatus(TypedDict):
     """One service's row in the dashboard."""
 
@@ -28,7 +38,7 @@ class ServiceStatus(TypedDict):
     descriptor: str | None
     estimated_gb: float | None
     metrics: dict[str, float | str]
-    activity: str
+    activity: ActivityStatus
 
 
 class StatusSnapshot(TypedDict):

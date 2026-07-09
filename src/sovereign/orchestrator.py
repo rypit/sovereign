@@ -450,7 +450,9 @@ class Orchestrator:
                     "descriptor": _service_descriptor(self._entries[name]),
                     "estimated_gb": reservations.get(name),
                     "metrics": self.metrics.get(name, {}),
-                    "activity": getattr(self.managers.get(name), "activity", "") or "",
+                    "activity": {
+                        "lines": list(getattr(self.managers.get(name), "activity", ()) or ())
+                    },
                 }
                 for name in self._service_names
             },

@@ -403,13 +403,11 @@ class _ActivityFeed:
     ("Fetching N files"), the summed network transfer ("Downloading bytes") and the summed
     reconstruction — folding the per-file bars into those internally. Each bar renders into
     its own sink; the feed keeps the latest line from every live bar and forwards them as a
-    multi-line block (one bar per line), so concurrently-active bars all show at once instead
-    of overwriting each other. Bar updates arrive from worker threads, hence the lock.
+    list (one bar per line), so concurrently-active bars all show at once instead of
+    overwriting each other. Bar updates arrive from worker threads, hence the lock.
     """
 
-    _SEP = "\n"
-
-    def __init__(self, progress: Callable[[str], None]) -> None:
+    def __init__(self, progress: Callable[[list[str]], None]) -> None:
         self._progress = progress
         self._bars: dict[int, str] = {}  # bar id -> latest line, kept in first-seen order
         self._lock = threading.Lock()
@@ -440,9 +438,9 @@ class _ActivityFeed:
         with self._lock:
             if line:
                 self._bars[bar_id] = line
-            combined = self._SEP.join(self._bars.values())
-        if combined:
-            self._progress(combined)
+            lines = list(self._bars.values())
+        if lines:
+            self._progress(lines)
 
     def _drop(self, bar_id: int) -> None:
         with self._lock:
@@ -468,7 +466,7 @@ def download_model(
     ref: ModelRef,
     kind: Literal["snapshot", "gguf"],
     *,
-    progress: Callable[[str], None] | None = None,
+    progress: Callable[[list[str]], None] | None = None,
 ) -> Path:
     """Download a model to the HF cache and return its local path.
 

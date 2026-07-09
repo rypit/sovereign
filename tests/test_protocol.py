@@ -12,7 +12,7 @@ class FakeManager:
     def __init__(self) -> None:
         self.name = "fake"
         self.dependencies: list[str] = []
-        self.activity = ""
+        self.activity = ()
 
     def start(self) -> None: ...
     def stop(self) -> None: ...

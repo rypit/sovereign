@@ -31,7 +31,7 @@ class FakeCleanroomManager:
     def __init__(self, entry) -> None:
         self.name = entry.name
         self.dependencies = entry.dependencies
-        self.activity = ""
+        self.activity = ()
 
     def estimated_memory_gb(self) -> float:
         return 1.0
