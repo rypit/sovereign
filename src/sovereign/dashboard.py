@@ -199,13 +199,13 @@ def dashboard(status: Mapping[str, Any], history: MetricHistory | None = None) -
             endpoint,
         )
 
-        activity = (svc.get("activity") or "").strip()
-        if activity:
-            # Activity may span multiple lines (e.g. huggingface_hub's concurrent
-            # download bars): first line sits inline, the rest indent under it.
-            first, *rest = activity.split("\n")
-            activity_lines.append(f"  {name}  [{status_label(state)}] {first}")
-            activity_lines.extend(f"    {line}" for line in rest)
+        lines = [ln for ln in (svc.get("activity") or {}).get("lines", []) if ln.strip()]
+        if lines:
+            # A header naming the service, then each activity line indented under it
+            # (e.g. huggingface_hub's several concurrent download bars). State is
+            # already in the table's STATUS column, so it isn't repeated here.
+            activity_lines.append(f"  {name}")
+            activity_lines.extend(f"    {ln}" for ln in lines)
 
     footer = budget_footer(status.get("budget"))
     if not activity_lines and footer is None:

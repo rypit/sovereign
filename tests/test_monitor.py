@@ -197,7 +197,7 @@ def test_dashboard_renders_activity_area() -> None:
             "open_webui": {
                 "state": "provisioning",
                 "metrics": {},
-                "activity": "pulling open-webui — 3/8 layers",
+                "activity": {"lines": ["pulling open-webui — 3/8 layers"]},
             }
         }
     }
@@ -216,9 +216,12 @@ def test_dashboard_renders_est_column_and_budget_footer() -> None:
                 "descriptor": "mlx-community/Qwen3.6-27B-8bit",
                 "estimated_gb": 27.0,
                 "metrics": {},
-                # activity is huggingface_hub's own tqdm-rendered line, forwarded as-is
-                "activity": "model.safetensors:  18%|█▊        | 3.20G/17.8G "
-                "[01:10<05:20, 45.0MB/s]",
+                # activity is huggingface_hub's own tqdm-rendered lines, forwarded as-is
+                "activity": {
+                    "lines": [
+                        "model.safetensors:  18%|█▊        | 3.20G/17.8G [01:10<05:20, 45.0MB/s]"
+                    ]
+                },
             },
         },
     }
@@ -245,7 +248,9 @@ def test_dashboard_activity_shown_for_ready_service() -> None:
             "mlx_heavy": {
                 "state": "ready",
                 "metrics": {},
-                "activity": "Fetching 8 files:  38%|███▊      | 3/8 [00:10<00:17,  3.4s/it]",
+                "activity": {
+                    "lines": ["Fetching 8 files:  38%|███▊      | 3/8 [00:10<00:17,  3.4s/it]"]
+                },
             }
         }
     }
@@ -255,35 +260,39 @@ def test_dashboard_activity_shown_for_ready_service() -> None:
 
 
 def test_dashboard_renders_multiline_activity_indented() -> None:
-    # huggingface_hub's concurrent download bars arrive as a multi-line activity
-    # string; the first line sits inline, continuation lines indent under it.
+    # huggingface_hub's concurrent download bars arrive as several activity lines:
+    # a header names the service and each line indents under it, without repeating state.
     status = {
         "services": {
             "engine": {
                 "state": "downloading",
                 "metrics": {},
-                "activity": (
-                    "Fetching 8 files:  38%| 3/8\n"
-                    "Downloading bytes:  44%| 12.9G/29.0G\n"
-                    "Reconstructing:  44%| 12.9G/29.0G"
-                ),
+                "activity": {
+                    "lines": [
+                        "Fetching 8 files:  38%| 3/8",
+                        "Downloading bytes:  44%| 12.9G/29.0G",
+                        "Reconstructing:  44%| 12.9G/29.0G",
+                    ]
+                },
             }
         }
     }
     text = _render(dashboard(status))
     lines = [line for line in text.splitlines() if line.strip()]
+    header = next(line for line in lines if line.strip() == "engine")
     fetching = next(line for line in lines if "Fetching 8 files" in line)
     downloading = next(line for line in lines if "Downloading bytes" in line)
-    assert "[DOWNLOADING]" in fetching  # first bar inline with the service header
-    assert "[DOWNLOADING]" not in downloading  # continuation line, header not repeated
-    assert downloading.startswith("    ")  # indented under the header
+    assert header.startswith("  ")  # service name header, indented under "Activity:"
+    assert "[DOWNLOADING]" not in fetching  # state not repeated in the activity block
+    assert fetching.startswith("    ")  # each bar line indents under the header
+    assert downloading.startswith("    ")
 
 
 def test_dashboard_no_activity_area_when_idle() -> None:
     # ready service with no activity should not show an Activity area
     status = {
         "services": {
-            "engine": {"state": "ready", "metrics": {}, "activity": ""}
+            "engine": {"state": "ready", "metrics": {}, "activity": {"lines": []}}
         }
     }
     text = _render(dashboard(status))

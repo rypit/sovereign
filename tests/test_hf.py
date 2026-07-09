@@ -427,47 +427,47 @@ def test_fetch_success_is_cached():
 
 
 def test_activity_feed_forwards_rendered_lines():
-    messages: list[str] = []
-    tqdm_cls = models_mod._ActivityFeed(messages.append).tqdm_class()
+    emissions: list[list[str]] = []
+    tqdm_cls = models_mod._ActivityFeed(emissions.append).tqdm_class()
     bar = tqdm_cls(total=4 * 1024**3, unit="B", unit_scale=True, desc="model.gguf", mininterval=0)
     bar.update(2 * 1024**3)
     bar.close()
-    assert any("model.gguf" in m and "50%" in m for m in messages)
-    assert all(m and "\r" not in m and "\n" not in m and "\x1b" not in m for m in messages)
+    all_lines = [ln for em in emissions for ln in em]
+    assert any("model.gguf" in ln and "50%" in ln for ln in all_lines)
+    assert all(ln and "\r" not in ln and "\n" not in ln and "\x1b" not in ln for ln in all_lines)
 
 
-def test_activity_feed_shows_concurrent_bars_on_separate_lines():
+def test_activity_feed_shows_concurrent_bars_as_separate_lines():
     # huggingface_hub keeps several aggregate bars live at once during a snapshot
-    # download; each must show on its own line, not overwrite the others.
-    messages: list[str] = []
-    tqdm_cls = models_mod._ActivityFeed(messages.append).tqdm_class()
+    # download; each is a separate line in the emitted list, not one overwriting another.
+    emissions: list[list[str]] = []
+    tqdm_cls = models_mod._ActivityFeed(emissions.append).tqdm_class()
     transfer = tqdm_cls(total=100, unit="B", desc="Downloading bytes", mininterval=0)
     counter = tqdm_cls(total=8, desc="Fetching 8 files", mininterval=0)
     transfer.update(50)
     counter.update(3)
-    combined = messages[-1]
-    lines = combined.split("\n")
-    assert len(lines) == 2
-    assert any("Downloading bytes" in line for line in lines)
-    assert any("Fetching 8 files" in line for line in lines)
+    latest = emissions[-1]
+    assert len(latest) == 2
+    assert any("Downloading bytes" in ln for ln in latest)
+    assert any("Fetching 8 files" in ln for ln in latest)
     transfer.close()
     counter.close()
-    # after a bar closes it drops out of the joined line
+    # after a bar closes it drops out of the emitted lines
     counter2 = tqdm_cls(total=8, desc="Fetching 8 files", mininterval=0)
     counter2.update(1)
-    assert "Downloading bytes" not in messages[-1]
+    assert all("Downloading bytes" not in ln for ln in emissions[-1])
     counter2.close()
 
 
 def test_activity_feed_renders_even_when_hf_requests_disable():
     # huggingface_hub disables its bars off-TTY / under HF_HUB_DISABLE_PROGRESS_BARS;
     # an explicit progress= request must still get updates.
-    messages: list[str] = []
-    tqdm_cls = models_mod._ActivityFeed(messages.append).tqdm_class()
+    emissions: list[list[str]] = []
+    tqdm_cls = models_mod._ActivityFeed(emissions.append).tqdm_class()
     bar = tqdm_cls(total=100, unit="B", disable=True, mininterval=0)
     bar.update(50)
     bar.close()
-    assert messages
+    assert emissions
 
 
 def test_download_model_snapshot_forwards_hf_progress(monkeypatch, tmp_path):
@@ -481,12 +481,12 @@ def test_download_model_snapshot_forwards_hf_progress(monkeypatch, tmp_path):
         return str(tmp_path)
 
     monkeypatch.setattr(models_mod, "snapshot_download", fake_snapshot)
-    messages: list[str] = []
+    emissions: list[list[str]] = []
     path = models_mod.download_model(
-        parse_model_ref("org/model"), "snapshot", progress=messages.append
+        parse_model_ref("org/model"), "snapshot", progress=emissions.append
     )
     assert path == tmp_path
-    assert any("100%" in m for m in messages)
+    assert any("100%" in ln for em in emissions for ln in em)
 
 
 def test_download_model_without_progress_passes_no_tqdm_class(monkeypatch, tmp_path):
@@ -507,7 +507,7 @@ def test_download_model_gguf_forwards_progress_per_shard(monkeypatch, tmp_path):
     monkeypatch.setattr(models_mod, "fetch_repo_info", lambda repo_id: info)
 
     requested: list[str] = []
-    messages: list[str] = []
+    emissions: list[list[str]] = []
 
     def fake_hf_hub_download(repo_id, fname, *, tqdm_class=None):
         requested.append(fname)
@@ -518,8 +518,8 @@ def test_download_model_gguf_forwards_progress_per_shard(monkeypatch, tmp_path):
 
     monkeypatch.setattr(models_mod, "hf_hub_download", fake_hf_hub_download)
     path = models_mod.download_model(
-        parse_model_ref("org/model-GGUF"), "gguf", progress=messages.append
+        parse_model_ref("org/model-GGUF"), "gguf", progress=emissions.append
     )
     assert requested == list(shards)
     assert path == tmp_path / shards[0]
-    assert messages
+    assert emissions

@@ -10,6 +10,7 @@ Harnesses and Jobs do **not** implement this — they have their own contracts
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any, ClassVar, Literal, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
@@ -21,22 +22,23 @@ if TYPE_CHECKING:
 class ActivityMixin:
     """Standard progress reporting shared by every manager.
 
-    ``activity`` is a short, human-readable description of what a service is
-    currently doing — a docker pull's layer count, a model load, a cache
-    warm-up. Usually one line, but it may span several (e.g. huggingface_hub's
-    concurrent download bars); the dashboard indents the continuation lines. The
-    Orchestrator surfaces it in the live dashboard and status snapshot, so all
-    services report progress the same way. Managers call ``set_activity()``
-    during long operations and ``clear_activity()`` when idle.
+    ``activity`` is the lines describing what a service is currently doing — a
+    docker pull's layer count, a model load, a cache warm-up. Usually one line,
+    but it may be several (e.g. huggingface_hub's concurrent download bars), so
+    it is a tuple of lines and the dashboard renders each. The Orchestrator
+    surfaces it in the live dashboard and status snapshot, so all services report
+    progress the same way. Managers call ``set_activity()`` during long
+    operations and ``clear_activity()`` when idle.
     """
 
-    activity: str = ""
+    activity: tuple[str, ...] = ()
 
-    def set_activity(self, message: str) -> None:
-        self.activity = message
+    def set_activity(self, activity: str | Sequence[str]) -> None:
+        """Set the current activity — one line (``str``) or several (a sequence)."""
+        self.activity = (activity,) if isinstance(activity, str) else tuple(activity)
 
     def clear_activity(self) -> None:
-        self.activity = ""
+        self.activity = ()
 
 
 @runtime_checkable
@@ -54,8 +56,8 @@ class ServiceManager(Protocol):
     name: str
     #: Names of services that must be ``READY`` before this one starts.
     dependencies: list[str]
-    #: Human-readable current-activity line (see :class:`ActivityMixin`).
-    activity: str
+    #: Current-activity lines (see :class:`ActivityMixin`).
+    activity: tuple[str, ...]
 
     def __init__(self, entry: ServiceEntry) -> None:
         """Managers are constructed from their service entry (the registry's contract)."""

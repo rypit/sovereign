@@ -44,7 +44,7 @@ class FakeManager:
         self._prepare_delay = prepare_delay
         self._prepare_model_raises = prepare_model_raises
         self.resolved_with = None
-        self.activity = ""
+        self.activity = ()
         # A native engine exposes prepare_model (pre-download); managers without
         # the capability (docker, older fakes) simply lack the attribute,
         # which is what the SupportsModelPreparation isinstance check keys on.
@@ -468,9 +468,9 @@ def test_status_snapshot_descriptor_by_base_type() -> None:
 def test_status_snapshot_includes_activity() -> None:
     orch = _orch(_config([{"name": "a", "base_type": "x"}]))
     orch.build()
-    orch.managers["a"].activity = "pulling foo — 2/5 layers"
+    orch.managers["a"].activity = ("pulling foo — 2/5 layers",)
     snap = orch.status_snapshot()
-    assert snap["services"]["a"]["activity"] == "pulling foo — 2/5 layers"
+    assert snap["services"]["a"]["activity"] == {"lines": ["pulling foo — 2/5 layers"]}
 
 
 def test_status_snapshot_since_present_immediately_after_build() -> None:
