@@ -13,11 +13,11 @@ import pytest
 from sovereign.config import ServiceEntry
 from sovereign.core.errors import RoutingError
 from sovereign.core.registry import route_entry
-from sovereign.services.inference_engines import hf as models_mod
-from sovereign.services.inference_engines.hf import RepoInfo, RoutingCache, parse_model_ref
-from sovereign.services.inference_engines.llama_cpp.manager import LlamaCppManager
-from sovereign.services.inference_engines.mlx_lm.manager import MlxLmManager
-from sovereign.services.inference_engines.routing import _claim_engine
+from sovereign.services.inference import hf as models_mod
+from sovereign.services.inference.hf import RepoInfo, RoutingCache, parse_model_ref
+from sovereign.services.inference.llama_cpp.manager import LlamaCppManager
+from sovereign.services.inference.mlx_lm.manager import MlxLmManager
+from sovereign.services.inference.routing import _claim_engine
 
 # The two native engines, swept exactly as ``route_entry`` sweeps the registry.
 _ENGINES = [LlamaCppManager, MlxLmManager]

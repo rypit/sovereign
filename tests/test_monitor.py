@@ -282,15 +282,15 @@ def test_monitor_no_state(tmp_path) -> None:
 def test_monitor_falls_back_to_state_json(tmp_path) -> None:
     write_json(
         tmp_path / "state.json",
-        {"services": {"docker_engine": "ready"}, "variant_file": None, "variant_hash": None},
+        {"services": {"docker": "ready"}, "variant_file": None, "variant_hash": None},
     )
     status = load_dashboard_status(tmp_path)
-    assert status["services"]["docker_engine"]["state"] == "ready"
+    assert status["services"]["docker"]["state"] == "ready"
     result = runner.invoke(
         app, ["monitor", "--once", "--state-dir", str(tmp_path)], env={"COLUMNS": "200"}
     )
     assert result.exit_code == 0
-    assert "docker_engine" in result.stdout
+    assert "docker" in result.stdout
 
 
 # --- foreground `up` dashboard ---

@@ -9,11 +9,11 @@ Pure library — no typer, no manager imports. Provides:
   backend through ``hf_xet``, which reports transfer progress through the same bars)
 - ``RoutingCache``: persisted engine-routing decisions for offline restarts
 
-The engine-routing *decision* lives in :mod:`sovereign.services.inference_engines.routing`
+The engine-routing *decision* lives in :mod:`sovereign.services.inference.routing`
 (each engine claims a ref via ``claim_route``); this module supplies the metadata
-it reads. Engines call this module through a single seam (``inference_engines.base``
+it reads. Engines call this module through a single seam (``inference.base``
 imports it as ``hf_models``), so tests patch
-``sovereign.services.inference_engines.hf.<fn>`` and every caller sees it.
+``sovereign.services.inference.hf.<fn>`` and every caller sees it.
 """
 
 from __future__ import annotations

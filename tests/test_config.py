@@ -34,7 +34,7 @@ def _base_stack(**overrides) -> dict:
         "resources": {"max_unified_memory_gb": 64, "safety_margin_gb": 4},
         "services": [
             {"name": "a", "base_type": "llama_cpp"},
-            {"name": "b", "base_type": "docker_engine", "dependencies": ["a"]},
+            {"name": "b", "base_type": "docker", "dependencies": ["a"]},
         ],
     }
     data.update(overrides)
@@ -50,7 +50,7 @@ def test_duplicate_name_rejected() -> None:
     data = _base_stack(
         services=[
             {"name": "a", "base_type": "llama_cpp"},
-            {"name": "a", "base_type": "docker_engine"},
+            {"name": "a", "base_type": "docker"},
         ]
     )
     with pytest.raises(ValueError, match="duplicate entry name"):

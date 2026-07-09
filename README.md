@@ -28,12 +28,12 @@ roadmap), and **both post-MVP tracks — harnesses and benchmarking — are comp
   memory admission control, resolved-stack manifest + drift detection, and
   harness materialization (including re-materialization when a dependency's
   endpoint changes, e.g. after a restart).
-- Services: `docker_engine` (a generic Docker container runner — `open_webui` and
+- Services: `docker` (a generic Docker container runner — `open_webui` and
   `searxng` are just instances of it configured in YAML), `llama_cpp`, `mlx_lm`.
-  The Docker daemon is implicit infrastructure: each `docker_engine` service
+  The Docker daemon is implicit infrastructure: each `docker` service
   verifies it's reachable on its own, so there's no separate engine entry or
   dependency to declare. (Existing YAMLs using `base_type: open_webui` or
-  `searxng` need to switch to `base_type: docker_engine`.) `llama_cpp` and
+  `searxng` need to switch to `base_type: docker`.) `llama_cpp` and
   `mlx_lm` share a native-engine base and are configured consistently:
   `llama_cpp`'s config field is now `model` (renamed from `model_path`) and,
   like `mlx_lm`, accepts a local model path or a HuggingFace repo id

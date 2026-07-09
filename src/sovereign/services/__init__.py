@@ -8,7 +8,7 @@ Prefer :func:`sovereign.core.registry.populate_registries` over importing this
 module directly.
 
 Discovery walks recursively (``walk_packages``, not ``iter_modules``) so nested
-groupings like ``inference_engines/llama_cpp`` are found too, not just direct
+groupings like ``inference/llama_cpp`` are found too, not just direct
 children.
 """
 

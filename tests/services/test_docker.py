@@ -1,4 +1,4 @@
-"""``docker_engine`` — the generic Docker container service manager + shared helpers."""
+"""``docker`` — the generic Docker container service manager + shared helpers."""
 
 from __future__ import annotations
 
@@ -17,15 +17,15 @@ from sovereign.core.resolver import (
     Resolver,
     ServiceRegistry,
 )
-from sovereign.services.docker_engine import manager as mgr_mod
-from sovereign.services.docker_engine.config import FileSpec
-from sovereign.services.docker_engine.manager import DockerEngineManager, materialize_file
+from sovereign.services.docker import manager as mgr_mod
+from sovereign.services.docker.config import FileSpec
+from sovereign.services.docker.manager import DockerManager, materialize_file
 
 
 def _entry(config: dict | None = None, env: dict | None = None, deps=None) -> ServiceEntry:
     return ServiceEntry(
         name="open_webui",
-        base_type="docker_engine",
+        base_type="docker",
         health_check={"type": "http", "endpoint": "/health", "port": 3000},
         config=config or {"image": "ghcr.io/open-webui/open-webui:main", "port": 3000},
         env_overrides=env or {},
@@ -33,8 +33,8 @@ def _entry(config: dict | None = None, env: dict | None = None, deps=None) -> Se
     )
 
 
-def _manager(config: dict | None = None, env: dict | None = None, deps=None) -> DockerEngineManager:
-    return DockerEngineManager(_entry(config, env, deps))
+def _manager(config: dict | None = None, env: dict | None = None, deps=None) -> DockerManager:
+    return DockerManager(_entry(config, env, deps))
 
 
 def _resolver_with_llama() -> Resolver:
@@ -58,11 +58,11 @@ def test_satisfies_service_manager_protocol() -> None:
 
 
 def test_registered_under_base_type() -> None:
-    assert get_service_manager("docker_engine") is DockerEngineManager
+    assert get_service_manager("docker") is DockerManager
 
 
 def test_consumer_kind_is_docker() -> None:
-    assert DockerEngineManager.consumer_kind is ConsumerKind.DOCKER
+    assert DockerManager.consumer_kind is ConsumerKind.DOCKER
 
 
 def test_resolve_rewrites_loopback_to_host_gateway() -> None:
@@ -135,7 +135,7 @@ def test_runtime_handle_respects_container_name_override() -> None:
 def test_start_clears_then_runs(monkeypatch) -> None:
     calls: list[list[str]] = []
     monkeypatch.setattr(
-        DockerEngineManager, "_run_docker", lambda self, args, **kw: calls.append(args)
+        DockerManager, "_run_docker", lambda self, args, **kw: calls.append(args)
     )
     _manager({"image": "img:latest", "port": 3000}).start()
     assert calls[0][:2] == ["rm", "-f"]
@@ -145,7 +145,7 @@ def test_start_clears_then_runs(monkeypatch) -> None:
 def test_stop_removes_container(monkeypatch) -> None:
     calls: list[list[str]] = []
     monkeypatch.setattr(
-        DockerEngineManager, "_run_docker", lambda self, args, **kw: calls.append(args)
+        DockerManager, "_run_docker", lambda self, args, **kw: calls.append(args)
     )
     _manager({"image": "img:latest", "port": 3000}).stop()
     assert calls == [["rm", "-f", "open_webui"]]
@@ -186,10 +186,10 @@ def test_get_metrics_delegates_to_container_metrics(monkeypatch) -> None:
 
 # --- provisioning ---
 def test_provisioning_declaration() -> None:
-    from sovereign.services.docker_engine.manager import DockerEngineManager
+    from sovereign.services.docker.manager import DockerManager
 
-    assert DockerEngineManager.provisioning_binary == "docker"
-    brewfile = DockerEngineManager.provisioning_brewfile()
+    assert DockerManager.provisioning_binary == "docker"
+    brewfile = DockerManager.provisioning_brewfile()
     assert brewfile is not None
     assert 'cask "docker-desktop"' in brewfile.read_text()
 
@@ -306,7 +306,7 @@ def test_materialize_file_missing_env_raises(tmp_path) -> None:
         materialize_file(FileSpec(path=str(path), content="key: ${ENV:MISSING_VAR}"), env={})
 
 
-# --- shared Docker helpers (reused by all docker_engine instances) ---
+# --- shared Docker helpers (reused by all docker instances) ---
 def test_run_docker_builds_argv(monkeypatch) -> None:
     seen = {}
 

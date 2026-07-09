@@ -50,13 +50,13 @@ def test_brewfile_discovered_by_convention() -> None:
     import inspect
 
     from sovereign.harnesses.cline_cli.manager import ClineCliHarness
-    from sovereign.services.docker_engine.manager import DockerEngineManager
-    from sovereign.services.inference_engines.llama_cpp.manager import LlamaCppManager
+    from sovereign.services.docker.manager import DockerManager
+    from sovereign.services.inference.llama_cpp.manager import LlamaCppManager
 
     for cls, needle in [
         (ClineCliHarness, 'brew "node"'),
         (LlamaCppManager, 'brew "llama.cpp"'),
-        (DockerEngineManager, 'cask "docker-desktop"'),
+        (DockerManager, 'cask "docker-desktop"'),
     ]:
         brewfile = cls.provisioning_brewfile()
         assert brewfile is not None, cls.__name__

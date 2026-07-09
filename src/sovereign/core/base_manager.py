@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, Literal, Protocol, runtime_chec
 if TYPE_CHECKING:
     from sovereign.config import ServiceEntry
     from sovereign.core.resolver import ResolvedEndpoint, Resolver
-    from sovereign.services.inference_engines.hf import ModelRef, RepoInfo
+    from sovereign.services.inference.hf import ModelRef, RepoInfo
 
 
 class ActivityMixin:
@@ -147,7 +147,7 @@ class RoutesModelRef(Protocol):
     """Native engines: decide whether this engine serves a given model ref (§2.6).
 
     A classmethod, so routing an ``auto`` entry never needs to construct a
-    manager. The router (``services/inference_engines/routing.py``) sweeps every
+    manager. The router (``services/inference/routing.py``) sweeps every
     registered engine and picks the highest-confidence claim, which is how a new
     engine joins ``auto`` routing by dropping in a folder — no central rule table.
     The router reads ``base_type`` (the resolved answer) and ``model_artifact_kind``

@@ -123,7 +123,7 @@ New package `src/sovereign/bench/`:
 
 ## Phase B6 (optional, later) — extensions
 
-Docker-sandboxed quality workspaces (throwaway container per task, engine via `ConsumerKind.DOCKER` → `host.docker.internal`; reuse `docker_engine` manager patterns); SWE-bench Lite subset via mini-swe-agent's batch runner (pinned dataset rev); guidellm adapter behind the B2 result schema; Cline teams as a swept config axis (slots×context accounting per §7 — `-np` becomes load-bearing).
+Docker-sandboxed quality workspaces (throwaway container per task, engine via `ConsumerKind.DOCKER` → `host.docker.internal`; reuse `docker` manager patterns); SWE-bench Lite subset via mini-swe-agent's batch runner (pinned dataset rev); guidellm adapter behind the B2 result schema; Cline teams as a swept config axis (slots×context accounting per §7 — `-np` becomes load-bearing).
 
 ---
 

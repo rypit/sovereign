@@ -72,10 +72,10 @@ TransitionHook = Callable[[str, ServiceState, ServiceState], None]
 
 
 def _service_descriptor(entry: ServiceEntry) -> str | None:
-    """What a service is running — the image for docker_engine, the model for a
+    """What a service is running — the image for docker, the model for a
     native engine — surfaced as-is (untruncated) for the dashboard's MODEL column.
     """
-    if entry.base_type == "docker_engine":
+    if entry.base_type == "docker":
         return entry.config.get("image")
     if entry.base_type in ("llama_cpp", "mlx_lm"):
         return entry.config.get("model")
@@ -279,7 +279,7 @@ class Orchestrator:
         # Pre-download the model (DOWNLOADING) so the server launches from a
         # resolved local path. Cached models return in ms — the state is entered
         # unconditionally when the hook exists for a deterministic machine; managers
-        # without the hook (FakeManager, docker_engine) skip it.
+        # without the hook (FakeManager, docker) skip it.
         if isinstance(manager, SupportsModelPreparation):
             self._set_state(name, ServiceState.DOWNLOADING)
             try:

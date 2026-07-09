@@ -1,7 +1,7 @@
-"""Config schema for the generic ``docker_engine`` container service.
+"""Config schema for the generic ``docker`` container service.
 
 Pydantic-only, per the golden rule (§2.3). Parses the ``config:`` block of a
-``docker_engine`` service entry — any Docker container Sovereign should run.
+``docker`` service entry — any Docker container Sovereign should run.
 The daemon itself is implicit infrastructure (Docker Desktop / OrbStack owns its
 lifecycle); reachability is verified by the manager before each container boots.
 """
@@ -28,7 +28,7 @@ class FileSpec(SovereignBaseModel):
     content: str
 
 
-class DockerEngineConfig(SovereignBaseModel):
+class DockerConfig(SovereignBaseModel):
     """Settings for a generic Docker container service."""
 
     #: Image to run (e.g. ``ghcr.io/open-webui/open-webui:main``).
