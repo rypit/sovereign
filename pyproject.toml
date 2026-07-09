@@ -13,10 +13,6 @@ dependencies = [
     # huggingface_hub: metadata, routing, and download for HF models. Unconditional
     # (works on all platforms) unlike mlx-lm which is Apple-Silicon only.
     "huggingface-hub>=1.22",
-    # hf_xet: the Xet transfer backend. huggingface_hub pulls it transitively, but we
-    # depend on it directly because Sovereign relies on Xet reporting byte-level
-    # download progress through the tqdm_class we pass to snapshot_download/hf_hub_download.
-    "hf-xet>=1.0",
     # mlx_lm engine — provides the `mlx_lm.server` console script. Apple-Silicon
     # only (mlx ships wheels for macOS arm64), so guard resolution on other platforms.
     "mlx-lm>=0.31; sys_platform == 'darwin' and platform_machine == 'arm64'",

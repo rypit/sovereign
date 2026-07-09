@@ -155,7 +155,8 @@ class NativeEngineManager(ActivityMixin, Provisioner):
     def prepare_model(self) -> None:
         """Resolve the model (and draft model) to local paths, downloading from the
         HuggingFace cache if needed. Runs in the orchestrator's DOWNLOADING state;
-        byte-level progress is surfaced as activity. Local refs resolve in place."""
+        huggingface_hub's own download progress lines are surfaced as activity.
+        Local refs resolve in place."""
         self.model_path = hf_models.download_model(
             parse_model_ref(self.config.model),
             self.model_artifact_kind,
