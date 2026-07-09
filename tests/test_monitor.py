@@ -216,7 +216,9 @@ def test_dashboard_renders_est_column_and_budget_footer() -> None:
                 "descriptor": "mlx-community/Qwen3.6-27B-8bit",
                 "estimated_gb": 27.0,
                 "metrics": {},
-                "activity": "downloading mlx-community/Qwen3.6-27B-8bit: 3.2/17.8 GB (18%)",
+                # activity is huggingface_hub's own tqdm-rendered line, forwarded as-is
+                "activity": "model.safetensors:  18%|█▊        | 3.20G/17.8G "
+                "[01:10<05:20, 45.0MB/s]",
             },
         },
     }
@@ -225,8 +227,8 @@ def test_dashboard_renders_est_column_and_budget_footer() -> None:
     assert "27.0" in text  # estimate column value
     assert "93.0 GB headroom" in text  # budget footer
     assert "120 usable GB" in text
-    # DOWNLOADING activity flows through the activity area.
-    assert "3.2/17.8 GB (18%)" in text
+    # DOWNLOADING activity flows through the activity area (brackets render literally).
+    assert "3.20G/17.8G" in text
 
 
 def test_dashboard_tolerates_status_without_budget() -> None:
@@ -243,13 +245,13 @@ def test_dashboard_activity_shown_for_ready_service() -> None:
             "mlx_heavy": {
                 "state": "ready",
                 "metrics": {},
-                "activity": "downloading model: 3/8 files (38%)",
+                "activity": "Fetching 8 files:  38%|███▊      | 3/8 [00:10<00:17,  3.4s/it]",
             }
         }
     }
     text = _render(dashboard(status))
     assert "Activity:" in text
-    assert "downloading model: 3/8 files (38%)" in text
+    assert "Fetching 8 files:" in text
 
 
 def test_dashboard_no_activity_area_when_idle() -> None:

@@ -1436,7 +1436,6 @@ name = "sovereign"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
-    { name = "hf-xet" },
     { name = "huggingface-hub" },
     { name = "mlx-lm", marker = "platform_machine == 'arm64' and sys_platform == 'darwin'" },
     { name = "psutil" },
@@ -1466,7 +1465,6 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "hf-xet", specifier = ">=1.0" },
     { name = "httpx", marker = "extra == 'bench'", specifier = ">=0.27" },
     { name = "huggingface-hub", specifier = ">=1.22" },
     { name = "mini-swe-agent", marker = "extra == 'harness'", specifier = ">=1.0" },

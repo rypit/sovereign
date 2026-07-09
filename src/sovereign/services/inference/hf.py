@@ -5,8 +5,7 @@ Pure library — no typer, no manager imports. Provides:
 - Repo metadata fetch, memoised per process (never caches offline/transient failures)
 - GGUF file selection with shard grouping and quant disambiguation
 - Weight byte estimation from metadata or disk
-- Download with byte-level progress via a custom ``tqdm_class`` (works with the Xet
-  backend through ``hf_xet``, which reports transfer progress through the same bars)
+- Download that forwards huggingface_hub's own tqdm-rendered progress to a callback
 - ``RoutingCache``: persisted engine-routing decisions for offline restarts
 
 The engine-routing *decision* lives in :mod:`sovereign.services.inference.routing`
@@ -23,9 +22,6 @@ import io
 import logging
 import os
 import re
-import shutil
-import threading
-import time
 from collections import defaultdict
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -387,103 +383,54 @@ def estimate_model_bytes(ref: ModelRef, kind: Literal["snapshot", "gguf"]) -> in
 
 
 # ---------------------------------------------------------------------------
-# Download with byte-level progress
+# Download
 # ---------------------------------------------------------------------------
 
-
-def _blobs_dir(repo_id: str) -> Path:
-    """HF cache blobs directory for a given repo id."""
-    from huggingface_hub import constants  # lazy import keeps startup fast
-
-    cache_dir = Path(os.environ.get("HF_HUB_CACHE", str(constants.HF_HUB_CACHE)))
-    repo_folder = f"models--{repo_id.replace('/', '--')}"
-    return cache_dir / repo_folder / "blobs"
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")  # cursor movement tqdm emits for nested bars
 
 
-class _ProgressAggregator:
-    """Formats a human progress line from cumulative byte counts.
+class _ActivityWriter(io.TextIOBase):
+    """File-like sink for tqdm's rendered output: forwards each bar line to a callback.
 
-    Testable without tqdm or threads: ``update(current, total)`` is a pure
-    function of the counts (plus a monotonic clock, injectable for tests). Keeps
-    a small rolling window for a smoothed MB/s and an ETA.
+    tqdm writes ``"\\r" + <rendered line>`` on every refresh (plus bare newlines /
+    cursor-up escapes when positioning multiple bars). Strip the control characters
+    and surrounding whitespace; skip writes that leave nothing. Multiple live bars
+    (snapshot's outer "Fetching N files" bar plus per-file byte bars) interleave
+    last-writer-wins — that IS huggingface_hub's output, which is the point.
     """
 
-    def __init__(self, label: str) -> None:
-        self._label = label
-        self._window: list[tuple[float, int]] = []  # (monotonic_time, bytes)
+    def __init__(self, progress: Callable[[str], None]) -> None:
+        self._progress = progress
 
-    def update(self, current: int, total: int, *, now: float | None = None) -> str | None:
-        """Return a progress string, or None if nothing useful can be said yet."""
-        if total <= 0:
-            return None
-        now = time.monotonic() if now is None else now
-        self._window.append((now, current))
-        if len(self._window) > 5:
-            self._window.pop(0)
+    def write(self, s: str) -> int:
+        line = _ANSI_RE.sub("", s).replace("\r", "").strip()
+        if line:
+            self._progress(line)
+        return len(s)
 
-        pct = min(100.0, current / total * 100)
-        speed_str = ""
-        eta_str = ""
-        if len(self._window) >= 2:
-            t0, b0 = self._window[0]
-            elapsed = now - t0
-            if elapsed > 0:
-                speed_bps = (current - b0) / elapsed
-                speed_str = f" — {speed_bps / (1024 * 1024):.0f} MB/s"
-                remaining = total - current
-                if speed_bps > 0 and remaining > 0:
-                    mins, secs = divmod(int(remaining / speed_bps), 60)
-                    eta_str = f", ETA {mins}m{secs:02d}s"
-
-        return (
-            f"downloading {self._label}: "
-            f"{current / (1024**3):.1f}/{total / (1024**3):.1f} GB "
-            f"({pct:.0f}%){speed_str}{eta_str}"
-        )
+    def flush(self) -> None:
+        pass
 
 
-def _make_progress_tqdm(progress: Callable[[str], None], label: str) -> type[_BaseTqdm]:
-    """Build a ``tqdm`` subclass that forwards byte-download progress to ``progress``.
+def _make_activity_tqdm(progress: Callable[[str], None]) -> type[_BaseTqdm]:
+    """Build a ``tqdm`` subclass whose rendered output goes to ``progress``.
 
-    huggingface_hub (and hf_xet for Xet transfers) render download progress through
-    ``tqdm_class``; the byte bars carry ``unit="B"``. We aggregate the ``n``/``total``
-    of every live byte bar — one shared bar for ``snapshot_download``, one per shard
-    for ``hf_hub_download`` — into a single line. Subclassing vanilla ``tqdm`` (not
-    huggingface_hub's) keeps the counter live even when stdout isn't a TTY (the daemon
-    case); each bar renders into a throwaway buffer so nothing clutters the console.
+    huggingface_hub renders all download progress (HTTP and Xet transfers alike)
+    through the ``tqdm_class`` passed to ``snapshot_download``/``hf_hub_download``.
+    Rather than re-aggregating byte counts, let tqdm render its normal line and
+    forward it. ``file`` and ``disable`` are forced, not defaulted: the caller
+    explicitly asked for progress, so the bar must render even off-TTY (the daemon
+    case) and into the activity sink rather than the console.
     """
-    live: set[_BaseTqdm] = set()
-    lock = threading.Lock()
-    agg = _ProgressAggregator(label)
+    writer = _ActivityWriter(progress)
 
-    def _emit() -> None:
-        with lock:
-            bars = [t for t in live if getattr(t, "unit", "") == "B" and (t.total or 0) > 0]
-            current = sum(int(t.n) for t in bars)
-            total = sum(int(t.total) for t in bars)
-        msg = agg.update(current, total)
-        if msg:
-            progress(msg)
-
-    class _ProgressTqdm(_BaseTqdm):
+    class _ActivityTqdm(_BaseTqdm):
         def __init__(self, *args: Any, **kwargs: Any) -> None:
-            kwargs.setdefault("disable", False)  # keep the counter live off-TTY
-            kwargs.setdefault("file", io.StringIO())  # swallow the rendered bar
+            kwargs["file"] = writer
+            kwargs["disable"] = False
             super().__init__(*args, **kwargs)
-            with lock:
-                live.add(self)
 
-        def update(self, n: float | None = 1) -> bool | None:
-            displayed = super().update(n)
-            _emit()
-            return displayed
-
-        def close(self) -> None:
-            with lock:
-                live.discard(self)
-            super().close()
-
-    return _ProgressTqdm
+    return _ActivityTqdm
 
 
 def download_model(
@@ -494,8 +441,10 @@ def download_model(
 ) -> Path:
     """Download a model to the HF cache and return its local path.
 
-    Local refs return immediately. Raises ModelDownloadError on disk-space
-    issues or download failures; ModelAccessError / ModelNotFoundError propagate.
+    Local refs return immediately. When ``progress`` is given, huggingface_hub's
+    own tqdm-rendered progress lines are forwarded to it as they render. Raises
+    ModelDownloadError on download failures (including disk exhaustion, surfaced
+    by huggingface_hub itself); ModelAccessError / ModelNotFoundError propagate.
     """
     if ref.is_local:
         assert ref.local_path is not None
@@ -503,31 +452,7 @@ def download_model(
 
     assert ref.repo_id is not None
 
-    # Pre-flight disk check
-    expected: int | None = None
-    info = fetch_repo_info(ref.repo_id)  # may raise ModelAccessError / ModelNotFoundError
-    if info is not None:
-        expected = weight_bytes(info, kind, quant=ref.quant, filename=ref.filename)
-    if expected is not None:
-        already = _cached_bytes(ref.repo_id)
-        needed = max(0, expected - already)
-        try:
-            from huggingface_hub import constants
-
-            cache_dir = Path(os.environ.get("HF_HUB_CACHE", str(constants.HF_HUB_CACHE)))
-            free = shutil.disk_usage(cache_dir).free
-        except Exception:
-            free = None
-        if free is not None and needed * 1.1 > free:
-            needed_gb = needed / (1024**3)
-            free_gb = free / (1024**3)
-            raise ModelDownloadError(
-                f"Not enough disk space to download '{ref.repo_id}': "
-                f"need {needed_gb:.1f} GB, only {free_gb:.1f} GB free"
-            )
-
-    # Byte-level progress via tqdm_class (also carries hf_xet transfer progress).
-    tqdm_class = _make_progress_tqdm(progress, ref.repo_id) if progress is not None else None
+    tqdm_class = _make_activity_tqdm(progress) if progress is not None else None
 
     try:
         if kind == "snapshot":
@@ -536,7 +461,8 @@ def download_model(
             )
             return Path(path)
 
-        # gguf: download all shards; re-fetch info if needed
+        # gguf: metadata needed to select shards
+        info = fetch_repo_info(ref.repo_id)  # may raise ModelAccessError / ModelNotFoundError
         if info is None:
             raise ModelDownloadError(
                 f"Cannot fetch metadata for '{ref.repo_id}' (offline?)"
@@ -562,16 +488,6 @@ def download_model(
         raise ModelDownloadError(
             f"Download failed for '{ref.repo_id}': {exc}"
         ) from exc
-
-
-def _cached_bytes(repo_id: str) -> int:
-    """Bytes already present in the HF cache blobs dir for a repo."""
-    total = 0
-    with contextlib.suppress(OSError):
-        for p in _blobs_dir(repo_id).iterdir():
-            with contextlib.suppress(OSError):
-                total += p.stat().st_size
-    return total
 
 
 # ---------------------------------------------------------------------------

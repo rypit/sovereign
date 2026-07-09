@@ -19,7 +19,6 @@ from sovereign.services.inference.hf import (
     ModelResolutionError,
     RepoInfo,
     RoutingCache,
-    _ProgressAggregator,
     _repo_info_cache,
     estimate_model_bytes,
     fetch_repo_info,
@@ -423,140 +422,81 @@ def test_fetch_success_is_cached():
 
 
 # ---------------------------------------------------------------------------
-# _ProgressAggregator — formats a progress line from cumulative byte counts
-# (the tqdm_class that carries hf_xet/http transfer progress feeds it these).
+# download progress — forwards huggingface_hub's own tqdm output as-is.
 # ---------------------------------------------------------------------------
 
 
-def test_progress_aggregator_basic():
-    agg = _ProgressAggregator("org/model")
-    msg = agg.update(2 * 1024**3, 10 * 1024**3, now=0.0)
-    assert msg is not None
-    assert "20%" in msg
-    assert "2.0/10.0 GB" in msg
+def test_activity_tqdm_forwards_rendered_lines():
+    messages: list[str] = []
+    tqdm_cls = models_mod._make_activity_tqdm(messages.append)
+    bar = tqdm_cls(total=4 * 1024**3, unit="B", unit_scale=True, desc="model.gguf", mininterval=0)
+    bar.update(2 * 1024**3)
+    bar.close()
+    assert any("model.gguf" in m and "50%" in m for m in messages)
+    assert all(m and "\r" not in m and "\n" not in m and "\x1b" not in m for m in messages)
 
 
-def test_progress_aggregator_zero_total_returns_none():
-    assert _ProgressAggregator("org/model").update(0, 0, now=0.0) is None
+def test_activity_tqdm_renders_even_when_hf_requests_disable():
+    # huggingface_hub disables its bars off-TTY / under HF_HUB_DISABLE_PROGRESS_BARS;
+    # an explicit progress= request must still get updates.
+    messages: list[str] = []
+    tqdm_cls = models_mod._make_activity_tqdm(messages.append)
+    bar = tqdm_cls(total=100, unit="B", disable=True, mininterval=0)
+    bar.update(50)
+    bar.close()
+    assert messages
 
 
-def test_progress_aggregator_includes_speed_and_eta_after_two_samples():
-    agg = _ProgressAggregator("org/model")
-    agg.update(1 * 1024**3, 4 * 1024**3, now=0.0)  # first sample — no speed yet
-    # One second later, another 1 GB has arrived → ~1024 MB/s, 2 GB remaining.
-    msg = agg.update(2 * 1024**3, 4 * 1024**3, now=1.0)
-    assert msg is not None
-    assert "MB/s" in msg
-    assert "ETA" in msg
+def test_download_model_snapshot_forwards_hf_progress(monkeypatch, tmp_path):
+    # No fetch_repo_info patch on purpose: the conftest HfApi stub raises
+    # RepositoryNotFoundError on any metadata call, so this passing proves the
+    # snapshot branch does no metadata pre-fetch.
+    def fake_snapshot(repo_id, *, ignore_patterns=None, tqdm_class=None):
+        bar = tqdm_class(total=100, unit="B", desc="model.safetensors", mininterval=0)
+        bar.update(100)
+        bar.close()
+        return str(tmp_path)
+
+    monkeypatch.setattr(models_mod, "snapshot_download", fake_snapshot)
+    messages: list[str] = []
+    path = models_mod.download_model(
+        parse_model_ref("org/model"), "snapshot", progress=messages.append
+    )
+    assert path == tmp_path
+    assert any("100%" in m for m in messages)
 
 
-def test_progress_aggregator_caps_at_100_percent():
-    # Snapshot totals include tokenizer/config bytes, so current can momentarily
-    # exceed the weight-only expectation; the percentage must not run past 100.
-    msg = _ProgressAggregator("org/model").update(11 * 1024**3, 10 * 1024**3, now=0.0)
-    assert msg is not None
-    assert "100%" in msg
+def test_download_model_without_progress_passes_no_tqdm_class(monkeypatch, tmp_path):
+    captured: dict = {}
+
+    def fake_snapshot(repo_id, *, ignore_patterns=None, tqdm_class=None):
+        captured["tqdm_class"] = tqdm_class
+        return str(tmp_path)
+
+    monkeypatch.setattr(models_mod, "snapshot_download", fake_snapshot)
+    models_mod.download_model(parse_model_ref("org/model"), "snapshot")
+    assert captured["tqdm_class"] is None
 
 
-# ---------------------------------------------------------------------------
-# Xet download progress, end to end and offline.
-#
-# Drives the REAL hf_hub_download + xet_get code path with the two seams
-# huggingface_hub's own test suite mocks (tests/test_xet_download.py in the
-# hub sdist): get_hf_file_metadata (forces the Xet branch without a metadata
-# HEAD) and utils._xet.get_xet_session (replaces the Rust transfer engine).
-# The fake session fires progress_callback exactly like hf_xet does, proving
-# Xet byte progress reaches the tqdm_class download_model passes in.
-# ---------------------------------------------------------------------------
-
-_XET_FILE_SIZE = 64 * 1024**2  # 64 MiB, written sparse
-
-
-class _FakeXetDownloadGroup:
-    """Stands in for hf_xet's file-download group: writes the file sparse and
-    reports cumulative bytes through progress_callback, as the real engine does."""
-
-    def __init__(self, progress_callback):
-        self._cb = progress_callback
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *exc):
-        return False
-
-    def start_download_file(self, file_info, path: str) -> None:
-        with open(path, "wb") as f:
-            f.truncate(_XET_FILE_SIZE)
-        import types
-
-        for done in (_XET_FILE_SIZE // 4, _XET_FILE_SIZE // 2, _XET_FILE_SIZE):
-            self._cb(types.SimpleNamespace(total_bytes_completed=done), None)
-
-
-class _FakeXetSession:
-    def new_file_download_group(self, **kwargs):
-        return _FakeXetDownloadGroup(kwargs["progress_callback"])
-
-
-def test_download_model_xet_progress_end_to_end(tmp_path, monkeypatch):
-    import huggingface_hub.constants as hf_constants
-    from huggingface_hub.file_download import HfFileMetadata
-    from huggingface_hub.utils import XetFileData
-
-    cache = tmp_path / "hub"
-    cache.mkdir()
-    monkeypatch.setattr(hf_constants, "HF_HUB_CACHE", str(cache))  # hub call-time default
-    monkeypatch.setenv("HF_HUB_CACHE", str(cache))  # our _blobs_dir/_cached_bytes
-
-    fname = "model.Q4_K_M.gguf"
-    info = _repo(repo_id="org/model-GGUF", siblings=((fname, _XET_FILE_SIZE),))
+def test_download_model_gguf_forwards_progress_per_shard(monkeypatch, tmp_path):
+    shards = ("m.Q4_K_M-00001-of-00002.gguf", "m.Q4_K_M-00002-of-00002.gguf")
+    info = _repo(repo_id="org/model-GGUF", siblings=_siblings(*((f, 10) for f in shards)))
     monkeypatch.setattr(models_mod, "fetch_repo_info", lambda repo_id: info)
 
-    metadata = HfFileMetadata(
-        commit_hash="0" * 40,
-        etag="a" * 40,
-        location="https://example.invalid/never-fetched",
-        size=_XET_FILE_SIZE,
-        xet_file_data=XetFileData(file_hash="ab" * 32, refresh_route="https://example.invalid/r"),
+    requested: list[str] = []
+    messages: list[str] = []
+
+    def fake_hf_hub_download(repo_id, fname, *, tqdm_class=None):
+        requested.append(fname)
+        bar = tqdm_class(total=10, unit="B", desc=fname, mininterval=0)
+        bar.update(10)
+        bar.close()
+        return str(tmp_path / fname)
+
+    monkeypatch.setattr(models_mod, "hf_hub_download", fake_hf_hub_download)
+    path = models_mod.download_model(
+        parse_model_ref("org/model-GGUF"), "gguf", progress=messages.append
     )
-
-    messages: list[str] = []
-    with (
-        patch("huggingface_hub.file_download.get_hf_file_metadata", return_value=metadata),
-        patch("huggingface_hub.utils._xet.get_xet_session", return_value=_FakeXetSession()),
-    ):
-        path = models_mod.download_model(
-            parse_model_ref("org/model-GGUF"), "gguf", progress=messages.append
-        )
-
-    # The file really landed in the redirected cache via the Xet branch.
-    assert path.exists()
-    assert path.stat().st_size == _XET_FILE_SIZE
-    assert str(cache) in str(path)
-    # Xet's cumulative byte reports flowed through the tqdm_class into progress.
-    assert messages, "no progress messages captured"
-    assert any("(50%)" in m for m in messages)
-    assert "(100%)" in messages[-1]
-    assert all(m.startswith("downloading org/model-GGUF:") for m in messages)
-
-
-def test_progress_tqdm_handles_snapshot_style_growing_total(monkeypatch):
-    # snapshot_download creates the byte bar with total=0, then grows bar.total as
-    # each file's metadata arrives (see _AggregatedTqdm in _snapshot_download.py).
-    # The reporter must tolerate that and never divide by the stale zero.
-    from sovereign.services.inference.hf import _make_progress_tqdm
-
-    messages: list[str] = []
-    tqdm_cls = _make_progress_tqdm(messages.append, "org/model")
-    bar = tqdm_cls(total=0, unit="B", unit_scale=True)
-    bar.update(0)  # total still 0 → nothing useful to say, must not raise
-    assert messages == []
-    bar.total += 4 * 1024**3
-    bar.refresh()
-    bar.update(1 * 1024**3)
-    bar.total += 4 * 1024**3
-    bar.update(3 * 1024**3)
-    bar.close()
-    assert "(25%)" in messages[0]  # 1 of 4 GiB
-    assert "(50%)" in messages[-1]  # 4 of 8 GiB after the total grew
+    assert requested == list(shards)
+    assert path == tmp_path / shards[0]
+    assert messages
