@@ -10,7 +10,6 @@ Harnesses and Jobs do **not** implement this — they have their own contracts
 
 from __future__ import annotations
 
-from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any, ClassVar, Literal, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
@@ -33,7 +32,7 @@ class ActivityMixin:
 
     activity: tuple[str, ...] = ()
 
-    def set_activity(self, lines: Sequence[str]) -> None:
+    def set_activity(self, lines: list[str]) -> None:
         """Set the current activity to one or more lines (wrap a single line in a list)."""
         self.activity = tuple(lines)
 
