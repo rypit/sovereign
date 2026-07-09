@@ -436,9 +436,9 @@ def test_activity_feed_forwards_rendered_lines():
     assert all(m and "\r" not in m and "\n" not in m and "\x1b" not in m for m in messages)
 
 
-def test_activity_feed_shows_concurrent_bars_together():
+def test_activity_feed_shows_concurrent_bars_on_separate_lines():
     # huggingface_hub keeps several aggregate bars live at once during a snapshot
-    # download; each must show, joined, not overwrite the others.
+    # download; each must show on its own line, not overwrite the others.
     messages: list[str] = []
     tqdm_cls = models_mod._ActivityFeed(messages.append).tqdm_class()
     transfer = tqdm_cls(total=100, unit="B", desc="Downloading bytes", mininterval=0)
@@ -446,7 +446,10 @@ def test_activity_feed_shows_concurrent_bars_together():
     transfer.update(50)
     counter.update(3)
     combined = messages[-1]
-    assert "Downloading bytes" in combined and "Fetching 8 files" in combined
+    lines = combined.split("\n")
+    assert len(lines) == 2
+    assert any("Downloading bytes" in line for line in lines)
+    assert any("Fetching 8 files" in line for line in lines)
     transfer.close()
     counter.close()
     # after a bar closes it drops out of the joined line
