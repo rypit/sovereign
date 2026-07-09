@@ -254,6 +254,31 @@ def test_dashboard_activity_shown_for_ready_service() -> None:
     assert "Fetching 8 files:" in text
 
 
+def test_dashboard_renders_multiline_activity_indented() -> None:
+    # huggingface_hub's concurrent download bars arrive as a multi-line activity
+    # string; the first line sits inline, continuation lines indent under it.
+    status = {
+        "services": {
+            "engine": {
+                "state": "downloading",
+                "metrics": {},
+                "activity": (
+                    "Fetching 8 files:  38%| 3/8\n"
+                    "Downloading bytes:  44%| 12.9G/29.0G\n"
+                    "Reconstructing:  44%| 12.9G/29.0G"
+                ),
+            }
+        }
+    }
+    text = _render(dashboard(status))
+    lines = [line for line in text.splitlines() if line.strip()]
+    fetching = next(line for line in lines if "Fetching 8 files" in line)
+    downloading = next(line for line in lines if "Downloading bytes" in line)
+    assert "[DOWNLOADING]" in fetching  # first bar inline with the service header
+    assert "[DOWNLOADING]" not in downloading  # continuation line, header not repeated
+    assert downloading.startswith("    ")  # indented under the header
+
+
 def test_dashboard_no_activity_area_when_idle() -> None:
     # ready service with no activity should not show an Activity area
     status = {

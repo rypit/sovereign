@@ -402,12 +402,12 @@ class _ActivityFeed:
     renders progress as a few *aggregate* bars on the main thread — a file counter
     ("Fetching N files"), the summed network transfer ("Downloading bytes") and the summed
     reconstruction — folding the per-file bars into those internally. Each bar renders into
-    its own sink; the feed keeps the latest line from every live bar and forwards them
-    joined, so concurrently-active bars all show at once instead of overwriting each other.
-    Bar updates arrive from worker threads, hence the lock.
+    its own sink; the feed keeps the latest line from every live bar and forwards them as a
+    multi-line block (one bar per line), so concurrently-active bars all show at once instead
+    of overwriting each other. Bar updates arrive from worker threads, hence the lock.
     """
 
-    _SEP = "  ·  "
+    _SEP = "\n"
 
     def __init__(self, progress: Callable[[str], None]) -> None:
         self._progress = progress

@@ -21,11 +21,13 @@ if TYPE_CHECKING:
 class ActivityMixin:
     """Standard progress reporting shared by every manager.
 
-    ``activity`` is a short, human-readable line describing what a service is
+    ``activity`` is a short, human-readable description of what a service is
     currently doing — a docker pull's layer count, a model load, a cache
-    warm-up. The Orchestrator surfaces it in the live dashboard and status
-    snapshot, so all services report progress the same way. Managers call
-    ``set_activity()`` during long operations and ``clear_activity()`` when idle.
+    warm-up. Usually one line, but it may span several (e.g. huggingface_hub's
+    concurrent download bars); the dashboard indents the continuation lines. The
+    Orchestrator surfaces it in the live dashboard and status snapshot, so all
+    services report progress the same way. Managers call ``set_activity()``
+    during long operations and ``clear_activity()`` when idle.
     """
 
     activity: str = ""

@@ -201,7 +201,11 @@ def dashboard(status: Mapping[str, Any], history: MetricHistory | None = None) -
 
         activity = (svc.get("activity") or "").strip()
         if activity:
-            activity_lines.append(f"  {name}  [{status_label(state)}] {activity}")
+            # Activity may span multiple lines (e.g. huggingface_hub's concurrent
+            # download bars): first line sits inline, the rest indent under it.
+            first, *rest = activity.split("\n")
+            activity_lines.append(f"  {name}  [{status_label(state)}] {first}")
+            activity_lines.extend(f"    {line}" for line in rest)
 
     footer = budget_footer(status.get("budget"))
     if not activity_lines and footer is None:
