@@ -11,6 +11,7 @@ state); the server always starts from the resolved local path.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from sovereign.config import ServiceEntry
 from sovereign.core.registry import register_service
@@ -23,6 +24,9 @@ from sovereign.services.inference_engines.llama_cpp.config import (
     LlamaCppConfig,
     LlamaPolicy,
 )
+
+if TYPE_CHECKING:
+    from sovereign.services.inference_engines.hf import ModelRef, RepoInfo
 
 
 @register_service("llama_cpp")
@@ -39,6 +43,28 @@ class LlamaCppManager(NativeEngineManager):
     def __init__(self, entry: ServiceEntry) -> None:
         super().__init__(entry)
         self.policy = LlamaPolicy.model_validate(entry.policy or {})
+
+    # --- routing (auto base_type) ---
+    @classmethod
+    def claim_route(cls, ref: ModelRef, info: RepoInfo | None) -> int | None:
+        """Claim GGUF work: a local ``.gguf``, an explicit quant/filename, or ``.gguf``
+        siblings on the hub.
+
+        Confidence ordering (higher wins across engines) preserves the original
+        rule precedence: an explicit quant/filename or a local GGUF outranks an mlx
+        tag (see :class:`MlxLmManager`), which in turn outranks a bare ``.gguf`` sibling.
+        """
+        if ref.is_local:
+            path = ref.local_path
+            assert path is not None
+            if path.suffix == ".gguf" or (path.is_dir() and any(path.glob("*.gguf"))):
+                return 50
+            return None
+        if ref.quant is not None or ref.filename is not None:
+            return 50
+        if info is not None and any(n.endswith(".gguf") for n, _ in info.siblings):
+            return 30
+        return None
 
     # --- resource estimation (§7) ---
     def estimated_memory_gb(self) -> float:

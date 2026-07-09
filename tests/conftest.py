@@ -35,11 +35,12 @@ def _no_real_hf_api(monkeypatch):
     same call quietly returns None (the fallback path) and the mistake hides.
     Stubbing HfApi to raise RepositoryNotFoundError reproduces the loud CI
     behavior everywhere; tests that want a real-looking response monkeypatch
-    ``sovereign.hf.fetch_repo_info`` (or HfApi itself) on top of this.
+    ``sovereign.services.inference_engines.hf.fetch_repo_info`` (or HfApi itself)
+    on top of this.
     """
     from huggingface_hub.errors import RepositoryNotFoundError
 
-    from sovereign import hf as models
+    from sovereign.services.inference_engines import hf as models
 
     # Successful fetches are memoised for the process lifetime — drop them so a
     # result cached by one test can never leak into another.

@@ -1,7 +1,8 @@
-"""Phase M1: unit tests for sovereign.hf.
+"""Phase M1: unit tests for the HF pipeline (services.inference_engines.hf).
 
 Pure unit — no real HF network calls.  HfApi.model_info is monkeypatched or
-RepoInfo is built directly.  Mirrors the mock style in tests/services/test_mlx_lm.py.
+RepoInfo is built directly.  Engine routing lives in
+tests/services/inference_engines/test_routing.py.
 """
 
 from __future__ import annotations
@@ -11,22 +12,18 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from sovereign import hf as models_mod
-from sovereign.config import ServiceEntry
-from sovereign.hf import (
+from sovereign.services.inference_engines import hf as models_mod
+from sovereign.services.inference_engines.hf import (
     ModelAccessError,
     ModelNotFoundError,
     ModelResolutionError,
     RepoInfo,
     RoutingCache,
-    RoutingError,
     _ProgressAggregator,
     _repo_info_cache,
     estimate_model_bytes,
     fetch_repo_info,
     parse_model_ref,
-    resolve_entry_base_type,
-    route_base_type,
     select_gguf_files,
     weight_bytes,
 )
@@ -303,13 +300,17 @@ def test_estimate_local_beats_api(tmp_path, sparse_file, monkeypatch):
     model_dir.mkdir()
     sparse_file(model_dir / "weights.safetensors", 4 * 1024**3)
     # Even if API would return something, local should be used
-    monkeypatch.setattr("sovereign.hf.fetch_repo_info", lambda _: None)
+    monkeypatch.setattr(
+        "sovereign.services.inference_engines.hf.fetch_repo_info", lambda _: None
+    )
     ref = parse_model_ref(str(model_dir))
     assert estimate_model_bytes(ref, "snapshot") == 4 * 1024**3
 
 
 def test_estimate_offline_uncached_returns_none(monkeypatch):
-    monkeypatch.setattr("sovereign.hf.fetch_repo_info", lambda _: None)
+    monkeypatch.setattr(
+        "sovereign.services.inference_engines.hf.fetch_repo_info", lambda _: None
+    )
     ref = parse_model_ref("org/model")
     assert estimate_model_bytes(ref, "snapshot") is None
 
@@ -319,107 +320,11 @@ def test_estimate_from_api(monkeypatch):
         "org/model",
         siblings=(("model.safetensors", 3 * 1024**3),),
     )
-    monkeypatch.setattr("sovereign.hf.fetch_repo_info", lambda _: fake_info)
+    monkeypatch.setattr(
+        "sovereign.services.inference_engines.hf.fetch_repo_info", lambda _: fake_info
+    )
     ref = parse_model_ref("org/model")
     assert estimate_model_bytes(ref, "snapshot") == 3 * 1024**3
-
-
-# ---------------------------------------------------------------------------
-# route_base_type
-# ---------------------------------------------------------------------------
-
-
-def test_route_local_gguf_file(tmp_path):
-    f = tmp_path / "model.gguf"
-    f.touch()
-    ref = parse_model_ref(str(f))
-    assert route_base_type(ref, None) == "llama_cpp"
-
-
-def test_route_local_dir_with_gguf(tmp_path):
-    d = tmp_path / "model"
-    d.mkdir()
-    (d / "model.gguf").touch()
-    ref = parse_model_ref(str(d))
-    assert route_base_type(ref, None) == "llama_cpp"
-
-
-def test_route_local_dir_with_config_json(tmp_path):
-    d = tmp_path / "model"
-    d.mkdir()
-    (d / "config.json").touch()
-    ref = parse_model_ref(str(d))
-    assert route_base_type(ref, None) == "mlx_lm"
-
-
-def test_route_local_dir_with_safetensors(tmp_path):
-    d = tmp_path / "model"
-    d.mkdir()
-    (d / "weights.safetensors").touch()
-    ref = parse_model_ref(str(d))
-    assert route_base_type(ref, None) == "mlx_lm"
-
-
-def test_route_local_unknown_raises(tmp_path):
-    d = tmp_path / "model"
-    d.mkdir()
-    ref = parse_model_ref(str(d))
-    with pytest.raises(RoutingError):
-        route_base_type(ref, None)
-
-
-def test_route_quant_set_implies_llama_cpp():
-    ref = parse_model_ref("org/model:Q4_K_M")
-    assert route_base_type(ref, None) == "llama_cpp"
-
-
-def test_route_filename_set_implies_llama_cpp():
-    ref = parse_model_ref("org/model/file.gguf")
-    assert route_base_type(ref, None) == "llama_cpp"
-
-
-def test_route_mlx_tag():
-    info = _repo("org/model", tags=("mlx",))
-    ref = parse_model_ref("org/model")
-    assert route_base_type(ref, info) == "mlx_lm"
-
-
-def test_route_mlx_community_org():
-    info = _repo("mlx-community/SmolLM", tags=())
-    ref = parse_model_ref("mlx-community/SmolLM")
-    assert route_base_type(ref, info) == "mlx_lm"
-
-
-def test_route_gguf_siblings():
-    info = _repo(siblings=(("model.gguf", 1024),))
-    ref = parse_model_ref("org/model")
-    assert route_base_type(ref, info) == "llama_cpp"
-
-
-def test_route_safetensors_siblings():
-    info = _repo(siblings=(("model.safetensors", 1024),))
-    ref = parse_model_ref("org/model")
-    assert route_base_type(ref, info) == "mlx_lm"
-
-
-def test_route_mlx_tag_beats_gguf_sibling():
-    # mlx-community org + gguf sibling → mlx_lm wins (mlx signal takes priority)
-    info = _repo("mlx-community/model", tags=(), siblings=(("model.gguf", 1024),))
-    ref = parse_model_ref("mlx-community/model")
-    assert route_base_type(ref, info) == "mlx_lm"
-
-
-def test_route_offline_no_info_raises():
-    ref = parse_model_ref("org/model")
-    with pytest.raises(RoutingError, match="offline"):
-        route_base_type(ref, None)
-
-
-def test_route_no_gguf_no_safetensors_raises():
-    info = _repo(siblings=(("config.json", 100),))
-    ref = parse_model_ref("org/model")
-    with pytest.raises(RoutingError):
-        route_base_type(ref, info)
 
 
 # ---------------------------------------------------------------------------
@@ -451,51 +356,6 @@ def test_routing_cache_missing_file_ok(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# resolve_entry_base_type
-# ---------------------------------------------------------------------------
-
-
-def _svc(model: str, base_type: str = "auto") -> ServiceEntry:
-    return ServiceEntry(name="svc", base_type=base_type, config={"model": model})
-
-
-def test_resolve_entry_explicit_base_type_untouched(tmp_path):
-    entry = _svc("org/model", base_type="llama_cpp")
-    assert resolve_entry_base_type(entry, tmp_path) == "llama_cpp"
-
-
-def test_resolve_entry_online_routes_and_writes_cache(tmp_path, monkeypatch):
-    info = _repo("mlx-community/foo", tags=("mlx",), siblings=(("model.safetensors", 100),))
-    monkeypatch.setattr(models_mod, "fetch_repo_info", lambda repo_id: info)
-    entry = _svc("mlx-community/foo")
-    assert resolve_entry_base_type(entry, tmp_path) == "mlx_lm"
-    # Written to the routing cache for deterministic offline restarts.
-    cached = RoutingCache(tmp_path / "models.json").get("mlx-community/foo")
-    assert cached is not None
-    assert cached["base_type"] == "mlx_lm"
-
-
-def test_resolve_entry_offline_uses_cache(tmp_path, monkeypatch):
-    RoutingCache(tmp_path / "models.json").put(
-        "org/model", base_type="llama_cpp", weight_bytes=None
-    )
-    monkeypatch.setattr(models_mod, "fetch_repo_info", lambda repo_id: None)  # offline
-    assert resolve_entry_base_type(_svc("org/model"), tmp_path) == "llama_cpp"
-
-
-def test_resolve_entry_offline_without_cache_raises(tmp_path, monkeypatch):
-    monkeypatch.setattr(models_mod, "fetch_repo_info", lambda repo_id: None)  # offline
-    with pytest.raises(RoutingError, match="offline"):
-        resolve_entry_base_type(_svc("org/model"), tmp_path)
-
-
-def test_resolve_entry_local_never_needs_network(tmp_path):
-    (tmp_path / "m.gguf").write_bytes(b"gguf")
-    entry = _svc(str(tmp_path / "m.gguf"))
-    assert resolve_entry_base_type(entry, tmp_path) == "llama_cpp"
-
-
-# ---------------------------------------------------------------------------
 # fetch_repo_info error mapping
 # ---------------------------------------------------------------------------
 
@@ -516,7 +376,7 @@ def test_fetch_gated_repo_raises_model_access_error():
     fake_resp = MagicMock()
     fake_resp.headers = {}
     exc = _GRE("gated", response=fake_resp)
-    with patch("sovereign.hf.HfApi") as MockApi:
+    with patch("sovereign.services.inference_engines.hf.HfApi") as MockApi:
         MockApi.return_value.model_info.side_effect = exc
         with pytest.raises(ModelAccessError, match="gated"):
             fetch_repo_info("org/gated-model")
@@ -528,21 +388,21 @@ def test_fetch_not_found_raises_model_not_found_error():
     fake_resp = MagicMock()
     fake_resp.headers = {}
     exc = _RNFE("missing", response=fake_resp)
-    with patch("sovereign.hf.HfApi") as MockApi:
+    with patch("sovereign.services.inference_engines.hf.HfApi") as MockApi:
         MockApi.return_value.model_info.side_effect = exc
         with pytest.raises(ModelNotFoundError):
             fetch_repo_info("org/missing")
 
 
 def test_fetch_connection_error_returns_none():
-    with patch("sovereign.hf.HfApi") as MockApi:
+    with patch("sovereign.services.inference_engines.hf.HfApi") as MockApi:
         MockApi.return_value.model_info.side_effect = ConnectionError("offline")
         result = fetch_repo_info("org/model")
     assert result is None
 
 
 def test_fetch_connection_error_not_cached():
-    with patch("sovereign.hf.HfApi") as MockApi:
+    with patch("sovereign.services.inference_engines.hf.HfApi") as MockApi:
         MockApi.return_value.model_info.side_effect = ConnectionError("offline")
         fetch_repo_info("org/model")
         MockApi.return_value.model_info.side_effect = ConnectionError("offline again")
@@ -554,7 +414,7 @@ def test_fetch_connection_error_not_cached():
 
 def test_fetch_success_is_cached():
     fake = _make_hfapi_info(("mlx",), (("model.safetensors", 1024),))
-    with patch("sovereign.hf.HfApi") as MockApi:
+    with patch("sovereign.services.inference_engines.hf.HfApi") as MockApi:
         MockApi.return_value.model_info.return_value = fake
         r1 = fetch_repo_info("org/model")
         r2 = fetch_repo_info("org/model")
@@ -685,7 +545,7 @@ def test_progress_tqdm_handles_snapshot_style_growing_total(monkeypatch):
     # snapshot_download creates the byte bar with total=0, then grows bar.total as
     # each file's metadata arrives (see _AggregatedTqdm in _snapshot_download.py).
     # The reporter must tolerate that and never divide by the stale zero.
-    from sovereign.hf import _make_progress_tqdm
+    from sovereign.services.inference_engines.hf import _make_progress_tqdm
 
     messages: list[str] = []
     tqdm_cls = _make_progress_tqdm(messages.append, "org/model")

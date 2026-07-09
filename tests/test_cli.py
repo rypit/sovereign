@@ -646,7 +646,8 @@ def test_bench_compare_json_output(tmp_path) -> None:
 # --- sovereign plan (M5) ---
 import types  # noqa: E402
 
-from sovereign import hf as models_mod  # noqa: E402
+from sovereign.core.errors import RoutingError  # noqa: E402
+from sovereign.services.inference_engines import hf as models_mod  # noqa: E402
 
 _PLAN_YAML = """
 version: "1.1"
@@ -669,7 +670,7 @@ def _write_plan_config(tmp_path, *, mem=64, base_type="auto") -> Path:
 
 
 def test_plan_fits(tmp_path, monkeypatch) -> None:
-    monkeypatch.setattr(models_mod, "resolve_entry_base_type", lambda e, s: "mlx_lm")
+    monkeypatch.setattr("sovereign.core.planning.route_entry", lambda e, s: "mlx_lm")
     monkeypatch.setattr(
         models_mod, "estimate_model_bytes_with_source", lambda ref, kind: (8 * 1024**3, "hub")
     )
@@ -681,7 +682,7 @@ def test_plan_fits(tmp_path, monkeypatch) -> None:
 
 
 def test_plan_refused_when_over_budget(tmp_path, monkeypatch) -> None:
-    monkeypatch.setattr(models_mod, "resolve_entry_base_type", lambda e, s: "mlx_lm")
+    monkeypatch.setattr("sovereign.core.planning.route_entry", lambda e, s: "mlx_lm")
     monkeypatch.setattr(
         models_mod, "estimate_model_bytes_with_source", lambda ref, kind: (200 * 1024**3, "hub")
     )
@@ -692,9 +693,9 @@ def test_plan_refused_when_over_budget(tmp_path, monkeypatch) -> None:
 
 def test_plan_routing_error(tmp_path, monkeypatch) -> None:
     def boom(entry, state_dir):
-        raise models_mod.RoutingError("cannot route offline")
+        raise RoutingError("cannot route offline")
 
-    monkeypatch.setattr(models_mod, "resolve_entry_base_type", boom)
+    monkeypatch.setattr("sovereign.core.planning.route_entry", boom)
     result = runner.invoke(app, ["plan", "-f", str(_write_plan_config(tmp_path))])
     assert result.exit_code == 1
     assert "ROUTING ERROR" in result.stdout

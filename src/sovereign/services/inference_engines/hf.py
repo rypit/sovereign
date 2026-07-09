@@ -1,4 +1,4 @@
-"""The HuggingFace model pipeline: metadata, routing, and download.
+"""The HuggingFace model pipeline: metadata, estimation, and download.
 
 Pure library — no typer, no manager imports. Provides:
 - ModelRef parsing from raw model strings (local path, repo id, repo:quant, repo/file.gguf)
@@ -7,11 +7,13 @@ Pure library — no typer, no manager imports. Provides:
 - Weight byte estimation from metadata or disk
 - Download with byte-level progress via a custom ``tqdm_class`` (works with the Xet
   backend through ``hf_xet``, which reports transfer progress through the same bars)
-- Engine routing: mlx_lm vs llama_cpp, with persisted RoutingCache for offline restarts
+- ``RoutingCache``: persisted engine-routing decisions for offline restarts
 
-Engines call this module through a single seam (``inference_engines.base``
-imports it as ``hf_models``), so tests patch ``sovereign.hf.<fn>`` and every
-caller sees it.
+The engine-routing *decision* lives in :mod:`sovereign.services.inference_engines.routing`
+(each engine claims a ref via ``claim_route``); this module supplies the metadata
+it reads. Engines call this module through a single seam (``inference_engines.base``
+imports it as ``hf_models``), so tests patch
+``sovereign.services.inference_engines.hf.<fn>`` and every caller sees it.
 """
 
 from __future__ import annotations
@@ -29,7 +31,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal
+from typing import Any, Literal
 
 import httpx  # a hard dependency of huggingface_hub>=1.0 (its transport layer)
 from huggingface_hub import HfApi, hf_hub_download, snapshot_download
@@ -40,37 +42,17 @@ from huggingface_hub.errors import (
 )
 from tqdm.auto import tqdm as _BaseTqdm
 
+# The model-resolution exceptions live in ``core`` (the cross-layer contract the
+# orchestrator/planner/CLI catch); this pipeline raises them.
+from sovereign.core.errors import (
+    ModelAccessError,
+    ModelDownloadError,
+    ModelNotFoundError,
+    ModelResolutionError,
+)
 from sovereign.utils.state import read_json, write_json
 
-if TYPE_CHECKING:
-    from sovereign.config import ServiceEntry
-
 log = logging.getLogger(__name__)
-
-
-# ---------------------------------------------------------------------------
-# Exceptions
-# ---------------------------------------------------------------------------
-
-
-class ModelResolutionError(Exception):
-    """Base for model resolution problems."""
-
-
-class ModelAccessError(ModelResolutionError):
-    """Gated repo or bad token."""
-
-
-class ModelNotFoundError(ModelResolutionError):
-    """Repo doesn't exist on HuggingFace Hub."""
-
-
-class ModelDownloadError(ModelResolutionError):
-    """Disk space exhausted or mid-download failure."""
-
-
-class RoutingError(ModelResolutionError):
-    """Auto routing is impossible for this model ref."""
 
 
 # ---------------------------------------------------------------------------
@@ -593,61 +575,6 @@ def _cached_bytes(repo_id: str) -> int:
 
 
 # ---------------------------------------------------------------------------
-# Engine routing
-# ---------------------------------------------------------------------------
-
-
-def route_base_type(ref: ModelRef, info: RepoInfo | None) -> str:
-    """Determine which engine should serve this model.
-
-    Rules (in order):
-    1. Local path suffix / directory contents.
-    2. quant or filename set → llama_cpp (no network needed).
-    3. Hub metadata: mlx tag / mlx-community org → mlx_lm; .gguf sibling →
-       llama_cpp; .safetensors sibling → mlx_lm.
-    4. Offline without info → RoutingError.
-    """
-    if ref.is_local:
-        path = ref.local_path
-        assert path is not None
-        if path.suffix == ".gguf":
-            return "llama_cpp"
-        if path.is_dir():
-            if any(path.glob("*.gguf")):
-                return "llama_cpp"
-            if (path / "config.json").exists() or any(path.glob("*.safetensors")):
-                return "mlx_lm"
-        raise RoutingError(
-            f"Cannot determine engine for local path '{path}': "
-            "no .gguf files and no config.json/safetensors"
-        )
-
-    if ref.quant is not None or ref.filename is not None:
-        return "llama_cpp"
-
-    if info is not None:
-        # mlx tag or mlx-community org → mlx_lm
-        if "mlx" in info.tags or (ref.repo_id or "").startswith("mlx-community/"):
-            return "mlx_lm"
-        siblings_names = [name for name, _ in info.siblings]
-        has_gguf = any(n.endswith(".gguf") for n in siblings_names)
-        has_safetensors = any(n.endswith(".safetensors") for n in siblings_names)
-        if has_gguf:
-            return "llama_cpp"
-        if has_safetensors:
-            return "mlx_lm"
-        raise RoutingError(
-            f"Cannot route '{ref.raw}': no GGUF or safetensors files found "
-            f"(tags={info.tags!r}, siblings={len(info.siblings)})"
-        )
-
-    raise RoutingError(
-        f"Cannot route '{ref.raw}' offline — "
-        "set an explicit base_type or connect once to populate the routing cache"
-    )
-
-
-# ---------------------------------------------------------------------------
 # Routing cache — persists routing decisions across restarts
 # ---------------------------------------------------------------------------
 
@@ -673,39 +600,3 @@ class RoutingCache:
         }
         with contextlib.suppress(Exception):
             write_json(self._path, self._data)
-
-
-def resolve_entry_base_type(entry: ServiceEntry, state_dir: Path) -> str:
-    """Resolve ``base_type`` for a ServiceEntry, routing ``"auto"`` entries.
-
-    Returns the existing base_type unchanged for non-auto entries.
-    """
-    if entry.base_type != "auto":
-        return entry.base_type
-
-    model: str = entry.config.get("model")  # type: ignore[assignment]
-    ref = parse_model_ref(model)
-    cache = RoutingCache(state_dir / "models.json")
-
-    if ref.is_local:
-        return route_base_type(ref, None)
-
-    info = fetch_repo_info(ref.repo_id)  # type: ignore[arg-type]
-    if info is not None:
-        base_type = route_base_type(ref, info)
-        kind: Literal["snapshot", "gguf"] = "gguf" if base_type == "llama_cpp" else "snapshot"
-        wb = weight_bytes(info, kind, quant=ref.quant, filename=ref.filename)
-        cache.put(model, base_type=base_type, weight_bytes=wb)
-        log.debug("routed %s -> %s (hub metadata)", model, base_type)
-        return base_type
-
-    # Offline: consult routing cache
-    cached = cache.get(model)
-    if cached:
-        log.debug("routed %s -> %s (offline, routing cache)", model, cached["base_type"])
-        return cached["base_type"]
-
-    raise RoutingError(
-        f"Cannot route '{model}' offline — "
-        "set an explicit base_type or connect once to populate the routing cache"
-    )

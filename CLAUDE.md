@@ -26,15 +26,15 @@ main.py            Typer CLI (thin: parsing, tables, exit codes)
 dashboard.py       Rich live dashboard; renders core/status.StatusSnapshot
 orchestrator.py    async DAG boot, reconcile loops, persistence; drives sync
                    managers via asyncio.to_thread — managers stay synchronous
-hf.py              the whole HuggingFace pipeline: ref parsing, metadata,
-                   GGUF selection, memory estimation, download, engine routing
 config.py          sovereign.yaml schema (Pydantic)
 core/
   base_manager.py  ServiceManager Protocol + optional-capability Protocols
-                   (SupportsModelPreparation, SupportsMemoryEstimate, …)
+                   (SupportsModelPreparation, SupportsMemoryEstimate,
+                   SupportsEstimateSource, RoutesModelRef, …)
   base_harness.py  Harness Protocol + BaseHarness
   base_config.py   SovereignBaseModel (extra="forbid") + NativeEngineConfig
-  registry.py      base_type -> class maps; populate_registries()
+  errors.py        model-resolution exceptions (the cross-layer contract)
+  registry.py      base_type -> class maps; populate_registries(); route_entry()
   planning.py      shared dry-run used by `sovereign plan` (same seams as boot)
   resources.py     memory budget / admission control (refuse-to-boot)
   provisioning.py  per-integration dependency install (Brewfile + commands)
@@ -42,6 +42,10 @@ services/
   docker_engine/         auxiliary services in Docker
   inference_engines/     native engines + their shared base
     base.py              shared subprocess/health/metrics lifecycle (NativeEngineManager)
+    hf.py                the HuggingFace pipeline: ref parsing, metadata, GGUF
+                         selection, memory estimation, download, RoutingCache
+    routing.py           engine-routing sweep (each engine's claim_route); registers
+                         the router core calls via registry.route_entry()
     llama_cpp/  mlx_lm/   the two native engines (auto-discovered)
 harnesses/         cline_cli, mini_swe_agent          (auto-discovered)
 bench/             content-addressed bench cells; only cleanroom.py may
@@ -50,8 +54,12 @@ utils/             state.json/manifest.json IO
 ```
 
 Dependency direction: `config` depends only on Pydantic (the "golden rule" —
-never subprocess/os/docker in a config module). `hf.py` imports no managers.
-`orchestrator` imports `core/*`; nothing in `orchestrator` imports `bench`.
+never subprocess/os/docker in a config module). The HF pipeline
+(`services/inference_engines/hf.py`) imports no managers; nothing above
+`services/` imports it — the orchestrator/planner/CLI route through
+`core.registry.route_entry` and catch `core.errors`, so the engine-domain HF
+code stays a leaf. `orchestrator` imports `core/*`; nothing in `orchestrator`
+imports `bench`.
 
 ## Conventions and gotchas
 
@@ -68,8 +76,9 @@ never subprocess/os/docker in a config module). `hf.py` imports no managers.
 - **Optional manager capabilities** are Protocols in `core/base_manager.py`,
   checked with `isinstance()` — don't `getattr`-probe for hooks, and add new
   hooks to a Protocol so they stay visible.
-- **Test seams**: tests patch `sovereign.hf.<fn>` (engines call through the
-  `hf_models` module alias), `run_docker()` for Docker, and
+- **Test seams**: tests patch `sovereign.services.inference_engines.hf.<fn>`
+  (engines and the router call through the `hf_models`/`hf` module alias),
+  `run_docker()` for Docker, and
   `urllib.request.urlopen` for health checks. `tests/conftest.py` autouse
   fixtures disable real provisioning and stub the HF API to look offline —
   opt back in with `@pytest.mark.allow_provisioning`.
@@ -79,13 +88,17 @@ never subprocess/os/docker in a config module). `hf.py` imports no managers.
   there is no daemon IPC. Run commands from the stack's directory or pass
   `--state-dir`.
 - **`plan` must not drift from boot**: `core/planning.py` reuses
-  `resolve_entry_base_type` and `estimate_service_memory` — if you change
-  admission or routing, both paths pick it up; never re-implement the math.
+  `core.registry.route_entry` (engine routing) and `estimate_service_memory`,
+  and reads the SOURCE label through the manager's `estimated_memory_source()`
+  (`SupportsEstimateSource`) — if you change admission or routing, both paths
+  pick it up; never re-implement the math.
 - **Refuse-to-boot, never auto-kill** (§11.5 of the plan): admission control
   refuses services that would blow the memory budget; Sovereign never kills a
   running service.
 - **`base_type` only**: instance `name` is identity, `base_type` picks the
-  class. `auto` (or omitted) routes via HF metadata in `hf.py`.
+  class. `auto` (or omitted) routes via `core.registry.route_entry`, which sweeps
+  each engine's `claim_route` (`RoutesModelRef`) over the ref + HF metadata — a
+  new engine joins `auto` routing by dropping in a folder, no central rule table.
 - Diagnostics go to the `sovereign` logger (`--verbose` for DEBUG);
   user-facing output goes through the Rich `console`.
 - Docstrings cite plan sections (§N) — they refer to
