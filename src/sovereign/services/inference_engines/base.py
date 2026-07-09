@@ -22,16 +22,17 @@ from typing import IO, Any, ClassVar, Literal
 import psutil
 
 # The runtime HF surface (metadata fetch, estimation, download) is called through
-# the module — one seam, so tests patch `sovereign.hf.<fn>` and every
-# caller sees it. Pure helpers are imported by name.
-from sovereign import hf as hf_models
+# the module — one seam, so tests patch
+# `sovereign.services.inference_engines.hf.<fn>` and every caller sees it. Pure
+# helpers are imported by name.
 from sovereign.config import ServiceEntry
 from sovereign.core.base_config import NativeEngineConfig
 from sovereign.core.base_manager import ActivityMixin
 from sovereign.core.provisioning import Provisioner
 from sovereign.core.resolver import ConsumerKind, ResolvedEndpoint
 from sovereign.core.resources import priority_to_nice
-from sovereign.hf import looks_local, parse_model_ref
+from sovereign.services.inference_engines import hf as hf_models
+from sovereign.services.inference_engines.hf import looks_local, parse_model_ref
 
 # Per-request health probe timeout (seconds) — distinct from the overall boot
 # timeout the Orchestrator enforces while polling.
@@ -137,6 +138,18 @@ class NativeEngineManager(ActivityMixin, Provisioner):
         metadata), for admission control. Unknown (offline+uncached) → 0."""
         ref = parse_model_ref(model)
         return hf_models.estimate_model_bytes(ref, self.model_artifact_kind) or 0
+
+    def estimated_memory_source(self) -> str:
+        """Where admission's weight estimate came from (local|cached|hub|unknown).
+
+        Backs :class:`~sovereign.core.base_manager.SupportsEstimateSource` so the
+        ``sovereign plan`` SOURCE column can say whether the model is already on
+        disk or would be fetched — without the planner reaching into the HF pipeline.
+        """
+        _, source = hf_models.estimate_model_bytes_with_source(
+            parse_model_ref(self.config.model), self.model_artifact_kind
+        )
+        return source
 
     # --- pre-download (DOWNLOADING state) ---
     def prepare_model(self) -> None:

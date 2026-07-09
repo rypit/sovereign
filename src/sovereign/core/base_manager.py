@@ -10,11 +10,12 @@ Harnesses and Jobs do **not** implement this — they have their own contracts
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
     from sovereign.config import ServiceEntry
     from sovereign.core.resolver import ResolvedEndpoint, Resolver
+    from sovereign.services.inference_engines.hf import ModelRef, RepoInfo
 
 
 class ActivityMixin:
@@ -125,6 +126,42 @@ class SupportsMemoryEstimate(Protocol):
 
     def estimated_memory_gb(self) -> float:
         """Expected unified-memory footprint in GB (0.0 when unknown)."""
+        ...
+
+
+@runtime_checkable
+class SupportsEstimateSource(Protocol):
+    """Reports where its memory estimate came from, for the ``sovereign plan`` table.
+
+    Lets the dry-run label a model as already-on-disk vs. would-be-fetched
+    without the planner reaching into the HF pipeline itself.
+    """
+
+    def estimated_memory_source(self) -> str:
+        """One of ``local`` | ``cached`` | ``hub`` | ``unknown``."""
+        ...
+
+
+@runtime_checkable
+class RoutesModelRef(Protocol):
+    """Native engines: decide whether this engine serves a given model ref (§2.6).
+
+    A classmethod, so routing an ``auto`` entry never needs to construct a
+    manager. The router (``services/inference_engines/routing.py``) sweeps every
+    registered engine and picks the highest-confidence claim, which is how a new
+    engine joins ``auto`` routing by dropping in a folder — no central rule table.
+    The router reads ``base_type`` (the resolved answer) and ``model_artifact_kind``
+    (to warm the routing cache's weight estimate) off the winning engine.
+    """
+
+    #: The resolved ``base_type`` this engine registers under.
+    base_type: ClassVar[str]
+    #: Which HF artifact the engine consumes — drives the cached weight estimate.
+    model_artifact_kind: ClassVar[Literal["snapshot", "gguf"]]
+
+    @classmethod
+    def claim_route(cls, ref: ModelRef, info: RepoInfo | None) -> int | None:
+        """Confidence that this engine serves ``ref`` (higher wins), or None to abstain."""
         ...
 
 

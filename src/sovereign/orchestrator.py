@@ -30,6 +30,7 @@ from sovereign.core.base_manager import (
     SupportsResolve,
     SupportsRuntimeHandle,
 )
+from sovereign.core.registry import route_entry
 from sovereign.core.resolver import ConsumerKind, Resolver, ServiceRegistry
 from sovereign.core.resources import (
     ResourceBudgeter,
@@ -37,7 +38,6 @@ from sovereign.core.resources import (
     estimate_service_memory,
 )
 from sovereign.core.status import StatusSnapshot
-from sovereign.hf import resolve_entry_base_type
 from sovereign.utils.manifest import write_manifest
 from sovereign.utils.state import file_hash, write_json
 
@@ -173,7 +173,7 @@ class Orchestrator:
             entry = self._entries[name]
             if entry.base_type == "auto":
                 self.requested_base_types[name] = "auto"
-                resolved = resolve_entry_base_type(entry, self.state_dir)
+                resolved = route_entry(entry, self.state_dir)
                 self._entries[name] = entry.model_copy(update={"base_type": resolved})
         for name in self._service_names:
             self.managers[name] = self._manager_factory(self._entries[name])

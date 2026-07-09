@@ -302,9 +302,7 @@ def test_manager_without_prepare_model_skips_downloading() -> None:
 def test_build_routes_auto_base_type(monkeypatch) -> None:
     import sovereign.orchestrator as orch_mod
 
-    monkeypatch.setattr(
-        orch_mod, "resolve_entry_base_type", lambda entry, state_dir: "mlx_lm"
-    )
+    monkeypatch.setattr(orch_mod, "route_entry", lambda entry, state_dir: "mlx_lm")
     cfg = _config([{"name": "engine", "base_type": "auto", "config": {"model": "org/m"}}])
     seen: list[str] = []
     orch = _orch(cfg)
@@ -322,8 +320,8 @@ def test_build_routes_auto_base_type(monkeypatch) -> None:
 
 
 def test_build_auto_routing_uses_cache_offline(tmp_path, monkeypatch) -> None:
-    from sovereign import hf as models_mod
-    from sovereign.hf import RoutingCache
+    from sovereign.services.inference_engines import hf as models_mod
+    from sovereign.services.inference_engines.hf import RoutingCache
 
     RoutingCache(tmp_path / "models.json").put(
         "org/m", base_type="llama_cpp", weight_bytes=None

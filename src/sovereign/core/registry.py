@@ -12,16 +12,41 @@ auto-discover their subpackages), so registration can never be silently skipped.
 
 from __future__ import annotations
 
-from typing import TypeVar
+from typing import TYPE_CHECKING, Protocol, TypeVar
 
 from sovereign.core.base_harness import Harness
 from sovereign.core.base_manager import ServiceManager
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+    from sovereign.config import ServiceEntry
 
 _SERVICE_MANAGERS: dict[str, type[ServiceManager]] = {}
 _HARNESSES: dict[str, type[Harness]] = {}
 
 M = TypeVar("M", bound=ServiceManager)
 H = TypeVar("H", bound=Harness)
+
+
+class _Router(Protocol):
+    """The engine-routing entry point the inference-engine package provides."""
+
+    def __call__(
+        self, entry: ServiceEntry, state_dir: Path, engines: list[type[ServiceManager]]
+    ) -> str: ...
+
+
+# The concrete router is registered as an import side effect of the inference-engine
+# package (see ``services/inference_engines/routing.py``), the same dependency-inversion
+# pattern as ``@register_service`` — core never imports the engine package by name.
+_ROUTER: _Router | None = None
+
+
+def register_router(router: _Router) -> None:
+    """Register the engine-routing implementation (called once, on import)."""
+    global _ROUTER
+    _ROUTER = router
 
 
 def register_service(base_type: str):
@@ -63,6 +88,21 @@ def populate_registries() -> None:
     """
     import sovereign.harnesses  # noqa: F401, PLC0415 - registration side effect
     import sovereign.services  # noqa: F401, PLC0415 - registration side effect
+
+
+def route_entry(entry: ServiceEntry, state_dir: Path) -> str:
+    """Resolve a service entry's concrete ``base_type``, routing ``"auto"`` entries.
+
+    The single seam boot and ``sovereign plan`` share for engine routing. Delegates
+    to the engine-provided router over every registered service manager; raises
+    ``sovereign.core.errors.RoutingError`` when an ``auto`` entry can't be resolved.
+    """
+    populate_registries()
+    if _ROUTER is None:  # pragma: no cover - registration is an import side effect
+        raise RuntimeError(
+            "no model router registered; is the inference-engine package importable?"
+        )
+    return _ROUTER(entry, state_dir, list(_SERVICE_MANAGERS.values()))
 
 
 def get_service_manager(base_type: str) -> type[ServiceManager]:

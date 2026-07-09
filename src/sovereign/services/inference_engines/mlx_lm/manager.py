@@ -10,6 +10,7 @@ before launch (DOWNLOADING state) and starts the server from the resolved path.
 from __future__ import annotations
 
 import os
+from typing import TYPE_CHECKING
 
 from sovereign.core.registry import register_service
 from sovereign.services.inference_engines.base import (
@@ -17,6 +18,9 @@ from sovereign.services.inference_engines.base import (
     check_local_artifact,
 )
 from sovereign.services.inference_engines.mlx_lm.config import MlxLmConfig
+
+if TYPE_CHECKING:
+    from sovereign.services.inference_engines.hf import ModelRef, RepoInfo
 
 
 @register_service("mlx_lm")
@@ -28,6 +32,30 @@ class MlxLmManager(NativeEngineManager):
     config: MlxLmConfig
     model_artifact_kind = "snapshot"
     binary_hint = "It ships with the `mlx-lm` dependency — run `uv sync`."
+
+    # --- routing (auto base_type) ---
+    @classmethod
+    def claim_route(cls, ref: ModelRef, info: RepoInfo | None) -> int | None:
+        """Claim MLX/safetensors work: a local ``config.json``/``.safetensors`` dir, an
+        ``mlx`` tag or ``mlx-community`` org, or ``.safetensors`` siblings on the hub.
+
+        The mlx-tag confidence outranks a ``.gguf`` sibling so an mlx repo that also
+        ships GGUFs still routes here (see :class:`LlamaCppManager` for the scale).
+        """
+        if ref.is_local:
+            path = ref.local_path
+            assert path is not None
+            if path.is_dir() and (
+                (path / "config.json").exists() or any(path.glob("*.safetensors"))
+            ):
+                return 40
+            return None
+        if info is not None:
+            if "mlx" in info.tags or (ref.repo_id or "").startswith("mlx-community/"):
+                return 40
+            if any(n.endswith(".safetensors") for n, _ in info.siblings):
+                return 20
+        return None
 
     # --- resource estimation (§7) ---
     def estimated_memory_gb(self) -> float:

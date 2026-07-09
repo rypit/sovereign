@@ -453,7 +453,9 @@ def _provision_targets(file: Path | None) -> dict[str, type]:
         all_harnesses,
         all_service_managers,
         populate_registries,
+        route_entry,
     )
+    from sovereign.core.resolver import ConsumerKind
 
     populate_registries()
     registered: dict[str, type] = {**all_service_managers(), **all_harnesses()}
@@ -462,7 +464,15 @@ def _provision_targets(file: Path | None) -> dict[str, type]:
 
     config = _load_config_or_exit(file)
 
-    from sovereign.hf import ModelResolutionError, resolve_entry_base_type
+    from sovereign.core.errors import ModelResolutionError
+
+    # The native engines to provision when an ``auto`` entry can't be routed offline —
+    # derived from the registry, so a new engine joins the fallback automatically.
+    native_engine_types = {
+        bt
+        for bt, cls in all_service_managers().items()
+        if getattr(cls, "consumer_kind", None) == ConsumerKind.NATIVE
+    }
 
     declared: set[str] = {h.base_type for h in config.harnesses}
     for svc in config.services:
@@ -470,14 +480,14 @@ def _provision_targets(file: Path | None) -> dict[str, type]:
             declared.add(svc.base_type)
             continue
         # Route auto entries to their concrete engine; if that can't be determined
-        # (offline, no cache), provision the safe superset of both native engines.
+        # (offline, no cache), provision the safe superset of every native engine.
         try:
-            declared.add(resolve_entry_base_type(svc, _DEFAULT_STATE_DIR))
+            declared.add(route_entry(svc, _DEFAULT_STATE_DIR))
         except ModelResolutionError:
-            declared.update({"llama_cpp", "mlx_lm"})
+            declared.update(native_engine_types)
             console.print(
                 f"  [dim]{svc.name}: base_type 'auto' unresolved offline — "
-                "provisioning both llama_cpp and mlx_lm.[/dim]"
+                f"provisioning all native engines ({', '.join(sorted(native_engine_types))}).[/dim]"
             )
     unknown = declared - registered.keys()
     if unknown:

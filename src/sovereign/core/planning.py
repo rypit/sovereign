@@ -1,7 +1,7 @@
 """Dry-run stack planning — the boot path's routing + admission, without starting anything.
 
 ``sovereign plan`` and ``Orchestrator.boot()`` must never disagree, so this module
-reuses the exact seams boot does: :func:`sovereign.hf.resolve_entry_base_type` for
+reuses the exact seams boot does: :func:`sovereign.core.registry.route_entry` for
 engine routing and :func:`sovereign.core.resources.estimate_service_memory` (through
 the real manager class) for the memory number. Constructing the manager also
 validates the service's ``config:`` block, so typos surface at dry-run time instead
@@ -15,9 +15,10 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
-from sovereign import hf
 from sovereign.config import ServiceEntry, SovereignConfig
-from sovereign.core.registry import get_service_manager, populate_registries
+from sovereign.core.base_manager import ServiceManager, SupportsEstimateSource
+from sovereign.core.errors import ModelResolutionError
+from sovereign.core.registry import get_service_manager, populate_registries, route_entry
 from sovereign.core.resources import (
     ResourceBudgeter,
     ResourceExhaustedError,
@@ -76,8 +77,8 @@ def _plan_service(
     # Route (auto entries need HF metadata / the routing cache) — same call as
     # Orchestrator._build().
     try:
-        base_type = hf.resolve_entry_base_type(entry, state_dir)
-    except hf.ModelResolutionError as exc:
+        base_type = route_entry(entry, state_dir)
+    except ModelResolutionError as exc:
         return ServicePlan(
             name=entry.name,
             base_type=entry.base_type,
@@ -107,7 +108,7 @@ def _plan_service(
         )
 
     estimated = estimate_service_memory(manager, entry)
-    source = _estimate_source(entry, manager_cls, model)
+    source = _estimate_source(entry, manager)
     display_gb: float | None = estimated if (estimated or source != "unknown") else None
 
     # Admit against the running budget — same refuse-to-boot rule as boot.
@@ -136,12 +137,10 @@ def _plan_service(
     )
 
 
-def _estimate_source(entry: ServiceEntry, manager_cls: type, model: str) -> str:
+def _estimate_source(entry: ServiceEntry, manager: ServiceManager) -> str:
     """Label where the memory number came from, for the plan table's SOURCE column."""
     if entry.memory_gb is not None:
         return "declared"
-    kind = getattr(manager_cls, "model_artifact_kind", None)
-    if kind is not None and model != "-":
-        _, source = hf.estimate_model_bytes_with_source(hf.parse_model_ref(model), kind)
-        return source
+    if isinstance(manager, SupportsEstimateSource):
+        return manager.estimated_memory_source()
     return "unknown"

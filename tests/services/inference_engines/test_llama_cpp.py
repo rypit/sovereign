@@ -13,12 +13,12 @@ import subprocess
 import pytest
 
 import sovereign.services  # noqa: F401 - ensure registration side effect
-from sovereign import hf as models_mod
 from sovereign.config import ServiceEntry
 from sovereign.core.base_manager import ServiceManager
 from sovereign.core.registry import get_service_manager
-from sovereign.hf import RepoInfo
 from sovereign.services.inference_engines import base as native_mod
+from sovereign.services.inference_engines import hf as models_mod
+from sovereign.services.inference_engines.hf import RepoInfo
 from sovereign.services.inference_engines.llama_cpp.manager import LlamaCppManager
 
 
