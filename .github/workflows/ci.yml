@@ -24,8 +24,8 @@ jobs:
       - name: Sync dependencies
         run: uv sync --locked --dev
 
-      - name: Run tests
-        run: uv run pytest -q
+      - name: make test
+        run: make test
 
   lint:
     name: lint
@@ -42,8 +42,8 @@ jobs:
       - name: Sync dependencies
         run: uv sync --locked --dev
 
-      - name: Run ruff
-        run: uv run ruff check .
+      - name: make lint
+        run: make lint
 
   typecheck:
     name: typecheck
@@ -60,5 +60,5 @@ jobs:
       - name: Sync dependencies
         run: uv sync --locked --dev
 
-      - name: Run mypy
-        run: uv run mypy
+      - name: make typecheck
+        run: make typecheck
