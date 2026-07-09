@@ -32,14 +32,17 @@ config.py          sovereign.yaml schema (Pydantic)
 core/
   base_manager.py  ServiceManager Protocol + optional-capability Protocols
                    (SupportsModelPreparation, SupportsMemoryEstimate, …)
-  base_native.py   shared subprocess/health/metrics lifecycle for engines
   base_harness.py  Harness Protocol + BaseHarness
   base_config.py   SovereignBaseModel (extra="forbid") + NativeEngineConfig
   registry.py      base_type -> class maps; populate_registries()
   planning.py      shared dry-run used by `sovereign plan` (same seams as boot)
   resources.py     memory budget / admission control (refuse-to-boot)
   provisioning.py  per-integration dependency install (Brewfile + commands)
-services/          docker_engine, llama_cpp, mlx_lm   (auto-discovered)
+services/
+  docker_engine/         auxiliary services in Docker
+  inference_engines/     native engines + their shared base
+    base.py              shared subprocess/health/metrics lifecycle (NativeEngineManager)
+    llama_cpp/  mlx_lm/   the two native engines (auto-discovered)
 harnesses/         cline_cli, mini_swe_agent          (auto-discovered)
 bench/             content-addressed bench cells; only cleanroom.py may
                    import the Orchestrator
@@ -53,12 +56,14 @@ never subprocess/os/docker in a config module). `hf.py` imports no managers.
 ## Conventions and gotchas
 
 - **Registration**: integrations self-register via `@register_service("x")` /
-  `@register_harness("x")` decorators. `services/__init__.py` and
-  `harnesses/__init__.py` pkgutil-import every subpackage, and
-  `core/registry.populate_registries()` is the one call every lookup path
-  makes first. Adding an integration = dropping a folder with
-  `__init__.py` + `config.py` + `manager.py` (plus optional `Brewfile`);
-  no aggregator edit needed. Harness modules must import optional deps
+  `@register_harness("x")` decorators. `services/__init__.py` walks its tree
+  recursively (`pkgutil.walk_packages`, so nested groupings like
+  `inference_engines/llama_cpp` register too); `harnesses/__init__.py`
+  pkgutil-imports every subpackage; `core/registry.populate_registries()` is
+  the one call every lookup path makes first. Adding an integration = dropping
+  a folder with `__init__.py` + `config.py` + `manager.py` (plus optional
+  `Brewfile`) under `services/` (or `services/inference_engines/` for a native
+  engine); no aggregator edit needed. Harness modules must import optional deps
   lazily (inside methods) — discovery imports them unconditionally.
 - **Optional manager capabilities** are Protocols in `core/base_manager.py`,
   checked with `isinstance()` — don't `getattr`-probe for hooks, and add new
