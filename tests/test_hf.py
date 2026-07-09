@@ -426,9 +426,9 @@ def test_fetch_success_is_cached():
 # ---------------------------------------------------------------------------
 
 
-def test_activity_tqdm_forwards_rendered_lines():
+def test_activity_feed_forwards_rendered_lines():
     messages: list[str] = []
-    tqdm_cls = models_mod._make_activity_tqdm(messages.append)
+    tqdm_cls = models_mod._ActivityFeed(messages.append).tqdm_class()
     bar = tqdm_cls(total=4 * 1024**3, unit="B", unit_scale=True, desc="model.gguf", mininterval=0)
     bar.update(2 * 1024**3)
     bar.close()
@@ -436,11 +436,31 @@ def test_activity_tqdm_forwards_rendered_lines():
     assert all(m and "\r" not in m and "\n" not in m and "\x1b" not in m for m in messages)
 
 
-def test_activity_tqdm_renders_even_when_hf_requests_disable():
+def test_activity_feed_shows_concurrent_bars_together():
+    # huggingface_hub keeps several aggregate bars live at once during a snapshot
+    # download; each must show, joined, not overwrite the others.
+    messages: list[str] = []
+    tqdm_cls = models_mod._ActivityFeed(messages.append).tqdm_class()
+    transfer = tqdm_cls(total=100, unit="B", desc="Downloading bytes", mininterval=0)
+    counter = tqdm_cls(total=8, desc="Fetching 8 files", mininterval=0)
+    transfer.update(50)
+    counter.update(3)
+    combined = messages[-1]
+    assert "Downloading bytes" in combined and "Fetching 8 files" in combined
+    transfer.close()
+    counter.close()
+    # after a bar closes it drops out of the joined line
+    counter2 = tqdm_cls(total=8, desc="Fetching 8 files", mininterval=0)
+    counter2.update(1)
+    assert "Downloading bytes" not in messages[-1]
+    counter2.close()
+
+
+def test_activity_feed_renders_even_when_hf_requests_disable():
     # huggingface_hub disables its bars off-TTY / under HF_HUB_DISABLE_PROGRESS_BARS;
     # an explicit progress= request must still get updates.
     messages: list[str] = []
-    tqdm_cls = models_mod._make_activity_tqdm(messages.append)
+    tqdm_cls = models_mod._ActivityFeed(messages.append).tqdm_class()
     bar = tqdm_cls(total=100, unit="B", disable=True, mininterval=0)
     bar.update(50)
     bar.close()

@@ -22,6 +22,7 @@ import io
 import logging
 import os
 import re
+import threading
 from collections import defaultdict
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -386,51 +387,81 @@ def estimate_model_bytes(ref: ModelRef, kind: Literal["snapshot", "gguf"]) -> in
 # Download
 # ---------------------------------------------------------------------------
 
-_ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")  # cursor movement tqdm emits for nested bars
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")  # cursor moves tqdm emits for multi-bar layout
 
 
-class _ActivityWriter(io.TextIOBase):
-    """File-like sink for tqdm's rendered output: forwards each bar line to a callback.
+def _clean_bar(text: str) -> str:
+    """Strip tqdm's carriage returns and cursor-movement escapes down to a bare line."""
+    return _ANSI_RE.sub("", text).replace("\r", "").strip()
 
-    tqdm writes ``"\\r" + <rendered line>`` on every refresh (plus bare newlines /
-    cursor-up escapes when positioning multiple bars). Strip the control characters
-    and surrounding whitespace; skip writes that leave nothing. Multiple live bars
-    (snapshot's outer "Fetching N files" bar plus per-file byte bars) interleave
-    last-writer-wins — that IS huggingface_hub's output, which is the point.
+
+class _ActivityFeed:
+    """Forwards huggingface_hub's own tqdm output to a callback, all live bars at once.
+
+    huggingface_hub downloads snapshot files concurrently (``max_workers`` threads) but
+    renders progress as a few *aggregate* bars on the main thread — a file counter
+    ("Fetching N files"), the summed network transfer ("Downloading bytes") and the summed
+    reconstruction — folding the per-file bars into those internally. Each bar renders into
+    its own sink; the feed keeps the latest line from every live bar and forwards them
+    joined, so concurrently-active bars all show at once instead of overwriting each other.
+    Bar updates arrive from worker threads, hence the lock.
     """
+
+    _SEP = "  ·  "
 
     def __init__(self, progress: Callable[[str], None]) -> None:
         self._progress = progress
+        self._bars: dict[int, str] = {}  # bar id -> latest line, kept in first-seen order
+        self._lock = threading.Lock()
+
+    def tqdm_class(self) -> type[_BaseTqdm]:
+        """A ``tqdm`` subclass whose every bar renders into this feed.
+
+        ``file`` and ``disable`` are forced, not defaulted: the caller explicitly asked
+        for progress, so bars must render even off-TTY (the daemon case) and into the feed
+        rather than the console.
+        """
+        feed = self
+
+        class _FeedTqdm(_BaseTqdm):
+            def __init__(self, *args: Any, **kwargs: Any) -> None:
+                kwargs["file"] = _BarSink(feed, id(self))
+                kwargs["disable"] = False
+                super().__init__(*args, **kwargs)
+
+            def close(self) -> None:
+                super().close()  # emits the bar's final line, then it leaves the feed
+                feed._drop(id(self))
+
+        return _FeedTqdm
+
+    def _write(self, bar_id: int, text: str) -> None:
+        line = _clean_bar(text)
+        with self._lock:
+            if line:
+                self._bars[bar_id] = line
+            combined = self._SEP.join(self._bars.values())
+        if combined:
+            self._progress(combined)
+
+    def _drop(self, bar_id: int) -> None:
+        with self._lock:
+            self._bars.pop(bar_id, None)
+
+
+class _BarSink(io.TextIOBase):
+    """File-like sink tqdm renders a single bar into; forwards each write to the feed."""
+
+    def __init__(self, feed: _ActivityFeed, bar_id: int) -> None:
+        self._feed = feed
+        self._bar_id = bar_id
 
     def write(self, s: str) -> int:
-        line = _ANSI_RE.sub("", s).replace("\r", "").strip()
-        if line:
-            self._progress(line)
+        self._feed._write(self._bar_id, s)
         return len(s)
 
     def flush(self) -> None:
         pass
-
-
-def _make_activity_tqdm(progress: Callable[[str], None]) -> type[_BaseTqdm]:
-    """Build a ``tqdm`` subclass whose rendered output goes to ``progress``.
-
-    huggingface_hub renders all download progress (HTTP and Xet transfers alike)
-    through the ``tqdm_class`` passed to ``snapshot_download``/``hf_hub_download``.
-    Rather than re-aggregating byte counts, let tqdm render its normal line and
-    forward it. ``file`` and ``disable`` are forced, not defaulted: the caller
-    explicitly asked for progress, so the bar must render even off-TTY (the daemon
-    case) and into the activity sink rather than the console.
-    """
-    writer = _ActivityWriter(progress)
-
-    class _ActivityTqdm(_BaseTqdm):
-        def __init__(self, *args: Any, **kwargs: Any) -> None:
-            kwargs["file"] = writer
-            kwargs["disable"] = False
-            super().__init__(*args, **kwargs)
-
-    return _ActivityTqdm
 
 
 def download_model(
@@ -452,7 +483,7 @@ def download_model(
 
     assert ref.repo_id is not None
 
-    tqdm_class = _make_activity_tqdm(progress) if progress is not None else None
+    tqdm_class = _ActivityFeed(progress).tqdm_class() if progress is not None else None
 
     try:
         if kind == "snapshot":
