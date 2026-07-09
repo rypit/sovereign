@@ -2,7 +2,7 @@
 
 The real llama-server binary and a GGUF model are not required here; the
 subprocess, HTTP probe, and psutil calls are all mocked (via the shared
-base_native module, where the process/health/metrics lifecycle now lives).
+inference_engines.base module, where the process/health/metrics lifecycle now lives).
 """
 
 from __future__ import annotations
@@ -15,11 +15,11 @@ import pytest
 import sovereign.services  # noqa: F401 - ensure registration side effect
 from sovereign import hf as models_mod
 from sovereign.config import ServiceEntry
-from sovereign.core import base_native as native_mod
 from sovereign.core.base_manager import ServiceManager
 from sovereign.core.registry import get_service_manager
 from sovereign.hf import RepoInfo
-from sovereign.services.llama_cpp.manager import LlamaCppManager
+from sovereign.services.inference_engines import base as native_mod
+from sovereign.services.inference_engines.llama_cpp.manager import LlamaCppManager
 
 
 def _repo_info(repo_id: str, siblings: list[tuple[str, int | None]], tags=()) -> RepoInfo:

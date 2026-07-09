@@ -9,8 +9,9 @@ Pure library — no typer, no manager imports. Provides:
   backend through ``hf_xet``, which reports transfer progress through the same bars)
 - Engine routing: mlx_lm vs llama_cpp, with persisted RoutingCache for offline restarts
 
-Engines call this module through a single seam (``base_native`` imports it as
-``hf_models``), so tests patch ``sovereign.hf.<fn>`` and every caller sees it.
+Engines call this module through a single seam (``inference_engines.base``
+imports it as ``hf_models``), so tests patch ``sovereign.hf.<fn>`` and every
+caller sees it.
 """
 
 from __future__ import annotations

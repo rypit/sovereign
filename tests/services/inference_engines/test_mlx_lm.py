@@ -1,7 +1,7 @@
 """Phase 11: mlx_lm manager — mocked unit tests + Protocol/registry checks.
 
 The real mlx_lm.server binary and an MLX model are not required here; the
-subprocess, HTTP probe, and psutil calls are mocked (via the shared base_native
+subprocess, HTTP probe, and psutil calls are mocked (via the shared inference_engines.base
 module, where the process/health/metrics lifecycle now lives).
 """
 
@@ -15,11 +15,11 @@ import pytest
 import sovereign.services  # noqa: F401 - ensure registration side effect
 from sovereign import hf as models_mod
 from sovereign.config import ServiceEntry
-from sovereign.core import base_native as native_mod
 from sovereign.core.base_manager import ServiceManager
 from sovereign.core.registry import get_service_manager
 from sovereign.hf import RepoInfo
-from sovereign.services.mlx_lm.manager import MlxLmManager
+from sovereign.services.inference_engines import base as native_mod
+from sovereign.services.inference_engines.mlx_lm.manager import MlxLmManager
 
 
 def _repo_info(repo_id: str, siblings: list[tuple[str, int | None]], tags=()) -> RepoInfo:

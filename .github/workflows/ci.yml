@@ -5,32 +5,11 @@ on:
     branches: [main]
   pull_request:
 
+# The product targets macOS/Apple Silicon exclusively (native Metal/MLX), so CI
+# runs entirely on a macOS arm64 runner — the real platform, where mlx-lm
+# resolves and imports.
 jobs:
   test:
-    name: test (linux, py${{ matrix.python-version }})
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        python-version: ["3.11", "3.12", "3.13"]
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@d31148d669074a8d0a63714ba94f3201e7020bc3 # v8.3.0
-        with:
-          enable-cache: true
-          python-version: ${{ matrix.python-version }}
-
-      - name: Sync dependencies
-        run: uv sync --locked --dev
-
-      - name: Run tests
-        run: uv run pytest -q
-
-  # The product targets macOS/Apple Silicon exclusively — exercise the real
-  # platform (mlx-lm resolves and imports here, unlike on linux).
-  test-macos:
     name: test (macos arm64)
     runs-on: macos-14
     steps:
@@ -40,6 +19,7 @@ jobs:
         uses: astral-sh/setup-uv@d31148d669074a8d0a63714ba94f3201e7020bc3 # v8.3.0
         with:
           enable-cache: true
+          python-version: "3.14"
 
       - name: Sync dependencies
         run: uv sync --locked --dev
@@ -49,7 +29,7 @@ jobs:
 
   lint:
     name: lint
-    runs-on: ubuntu-latest
+    runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
 
@@ -57,6 +37,7 @@ jobs:
         uses: astral-sh/setup-uv@d31148d669074a8d0a63714ba94f3201e7020bc3 # v8.3.0
         with:
           enable-cache: true
+          python-version: "3.14"
 
       - name: Sync dependencies
         run: uv sync --locked --dev
@@ -66,7 +47,7 @@ jobs:
 
   typecheck:
     name: typecheck
-    runs-on: ubuntu-latest
+    runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
 
@@ -74,6 +55,7 @@ jobs:
         uses: astral-sh/setup-uv@d31148d669074a8d0a63714ba94f3201e7020bc3 # v8.3.0
         with:
           enable-cache: true
+          python-version: "3.14"
 
       - name: Sync dependencies
         run: uv sync --locked --dev

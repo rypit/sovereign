@@ -51,7 +51,7 @@ def test_brewfile_discovered_by_convention() -> None:
 
     from sovereign.harnesses.cline_cli.manager import ClineCliHarness
     from sovereign.services.docker_engine.manager import DockerEngineManager
-    from sovereign.services.llama_cpp.manager import LlamaCppManager
+    from sovereign.services.inference_engines.llama_cpp.manager import LlamaCppManager
 
     for cls, needle in [
         (ClineCliHarness, 'brew "node"'),

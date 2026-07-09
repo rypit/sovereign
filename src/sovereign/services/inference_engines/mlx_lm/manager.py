@@ -11,12 +11,12 @@ from __future__ import annotations
 
 import os
 
-from sovereign.core.base_native import (
+from sovereign.core.registry import register_service
+from sovereign.services.inference_engines.base import (
     NativeEngineManager,
     check_local_artifact,
 )
-from sovereign.core.registry import register_service
-from sovereign.services.mlx_lm.config import MlxLmConfig
+from sovereign.services.inference_engines.mlx_lm.config import MlxLmConfig
 
 
 @register_service("mlx_lm")

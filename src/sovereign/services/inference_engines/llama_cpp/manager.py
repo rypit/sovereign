@@ -13,12 +13,12 @@ from __future__ import annotations
 from pathlib import Path
 
 from sovereign.config import ServiceEntry
-from sovereign.core.base_native import (
+from sovereign.core.registry import register_service
+from sovereign.services.inference_engines.base import (
     NativeEngineManager,
     check_local_artifact,
 )
-from sovereign.core.registry import register_service
-from sovereign.services.llama_cpp.config import (
+from sovereign.services.inference_engines.llama_cpp.config import (
     VALID_KV_CACHE_TYPES,
     LlamaCppConfig,
     LlamaPolicy,
