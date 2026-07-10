@@ -20,7 +20,7 @@ from sovereign.config import load_config
 from sovereign.core.base_harness import SupportsInvoke, Task
 from sovereign.core.registry import get_harness
 from sovereign.core.resolver import ResolvedEndpoint, Resolver, ServiceRegistry
-from sovereign.state import read_json
+from sovereign.core.state import read_json
 
 if TYPE_CHECKING:
     from sovereign.bench.runner import CellExecutor, Job

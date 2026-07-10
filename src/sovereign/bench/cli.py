@@ -24,7 +24,7 @@ from sovereign.bench.report import build_comparison, flag_pareto
 from sovereign.bench.runner import combine_executors, run_bench
 from sovereign.bench.spec import BenchMode, BenchSpecError, load_bench_spec
 from sovereign.cli._common import _STATE_DIR_OPTION, console
-from sovereign.state import read_json
+from sovereign.core.state import read_json
 
 bench_app = typer.Typer(help="Benchmark engine x model x harness combinations.")
 

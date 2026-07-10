@@ -36,6 +36,7 @@ graph LR
     n_sovereign_core_registry["core/registry.py"]
     n_sovereign_core_resolver["core/resolver.py"]
     n_sovereign_core_resources["core/resources.py"]
+    n_sovereign_core_state["core/state.py"]
   end
   subgraph harnesses
     n_sovereign_harnesses_cline_cli["harnesses/cline_cli/__init__.py"]
@@ -76,9 +77,8 @@ graph LR
     n_sovereign_harnesses["harnesses/__init__.py"]
     n_sovereign_runtime["runtime/__init__.py"]
     n_sovereign_services["services/__init__.py"]
-    n_sovereign_state["state.py"]
   end
-  n_sovereign_bench_cells --> n_sovereign_state
+  n_sovereign_bench_cells --> n_sovereign_core_state
   n_sovereign_bench_cleanroom --> n_sovereign_bench_perf
   n_sovereign_bench_cleanroom --> n_sovereign_bench_quality
   n_sovereign_bench_cleanroom --> n_sovereign_bench_runner
@@ -93,11 +93,11 @@ graph LR
   n_sovereign_bench_cli --> n_sovereign_bench_runner
   n_sovereign_bench_cli --> n_sovereign_bench_spec
   n_sovereign_bench_cli --> n_sovereign_cli__common
-  n_sovereign_bench_cli --> n_sovereign_state
+  n_sovereign_bench_cli --> n_sovereign_core_state
   n_sovereign_bench_grading --> n_sovereign_bench_suites
-  n_sovereign_bench_lock --> n_sovereign_state
+  n_sovereign_bench_lock --> n_sovereign_core_state
   n_sovereign_bench_perf --> n_sovereign_bench_spec
-  n_sovereign_bench_perf --> n_sovereign_state
+  n_sovereign_bench_perf --> n_sovereign_core_state
   n_sovereign_bench_quality --> n_sovereign_bench_cells
   n_sovereign_bench_quality --> n_sovereign_bench_grading
   n_sovereign_bench_quality --> n_sovereign_bench_runner
@@ -106,12 +106,12 @@ graph LR
   n_sovereign_bench_quality --> n_sovereign_core_base_harness
   n_sovereign_bench_quality --> n_sovereign_core_registry
   n_sovereign_bench_quality --> n_sovereign_core_resolver
-  n_sovereign_bench_quality --> n_sovereign_state
-  n_sovereign_bench_report --> n_sovereign_state
+  n_sovereign_bench_quality --> n_sovereign_core_state
+  n_sovereign_bench_report --> n_sovereign_core_state
   n_sovereign_bench_runner --> n_sovereign_bench_cells
   n_sovereign_bench_runner --> n_sovereign_bench_lock
   n_sovereign_bench_runner --> n_sovereign_bench_spec
-  n_sovereign_bench_runner --> n_sovereign_state
+  n_sovereign_bench_runner --> n_sovereign_core_state
   n_sovereign_bench_spec --> n_sovereign_core_base_config
   n_sovereign_bench_suites --> n_sovereign_core_base_config
   n_sovereign_cli --> n_sovereign_bench_cli
@@ -124,8 +124,8 @@ graph LR
   n_sovereign_cli__common --> n_sovereign_core_provisioning
   n_sovereign_cli__common --> n_sovereign_core_registry
   n_sovereign_cli__common --> n_sovereign_core_resolver
+  n_sovereign_cli__common --> n_sovereign_core_state
   n_sovereign_cli__common --> n_sovereign_runtime_dashboard
-  n_sovereign_cli__common --> n_sovereign_state
   n_sovereign_cli_harness --> n_sovereign_cli__common
   n_sovereign_cli_harness --> n_sovereign_core_base_harness
   n_sovereign_cli_models --> n_sovereign_cli__common
@@ -137,10 +137,10 @@ graph LR
   n_sovereign_cli_stack --> n_sovereign_core_provisioning
   n_sovereign_cli_stack --> n_sovereign_core_registry
   n_sovereign_cli_stack --> n_sovereign_core_resolver
+  n_sovereign_cli_stack --> n_sovereign_core_state
   n_sovereign_cli_stack --> n_sovereign_runtime_dashboard
   n_sovereign_cli_stack --> n_sovereign_runtime_orchestrator
   n_sovereign_cli_stack --> n_sovereign_runtime_teardown
-  n_sovereign_cli_stack --> n_sovereign_state
   n_sovereign_config --> n_sovereign_core_base_config
   n_sovereign_core_base_harness --> n_sovereign_core_provisioning
   n_sovereign_core_base_harness --> n_sovereign_core_resolver
@@ -166,19 +166,19 @@ graph LR
   n_sovereign_harnesses_mini_swe_agent_manager --> n_sovereign_core_registry
   n_sovereign_harnesses_mini_swe_agent_manager --> n_sovereign_harnesses_mini_swe_agent_config
   n_sovereign_runtime_dashboard --> n_sovereign
-  n_sovereign_runtime_dashboard --> n_sovereign_state
+  n_sovereign_runtime_dashboard --> n_sovereign_core_state
   n_sovereign_runtime_manifest --> n_sovereign_core_base_harness
   n_sovereign_runtime_manifest --> n_sovereign_core_base_manager
-  n_sovereign_runtime_manifest --> n_sovereign_state
+  n_sovereign_runtime_manifest --> n_sovereign_core_state
   n_sovereign_runtime_orchestrator --> n_sovereign_config
   n_sovereign_runtime_orchestrator --> n_sovereign_core_base_harness
   n_sovereign_runtime_orchestrator --> n_sovereign_core_base_manager
   n_sovereign_runtime_orchestrator --> n_sovereign_core_registry
   n_sovereign_runtime_orchestrator --> n_sovereign_core_resolver
   n_sovereign_runtime_orchestrator --> n_sovereign_core_resources
+  n_sovereign_runtime_orchestrator --> n_sovereign_core_state
   n_sovereign_runtime_orchestrator --> n_sovereign_runtime_manifest
   n_sovereign_runtime_orchestrator --> n_sovereign_runtime_status
-  n_sovereign_runtime_orchestrator --> n_sovereign_state
   n_sovereign_services_docker --> n_sovereign_services_docker_manager
   n_sovereign_services_docker_config --> n_sovereign_core_base_config
   n_sovereign_services_docker_manager --> n_sovereign_config
@@ -195,7 +195,7 @@ graph LR
   n_sovereign_services_inference_base --> n_sovereign_core_resources
   n_sovereign_services_inference_base --> n_sovereign_services_inference_hf
   n_sovereign_services_inference_hf --> n_sovereign_core_errors
-  n_sovereign_services_inference_hf --> n_sovereign_state
+  n_sovereign_services_inference_hf --> n_sovereign_core_state
   n_sovereign_services_inference_llama_cpp --> n_sovereign_services_inference_llama_cpp_manager
   n_sovereign_services_inference_llama_cpp_config --> n_sovereign_core_base_config
   n_sovereign_services_inference_llama_cpp_manager --> n_sovereign_config
@@ -241,7 +241,7 @@ Sorted by total coupling (fan-in + fan-out). Counts runtime edges only. High fan
 | --- | ---: | ---: | ---: |
 | `core/registry.py` | 11 | 4 | 15 |
 | `cli/stack.py` | 1 | 12 | 13 |
-| `state.py` | 13 | 0 | 13 |
+| `core/state.py` | 13 | 0 | 13 |
 | `bench/quality.py` | 2 | 9 | 11 |
 | `cli/_common.py` | 5 | 6 | 11 |
 | `runtime/orchestrator.py` | 2 | 9 | 11 |

@@ -15,6 +15,7 @@ from typer.testing import CliRunner
 from sovereign import __version__
 from sovereign.cli import app
 from sovereign.cli import stack as main
+from sovereign.core.state import write_json
 from sovereign.runtime.dashboard import (
     MetricHistory,
     dashboard,
@@ -25,7 +26,6 @@ from sovereign.runtime.dashboard import (
     sparkline,
     status_cell,
 )
-from sovereign.state import write_json
 
 runner = CliRunner()
 

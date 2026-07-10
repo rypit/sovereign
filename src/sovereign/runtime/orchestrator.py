@@ -39,9 +39,9 @@ from sovereign.core.resources import (
     ResourceExhaustedError,
     estimate_service_memory,
 )
+from sovereign.core.state import file_hash, write_json
 from sovereign.runtime.manifest import write_manifest
 from sovereign.runtime.status import StatusSnapshot
-from sovereign.state import file_hash, write_json
 
 log = logging.getLogger(__name__)
 
