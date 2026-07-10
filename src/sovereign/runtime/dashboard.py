@@ -24,7 +24,7 @@ from rich.table import Table
 from rich.text import Text
 
 from sovereign import __version__
-from sovereign.core.state import read_json
+from sovereign.core.state import read_json_or_none
 
 if TYPE_CHECKING:
     from sovereign.runtime.orchestrator import Orchestrator
@@ -48,13 +48,20 @@ def status_label(state: str) -> str:
 
 
 def load_dashboard_status(state_dir: Path) -> dict | None:
-    """Prefer the live status.json; fall back to state.json (states only)."""
-    status_path = state_dir / "status.json"
-    if status_path.exists():
-        return read_json(status_path)
-    state_path = state_dir / "state.json"
-    if state_path.exists():
-        state = read_json(state_path)
+    """Prefer the live status.json; fall back to state.json (states only).
+
+    Tolerant reads: a poller (``monitor``, the foreground dashboard) calls this
+    on an interval against a file another process may be mid-write to. A
+    missing file or a decode error (a write caught between open and replace —
+    vanishingly rare now that ``write_json`` is atomic, but free to guard
+    against) returns None; callers keep their last-known-good snapshot rather
+    than crash or flash a torn read.
+    """
+    status = read_json_or_none(state_dir / "status.json")
+    if status is not None:
+        return status
+    state = read_json_or_none(state_dir / "state.json")
+    if state is not None:
         return {
             "services": {
                 name: {"state": svc_state, "metrics": {}}

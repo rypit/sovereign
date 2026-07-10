@@ -317,6 +317,25 @@ def test_monitor_no_state(tmp_path) -> None:
     assert "No running stack" in result.stdout
 
 
+def test_load_dashboard_status_tolerates_garbage_status_json(tmp_path) -> None:
+    """A torn/corrupt status.json must not crash a poller — it falls back to
+    state.json, or returns None so the caller keeps its last good snapshot."""
+    (tmp_path / "status.json").write_text('{"services": {"a"')  # torn write
+    assert load_dashboard_status(tmp_path) is None
+
+    # With a valid state.json present, the fallback still works.
+    write_json(tmp_path / "state.json", {"services": {"engine": "ready"}})
+    status = load_dashboard_status(tmp_path)
+    assert status["services"]["engine"]["state"] == "ready"
+
+
+def test_monitor_once_survives_garbage_status_json(tmp_path) -> None:
+    (tmp_path / "status.json").write_text("garbage not json")
+    result = runner.invoke(app, ["monitor", "--once", "--state-dir", str(tmp_path)])
+    assert result.exit_code == 0  # no traceback; treated as no running stack
+    assert "No running stack" in result.stdout
+
+
 def test_monitor_falls_back_to_state_json(tmp_path) -> None:
     write_json(
         tmp_path / "state.json",

@@ -94,13 +94,15 @@ def _fast_exit(code: int) -> None:  # pragma: no cover - interactive
 def _config_path_for_harness_cli(file: Path | None, state_dir: Path) -> Path:
     """The stack file to read harnesses from: explicit ``-f``, else the recorded
     variant of a running stack, else the default ``sovereign.yaml``."""
-    from sovereign.core.state import read_json
+    from sovereign.core.state import read_json_or_none
 
     if file is not None:
         return file
-    state_path = state_dir / "state.json"
-    if state_path.exists():
-        variant = read_json(state_path).get("variant_file")
+    # Tolerant read: a corrupt/absent state.json just means "no recorded
+    # variant" — fall through to the default rather than traceback.
+    state = read_json_or_none(state_dir / "state.json")
+    if state is not None:
+        variant = state.get("variant_file")
         if variant:
             return Path(variant)
     return _DEFAULT_CONFIG
@@ -112,6 +114,8 @@ def _load_harness_config(file: Path | None, state_dir: Path) -> SovereignConfig:
 
 def _load_harness(name: str, file: Optional[Path], state_dir: Path) -> Harness:  # noqa: UP045
     """Build and resolve one harness instance against the live stack's manifest."""
+    import json
+
     from sovereign.core.provisioning import ProvisioningError
     from sovereign.core.resolver import ResolvedEndpoint, Resolver, ServiceRegistry
     from sovereign.core.state import read_json
@@ -122,7 +126,14 @@ def _load_harness(name: str, file: Optional[Path], state_dir: Path) -> Harness: 
             "[red]No running stack found (no manifest.json). Run `sovereign up` first.[/red]"
         )
         raise typer.Exit(1)
-    manifest = read_json(manifest_path)
+    try:
+        manifest = read_json(manifest_path)
+    except json.JSONDecodeError as exc:
+        console.print(
+            f"[red]{manifest_path} is corrupt ({exc}).[/red] "
+            "Re-run [bold]sovereign up[/bold] to rewrite it."
+        )
+        raise typer.Exit(1) from exc
 
     config = _load_harness_config(file, state_dir)
     entry = next((h for h in config.harnesses if h.name == name), None)
