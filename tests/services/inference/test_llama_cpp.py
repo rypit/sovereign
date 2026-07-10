@@ -390,6 +390,38 @@ def _stop() -> float:
     return native_mod.STOP_TIMEOUT
 
 
+# --- runtime handle (cross-process teardown identity) ---
+def test_runtime_handle_records_pid_and_create_time() -> None:
+    import os
+
+    import psutil
+
+    m = _manager()
+    m.process = FakeProc(pid=os.getpid(), poll_value=None)  # a real, live PID
+    handle = m.runtime_handle()
+    assert handle["kind"] == "native"
+    assert handle["pid"] == os.getpid()
+    assert handle["create_time"] == psutil.Process(os.getpid()).create_time()
+
+
+def test_runtime_handle_omits_create_time_when_process_vanished(monkeypatch) -> None:
+    import psutil
+
+    m = _manager()
+    m.process = FakeProc(pid=4242, poll_value=None)
+
+    def raise_no_such(pid):
+        raise psutil.NoSuchProcess(pid)
+
+    monkeypatch.setattr(native_mod.psutil, "Process", raise_no_such)
+    handle = m.runtime_handle()
+    assert handle == {"kind": "native", "pid": 4242}  # PID still recorded
+
+
+def test_runtime_handle_none_when_not_running() -> None:
+    assert _manager().runtime_handle() is None
+
+
 # --- metrics ---
 def test_get_metrics_stopped_when_no_process() -> None:
     assert _manager().get_metrics() == {"status": "stopped"}
