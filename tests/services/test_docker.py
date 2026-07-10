@@ -384,6 +384,16 @@ def test_container_metrics_stopped(monkeypatch) -> None:
     assert mgr_mod.container_metrics("c1") == {"status": "stopped"}
 
 
+def test_container_metrics_restarting_container_dashes(monkeypatch) -> None:
+    """Docker emits "--%" / "-- / --" for a restarting container — the metrics
+    loop must see {"status": "stopped"}, not a ValueError crash."""
+    monkeypatch.setattr(
+        mgr_mod, "run_docker",
+        lambda args, **kw: subprocess.CompletedProcess(args, 0, "--%;-- / --\n", ""),
+    )
+    assert mgr_mod.container_metrics("c1") == {"status": "stopped"}
+
+
 # --- expand_volume ---
 def test_expand_volume_expands_tilde_host_path(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))

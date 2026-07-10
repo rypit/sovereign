@@ -368,6 +368,52 @@ def test_reconcile_collects_metrics() -> None:
     asyncio.run(scenario())
 
 
+def test_health_loop_survives_probe_exception() -> None:
+    """One manager's is_healthy() raising must degrade that service and keep
+    the loop (and the other service's supervision) alive."""
+    cfg = _config([{"name": "flaky", "base_type": "x"}, {"name": "solid", "base_type": "x"}])
+    orch = _orch(cfg, health_interval=0.02, metrics_interval=0.02)
+
+    async def scenario() -> None:
+        await orch.boot()
+
+        def boom() -> bool:
+            raise RuntimeError("probe blew up")
+
+        orch.managers["flaky"].is_healthy = boom
+        stop = asyncio.Event()
+        task = asyncio.create_task(orch.reconcile(stop))
+        await asyncio.sleep(0.1)
+        assert orch.states["flaky"] is ServiceState.DEGRADED
+        assert orch.states["solid"] is ServiceState.READY  # still supervised
+        stop.set()
+        await task  # loop never crashed
+
+    asyncio.run(scenario())
+
+
+def test_metrics_loop_survives_metrics_exception() -> None:
+    cfg = _config([{"name": "flaky", "base_type": "x"}, {"name": "solid", "base_type": "x"}])
+    orch = _orch(cfg, health_interval=0.02, metrics_interval=0.02)
+
+    async def scenario() -> None:
+        await orch.boot()
+
+        def boom() -> dict:
+            raise RuntimeError("docker stats went weird")
+
+        orch.managers["flaky"].get_metrics = boom
+        stop = asyncio.Event()
+        task = asyncio.create_task(orch.reconcile(stop))
+        await asyncio.sleep(0.1)
+        assert orch.metrics["flaky"] == {"status": "error"}
+        assert orch.metrics["solid"]["status"] == "running"  # unaffected
+        stop.set()
+        await task
+
+    asyncio.run(scenario())
+
+
 # --- shutdown ---
 def test_shutdown_reverse_order() -> None:
     log: list = []
@@ -410,6 +456,27 @@ def test_manifest_and_state_written(tmp_path) -> None:
 
     state = json.loads((tmp_path / "state.json").read_text())
     assert state["services"] == {"engine": "ready", "frontend": "ready"}
+
+
+def test_runtime_handles_persisted_as_each_service_starts(tmp_path) -> None:
+    """A crash mid-boot must leave already-started PIDs on disk so `down` works.
+
+    The second service fails to boot; the first is READY — its runtime handle
+    must already be in state.json even though boot() as a whole raised.
+    """
+    cfg = _config(
+        [
+            {"name": "engine", "base_type": "x"},
+            {"name": "frontend", "base_type": "x", "dependencies": ["engine"]},
+        ]
+    )
+    orch = _orch(cfg, state_dir=tmp_path, prepare_model_raises={"frontend"})
+    with pytest.raises(BootError, match="download failed"):
+        asyncio.run(orch.boot())
+
+    state = json.loads((tmp_path / "state.json").read_text())
+    assert state["runtime"]["engine"] == {"kind": "native", "pid": 4242}
+    assert state["services"]["engine"] == "ready"
 
 
 def test_status_snapshot_shape() -> None:

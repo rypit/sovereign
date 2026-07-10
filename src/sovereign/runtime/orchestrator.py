@@ -298,6 +298,11 @@ class Orchestrator:
         await self._wait_healthy(name)
         self._set_state(name, ServiceState.READY)
         self._register_endpoint(name, manager)
+        # Persist as soon as this service is up (not only when the whole boot
+        # completes): a Ctrl+C/crash mid-boot then leaves the already-started
+        # PIDs on disk, so `sovereign down` can still find and stop them —
+        # including the double-Ctrl+C os._exit(130) path, which skips shutdown.
+        self.persist()
 
     async def _wait_healthy(self, name: str) -> None:
         manager = self.managers[name]
@@ -353,7 +358,13 @@ class Orchestrator:
             for name in self._service_names:
                 if self.states.get(name) is not ServiceState.READY:
                     continue
-                healthy = await asyncio.to_thread(self.managers[name].is_healthy)
+                # Fault isolation: one manager's is_healthy() blowing up must
+                # degrade that service, never tear down the whole control plane.
+                try:
+                    healthy = await asyncio.to_thread(self.managers[name].is_healthy)
+                except Exception:  # noqa: BLE001 - a probe bug reads as unhealthy
+                    log.warning("health check of %s raised", name, exc_info=True)
+                    healthy = False
                 if not healthy:
                     self._set_state(name, ServiceState.DEGRADED)
                     if self.auto_restart:
@@ -365,7 +376,15 @@ class Orchestrator:
         while not stop.is_set():
             for name in self._service_names:
                 if self.states.get(name) in (ServiceState.READY, ServiceState.DEGRADED):
-                    self.metrics[name] = await asyncio.to_thread(self.managers[name].get_metrics)
+                    # Fault isolation, as in _health_loop: metrics are cosmetic —
+                    # a manager hiccup shows as an error cell, not a crashed loop.
+                    try:
+                        self.metrics[name] = await asyncio.to_thread(
+                            self.managers[name].get_metrics
+                        )
+                    except Exception:  # noqa: BLE001 - keep supervising
+                        log.warning("metrics of %s raised", name, exc_info=True)
+                        self.metrics[name] = {"status": "error"}
             self.write_status()
             await self._sleep_or_stop(stop, self.metrics_interval)
 
