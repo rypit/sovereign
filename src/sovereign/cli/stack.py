@@ -7,6 +7,7 @@ These remain on the root app (``sovereign up``, not ``sovereign stack up``).
 from __future__ import annotations
 
 import asyncio
+import json
 import subprocess
 import time
 from pathlib import Path
@@ -40,6 +41,25 @@ from sovereign.runtime.orchestrator import BootError, serve_forever
 from sovereign.runtime.teardown import stop_service_handle
 
 _VERDICT_COLORS = {"OK": "green", "REFUSED": "red", "ROUTING ERROR": "red", "CONFIG ERROR": "red"}
+
+
+def _read_state_or_exit(state_path: Path) -> dict:
+    """Read ``state.json`` for a one-shot command (``status``/``down``/``logs``).
+
+    Unlike the pollers (``monitor``, the dashboard), a one-shot command has no
+    "last known good" snapshot to fall back to — a decode error (e.g. a state
+    file from a version predating atomic writes, corrupted by a torn write)
+    should print an actionable message and exit, not a raw traceback.
+    """
+    try:
+        return read_json(state_path)
+    except json.JSONDecodeError as exc:
+        console.print(
+            f"[red]{state_path} is corrupt ({exc}).[/red] If a stack is still running, "
+            "stop it manually and remove the file; otherwise delete it and run "
+            "[bold]sovereign up[/bold] again."
+        )
+        raise typer.Exit(1) from exc
 
 
 def _boot_and_serve(file: Path, *, with_dashboard: bool) -> None:
@@ -117,7 +137,7 @@ def down(
         console.print("[yellow]No recorded stack to stop (no state.json).[/yellow]")
         return
 
-    state = read_json(state_path)
+    state = _read_state_or_exit(state_path)
     handles: dict = state.get("runtime", {})
     if not handles:
         console.print("[yellow]Nothing running to stop.[/yellow]")
@@ -164,7 +184,7 @@ def status(
         console.print("No running stack (no state.json). Run [bold]sovereign up[/bold].")
         raise typer.Exit(0)
 
-    state = read_json(state_path)
+    state = _read_state_or_exit(state_path)
 
     table = Table(title="Sovereign stack")
     table.add_column("SERVICE")
@@ -196,7 +216,8 @@ def logs(
         return
 
     state_path = state_dir / "state.json"
-    handle = read_json(state_path).get("runtime", {}).get(service) if state_path.exists() else None
+    state = _read_state_or_exit(state_path) if state_path.exists() else {}
+    handle = state.get("runtime", {}).get(service)
     if handle and handle.get("kind") == "docker":
         cmd = ["docker", "logs", "--tail", str(lines)]
         if follow:

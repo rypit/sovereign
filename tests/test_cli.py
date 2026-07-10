@@ -153,6 +153,22 @@ def test_down_stops_handles_and_updates_state(tmp_path, monkeypatch) -> None:
     assert state["runtime"] == {}
 
 
+def test_down_corrupt_state_json_actionable_error(tmp_path) -> None:
+    (tmp_path / "state.json").write_text('{"runtime": {"engine"')  # torn write
+    result = runner.invoke(app, ["down", "--state-dir", str(tmp_path)])
+    assert result.exit_code == 1
+    assert "corrupt" in result.stdout
+    assert "Traceback" not in result.stdout
+
+
+def test_status_corrupt_state_json_actionable_error(tmp_path) -> None:
+    (tmp_path / "state.json").write_text("garbage not json")
+    result = runner.invoke(app, ["status", "--state-dir", str(tmp_path)])
+    assert result.exit_code == 1
+    assert "corrupt" in result.stdout
+    assert "Traceback" not in result.stdout
+
+
 # --- logs ---
 def test_logs_reads_native_log_file(tmp_path) -> None:
     log_dir = tmp_path / "logs"
