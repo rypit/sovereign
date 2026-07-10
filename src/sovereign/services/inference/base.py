@@ -195,9 +195,19 @@ class NativeEngineManager(ActivityMixin, Provisioner):
         )
 
     def runtime_handle(self) -> dict | None:
-        """A cross-process teardown handle (PID) recorded in state.json for `down`."""
+        """A cross-process teardown handle (PID) recorded in state.json for `down`.
+
+        ``create_time`` identifies the *specific* process: PIDs are recycled by
+        the OS, so ``down`` verifies it before signalling — a bare PID could
+        belong to a stranger process by the time teardown runs.
+        """
         if self.process is not None and self.process.poll() is None:
-            return {"kind": "native", "pid": self.process.pid}
+            handle: dict = {"kind": "native", "pid": self.process.pid}
+            try:
+                handle["create_time"] = psutil.Process(self.process.pid).create_time()
+            except psutil.Error:
+                pass  # process died between poll() and here; still record the PID
+            return handle
         return None
 
     # --- Lifecycle ---
