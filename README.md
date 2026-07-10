@@ -123,7 +123,7 @@ make typecheck             # uv run mypy
 make check                 # all of the above (what CI runs)
 ```
 
-CI runs the suite on a macOS arm64 runner (Python 3.14) — the product's actual
+CI runs the suite on a macOS arm64 runner (Python 3.12) — the product's actual
 and only target platform. See [`CLAUDE.md`](./CLAUDE.md) for an architecture map
 and codebase conventions (useful for humans too).
 
