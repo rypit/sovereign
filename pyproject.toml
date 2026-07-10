@@ -84,6 +84,10 @@ ignore_missing_imports = true
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+# Integration tests execute real binaries/network — opt in with `-m integration`
+# (CI's macOS smoke job does); `make test` stays hermetic.
+addopts = "-m 'not integration'"
 markers = [
     "allow_provisioning: run the real Provisioner.provision() (test mocks the subprocess layer)",
+    "integration: real end-to-end test (installs nothing, but runs real servers + network)",
 ]

@@ -5,11 +5,30 @@ on:
     branches: [main]
   pull_request:
 
-# The product targets macOS/Apple Silicon exclusively (native Metal/MLX), so CI
-# runs entirely on a macOS arm64 runner — the real platform, where mlx-lm
-# resolves and imports.
+# The product targets macOS/Apple Silicon, but the hermetic suite runs on any
+# platform (everything external is mocked) — so the fast/cheap checks run on
+# ubuntu, one macos-14 job keeps the real-platform hermetic signal (where
+# mlx-lm resolves and imports), and an opt-in smoke job actually boots a model.
 jobs:
   test:
+    name: test (ubuntu)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@d31148d669074a8d0a63714ba94f3201e7020bc3 # v8.3.0
+        with:
+          enable-cache: true
+          python-version: "3.12"
+
+      - name: Sync dependencies
+        run: uv sync --locked --dev --all-extras
+
+      - name: make test
+        run: make test
+
+  test-macos:
     name: test (macos arm64)
     runs-on: macos-14
     steps:
@@ -22,14 +41,14 @@ jobs:
           python-version: "3.12"
 
       - name: Sync dependencies
-        run: uv sync --locked --dev
+        run: uv sync --locked --dev --all-extras
 
       - name: make test
         run: make test
 
   lint:
     name: lint
-    runs-on: macos-14
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
@@ -40,14 +59,14 @@ jobs:
           python-version: "3.12"
 
       - name: Sync dependencies
-        run: uv sync --locked --dev
+        run: uv sync --locked --dev --all-extras
 
       - name: make lint
         run: make lint
 
   typecheck:
     name: typecheck
-    runs-on: macos-14
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
@@ -58,7 +77,39 @@ jobs:
           python-version: "3.12"
 
       - name: Sync dependencies
-        run: uv sync --locked --dev
+        run: uv sync --locked --dev --all-extras
 
       - name: make typecheck
         run: make typecheck
+
+  smoke:
+    name: smoke (real llama.cpp boot, macos arm64)
+    runs-on: macos-14
+    # Non-blocking for the first iteration: real-model boots depend on brew,
+    # the Hub, and runner capacity — flakiness must not gate merges yet.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@d31148d669074a8d0a63714ba94f3201e7020bc3 # v8.3.0
+        with:
+          enable-cache: true
+          python-version: "3.12"
+
+      - name: Install llama.cpp
+        run: brew install llama.cpp
+
+      - name: Cache HF models
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-cache-${{ runner.os }}-qwen2.5-0.5b-q2k
+          restore-keys: |
+            hf-cache-${{ runner.os }}-
+
+      - name: Sync dependencies
+        run: uv sync --locked --dev --all-extras
+
+      - name: Integration smoke test
+        run: uv run pytest -m integration tests/integration -v
