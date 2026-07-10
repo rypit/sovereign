@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+import sys
 import time
 import types
 
@@ -368,6 +369,10 @@ def _stub_serve(monkeypatch) -> dict:
         return None
 
     monkeypatch.setattr(main, "serve_forever", fake_serve)
+    # _boot_and_serve ends in _fast_exit (os._exit) to skip the download-thread
+    # join; swap it for a SystemExit so CliRunner records the code, not a killed
+    # pytest process.
+    monkeypatch.setattr(main, "_fast_exit", lambda code: sys.exit(code))
     return captured
 
 
