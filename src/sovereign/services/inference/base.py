@@ -132,6 +132,15 @@ class NativeEngineManager(ActivityMixin, Provisioner):
     def get_start_args(self) -> list[str]:
         raise NotImplementedError
 
+    def start_env(self) -> dict[str, str]:
+        """Extra environment variables for the engine subprocess.
+
+        Engines override this to pass secrets (e.g. an API key) through the
+        environment instead of argv — a command line is world-readable via
+        ``ps``; the environment of another user's process is not.
+        """
+        return {}
+
     # --- resource estimation helpers ---
     def _model_bytes(self, model: str) -> int:
         """Weight-byte estimate for one model ref (local disk, HF cache, or repo
@@ -220,11 +229,13 @@ class NativeEngineManager(ActivityMixin, Provisioner):
         log_path = log_dir / f"{self.name}.log"
         self._log_file = log_path.open("a")
 
+        extra_env = self.start_env()
         self.process = subprocess.Popen(  # noqa: S603 - argv is constructed, not shell
             self.get_start_args(),
             stdout=self._log_file,
             stderr=subprocess.STDOUT,
             start_new_session=True,
+            env={**os.environ, **extra_env} if extra_env else None,
         )
         self._apply_priority()
 

@@ -149,15 +149,55 @@ def test_get_start_args_full_flag_mapping() -> None:
         ("-t", "8"),
         ("-c", "32768"),
         ("-np", "4"),
-        ("--api-key", "secret"),
     ]:
         assert args[args.index(flag) + 1] == value
+    # The API key must never be on the ps-visible command line.
+    assert "--api-key" not in args
+    assert "secret" not in args
 
 
 def test_get_start_args_minimal_omits_optional_flags() -> None:
     args = _prepared().get_start_args()
     for flag in ["-ngl", "-t", "-c", "-np", "--api-key"]:
         assert flag not in args
+
+
+# --- API key via environment (never argv) ---
+def test_start_env_carries_api_key() -> None:
+    m = _manager({"model": "/models/x.gguf", "api_key": "secret"})
+    assert m.start_env() == {"LLAMA_API_KEY": "secret"}
+
+
+def test_start_env_empty_without_api_key() -> None:
+    assert _manager().start_env() == {}
+
+
+def test_start_passes_api_key_in_subprocess_env(tmp_path, monkeypatch) -> None:
+    captured: dict = {}
+
+    def fake_popen(args, **kwargs):
+        captured["env"] = kwargs.get("env")
+        return FakeProc(poll_value=None)
+
+    monkeypatch.setattr(native_mod.subprocess, "Popen", fake_popen)
+    m = _prepared({"model": "/models/x.gguf", "api_key": "secret", "log_dir": str(tmp_path)})
+    m.start()
+    assert captured["env"]["LLAMA_API_KEY"] == "secret"
+    assert "PATH" in captured["env"]  # inherits the parent environment
+
+
+def test_start_env_none_when_no_extra_env(tmp_path, monkeypatch) -> None:
+    """Without engine-contributed env, Popen gets env=None (full inheritance)."""
+    captured: dict = {}
+
+    def fake_popen(args, **kwargs):
+        captured["env"] = kwargs.get("env", "missing")
+        return FakeProc(poll_value=None)
+
+    monkeypatch.setattr(native_mod.subprocess, "Popen", fake_popen)
+    m = _prepared({"model": "/models/x.gguf", "log_dir": str(tmp_path)})
+    m.start()
+    assert captured["env"] is None
 
 
 def test_get_start_args_expands_home(monkeypatch) -> None:

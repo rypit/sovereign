@@ -104,8 +104,6 @@ class LlamaCppManager(NativeEngineManager):
             args += ["-c", str(self.config.context_size)]
         if self.config.max_parallel is not None:
             args += ["-np", str(self.config.max_parallel)]
-        if self.config.api_key:
-            args += ["--api-key", self.config.api_key]
         if self.config.served_model_name:
             args += ["--alias", self.config.served_model_name]
         if self.config.draft_model is not None:
@@ -127,6 +125,13 @@ class LlamaCppManager(NativeEngineManager):
 
         args += self.config.extra_args
         return args
+
+    def start_env(self) -> dict[str, str]:
+        """Pass the API key via ``LLAMA_API_KEY`` — llama-server reads it from the
+        environment, keeping the secret off the ``ps``-visible command line."""
+        if self.config.api_key:
+            return {"LLAMA_API_KEY": self.config.api_key}
+        return {}
 
     # --- Resource cooperation ---
     def prepare_environment(self) -> None:
