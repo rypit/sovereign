@@ -7,6 +7,7 @@ is also what the benchmark runner consumes — built once here.
 
 from __future__ import annotations
 
+import re
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -21,6 +22,32 @@ from sovereign.core.state import write_json
 
 if TYPE_CHECKING:
     from sovereign.runtime.orchestrator import Orchestrator
+
+
+# Flags whose *value* is a secret and must never land in manifest.json
+# (e.g. --api-key, --api_key; matched case-insensitively, = form included).
+_SENSITIVE_FLAG_RE = re.compile(r"api[-_]?key", re.IGNORECASE)
+_REDACTED = "***"
+
+
+def redact_start_args(args: list[str]) -> list[str]:
+    """Redact secret values (api-key style flags) from a serialized argv."""
+    redacted: list[str] = []
+    hide_next = False
+    for arg in args:
+        if hide_next:
+            redacted.append(_REDACTED)
+            hide_next = False
+        elif arg.startswith("-") and _SENSITIVE_FLAG_RE.search(arg):
+            if "=" in arg:
+                flag, _, _ = arg.partition("=")
+                redacted.append(f"{flag}={_REDACTED}")
+            else:
+                redacted.append(arg)
+                hide_next = True
+        else:
+            redacted.append(arg)
+    return redacted
 
 
 def _model_fingerprint(model_path: str) -> dict[str, Any] | None:
@@ -68,7 +95,7 @@ def _service_entry(orch: Orchestrator, name: str) -> dict[str, Any]:
     # persisting a FAILED boot); omit start_args rather than fail the manifest.
     if isinstance(manager, SupportsStartArgs):
         try:
-            item["start_args"] = manager.get_start_args()
+            item["start_args"] = redact_start_args(manager.get_start_args())
         except RuntimeError:
             pass
     elif (
