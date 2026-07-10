@@ -185,8 +185,21 @@ class Orchestrator:
         for harness_entry in self.config.harnesses:
             try:
                 self.harnesses[harness_entry.name] = self._harness_factory(harness_entry)
-            except (KeyError, ImportError):
-                pass  # harness base_type not registered yet (harness track)
+            except KeyError as exc:
+                # An unknown base_type is a config error — fail the boot loudly
+                # (the registry error already lists the registered types).
+                detail = exc.args[0] if exc.args else exc
+                raise BootError(f"harness '{harness_entry.name}': {detail}") from exc
+            except ImportError as exc:
+                # A missing optional dependency shouldn't block the services —
+                # but the operator must know the harness isn't there.
+                log.warning(
+                    "harness '%s' (%s) skipped: %s — install the missing package "
+                    "(e.g. `uv sync --extra harness`) and re-run to enable it",
+                    harness_entry.name,
+                    harness_entry.base_type,
+                    exc,
+                )
         self._built = True
 
     def _service_deps(self, name: str) -> list[str]:

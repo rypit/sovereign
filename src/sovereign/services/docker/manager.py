@@ -258,10 +258,11 @@ class DockerManager(ActivityMixin, Provisioner):
 
     # --- Readiness / observability ---
     def is_healthy(self) -> bool:
+        """2xx-only, matching the native engines: a redirect is not "ready"."""
         url = f"http://127.0.0.1:{self.config.port}{self.health_path}"
         try:
             with urllib.request.urlopen(url, timeout=_HTTP_TIMEOUT) as resp:  # noqa: S310 - fixed http scheme
-                return 200 <= resp.status < 400
+                return 200 <= resp.status < 300
         except (urllib.error.URLError, OSError):
             return False
 
