@@ -640,6 +640,29 @@ def test_manifest_records_memory_budget(tmp_path) -> None:
     assert manifest["services"][0]["estimated_memory_gb"] == 20.0
 
 
+def test_boot_warns_on_unknown_memory_footprint(caplog) -> None:
+    """The unknown->admit policy stays, but it must be loud at boot."""
+    import logging
+
+    cfg = _config([{"name": "mystery", "base_type": "x"}])
+    orch = _orch(cfg)  # FakeManager reports no estimate source -> unknown
+    with caplog.at_level(logging.WARNING, logger="sovereign.runtime.orchestrator"):
+        asyncio.run(orch.boot())
+    assert any("UNKNOWN memory footprint" in r.message for r in caplog.records)
+
+
+def test_boot_no_unknown_warning_when_source_known(caplog) -> None:
+    import logging
+
+    cfg = _config([{"name": "engine", "base_type": "x"}])
+    orch = _orch(cfg, mems={"engine": 8.0})
+    orch.build()
+    orch.managers["engine"].estimated_memory_source = lambda: "local"
+    with caplog.at_level(logging.WARNING, logger="sovereign.runtime.orchestrator"):
+        asyncio.run(orch.boot())
+    assert not any("UNKNOWN memory footprint" in r.message for r in caplog.records)
+
+
 # --- harness materialization (H1) ---
 def test_harness_materialized_after_deps_ready() -> None:
     log: list = []

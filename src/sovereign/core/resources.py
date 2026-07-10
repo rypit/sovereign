@@ -13,7 +13,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from sovereign.config import Priority
-from sovereign.core.base_manager import SupportsMemoryEstimate
+from sovereign.core.base_manager import SupportsEstimateSource, SupportsMemoryEstimate
 
 if TYPE_CHECKING:
     from sovereign.config import ServiceEntry
@@ -97,6 +97,20 @@ def estimate_service_memory(manager: ServiceManager, entry: ServiceEntry) -> flo
     if entry.memory_gb is not None:
         return float(entry.memory_gb)
     return 0.0
+
+
+def estimate_source(manager: ServiceManager, entry: ServiceEntry) -> str:
+    """Label where the admission estimate came from: declared|local|cached|hub|unknown.
+
+    The single labelling rule `sovereign plan` (SOURCE column) and boot (the
+    fail-open warning) share — "unknown" means the deliberate unknown->admit
+    policy applied: the service was admitted without counting against the budget.
+    """
+    if entry.memory_gb is not None:
+        return "declared"
+    if isinstance(manager, SupportsEstimateSource):
+        return manager.estimated_memory_source()
+    return "unknown"
 
 
 def priority_to_nice(priority: Priority | None) -> int:

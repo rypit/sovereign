@@ -16,13 +16,13 @@ from pathlib import Path
 from pydantic import ValidationError
 
 from sovereign.config import ServiceEntry, SovereignConfig
-from sovereign.core.base_manager import ServiceManager, SupportsEstimateSource
 from sovereign.core.errors import ModelResolutionError
 from sovereign.core.registry import get_service_manager, populate_registries, route_entry
 from sovereign.core.resources import (
     ResourceBudgeter,
     ResourceExhaustedError,
     estimate_service_memory,
+    estimate_source,
 )
 
 # Plan verdicts, one per failure mode (rendered by the CLI).
@@ -108,7 +108,7 @@ def _plan_service(
         )
 
     estimated = estimate_service_memory(manager, entry)
-    source = _estimate_source(entry, manager)
+    source = estimate_source(manager, entry)
     display_gb: float | None = estimated if (estimated or source != "unknown") else None
 
     # Admit against the running budget — same refuse-to-boot rule as boot.
@@ -136,11 +136,3 @@ def _plan_service(
         verdict=VERDICT_OK,
     )
 
-
-def _estimate_source(entry: ServiceEntry, manager: ServiceManager) -> str:
-    """Label where the memory number came from, for the plan table's SOURCE column."""
-    if entry.memory_gb is not None:
-        return "declared"
-    if isinstance(manager, SupportsEstimateSource):
-        return manager.estimated_memory_source()
-    return "unknown"
