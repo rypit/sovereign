@@ -142,9 +142,16 @@ def container_metrics(container: str, *, binary: str = "docker") -> dict[str, An
     if result.returncode != 0 or not result.stdout.strip():
         return {"status": "stopped"}
     cpu_str, _, mem_str = result.stdout.strip().partition(";")
+    try:
+        # A restarting/exiting container reports "--%" / "-- / --": not a
+        # number, and not a reason to crash the metrics loop.
+        cpu_percent = float(cpu_str.strip().rstrip("%"))
+        memory_mb = parse_mem_to_mb(mem_str.split("/")[0])
+    except ValueError:
+        return {"status": "stopped"}
     return {
-        "memory_mb": parse_mem_to_mb(mem_str.split("/")[0]),
-        "cpu_percent": float(cpu_str.strip().rstrip("%")),
+        "memory_mb": memory_mb,
+        "cpu_percent": cpu_percent,
         "status": "running",
     }
 
