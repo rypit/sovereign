@@ -718,6 +718,18 @@ def test_plan_routing_error(tmp_path, monkeypatch) -> None:
     assert "ROUTING ERROR" in result.stdout
 
 
+def test_plan_warns_on_unknown_footprint(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr("sovereign.core.planning.route_entry", lambda e, s: "mlx_lm")
+    monkeypatch.setattr(
+        models_mod, "estimate_model_bytes_with_source", lambda ref, kind: (None, "unknown")
+    )
+    result = runner.invoke(
+        app, ["plan", "-f", str(_write_plan_config(tmp_path, mem=64))], env={"COLUMNS": "220"}
+    )
+    assert result.exit_code == 0  # still admitted (fail-open policy unchanged)
+    assert "UNKNOWN memory footprint" in result.stdout  # ...but loudly
+
+
 # --- sovereign models (M5) ---
 def _fake_repo(repo_id: str, size: int, nb_files: int = 3):
     return types.SimpleNamespace(

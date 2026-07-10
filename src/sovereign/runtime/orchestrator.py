@@ -38,6 +38,7 @@ from sovereign.core.resources import (
     ResourceBudgeter,
     ResourceExhaustedError,
     estimate_service_memory,
+    estimate_source,
 )
 from sovereign.core.state import file_hash, write_json
 from sovereign.runtime.manifest import write_manifest
@@ -266,6 +267,15 @@ class Orchestrator:
         estimated = await asyncio.to_thread(
             estimate_service_memory, manager, self._entries[name]
         )
+        # The unknown->admit policy is deliberate (only refuse on real numbers),
+        # but it must be loud: an unknown estimate is a 0 GB reservation, i.e.
+        # this service is NOT protected by (or counted against) the budget.
+        source = await asyncio.to_thread(estimate_source, manager, self._entries[name])
+        if source == "unknown":
+            log.warning(
+                "'%s' admitted with UNKNOWN memory footprint — not counted against the budget",
+                name,
+            )
         try:
             self.budgeter.admit(name, estimated)
             log.debug(

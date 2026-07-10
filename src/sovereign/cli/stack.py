@@ -283,11 +283,21 @@ def plan(
         base_type = f"{svc.base_type} (auto)" if routed else svc.base_type
         color = _VERDICT_COLORS.get(svc.verdict, "white")
         est = f"{svc.estimated_gb:.1f}" if svc.estimated_gb is not None else "-"
+        # Fail-open admission is deliberate but must be visible: an unknown
+        # estimate is admitted at 0 GB, i.e. outside the budget's protection.
+        source = f"[yellow]{svc.source}[/yellow]" if svc.source == "unknown" else svc.source
         table.add_row(
-            svc.name, base_type, svc.model, svc.source, est, f"[{color}]{svc.verdict}[/{color}]"
+            svc.name, base_type, svc.model, source, est, f"[{color}]{svc.verdict}[/{color}]"
         )
     console.print(table)
 
+    for svc in stack_plan.services:
+        if svc.source == "unknown" and svc.verdict == "OK":
+            console.print(
+                f"  [yellow]⚠ {svc.name}: admitted with UNKNOWN memory footprint — "
+                "not counted against the budget.[/yellow]",
+                soft_wrap=True,
+            )
     for svc in stack_plan.services:
         if svc.error:
             console.print(f"  [dim]{svc.name}: {svc.error}[/dim]", soft_wrap=True)
