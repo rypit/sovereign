@@ -28,9 +28,9 @@ cli/               Typer CLI (thin: parsing, tables, exit codes)
   stack.py         stack lifecycle commands on the root app (up/down/plan/status/…)
   harness.py       harness sub-app (list/materialize/invoke)
   models.py        models sub-app (list/prune)
-state.py           state.json/status.json read-write helpers (file_hash, write_json, …)
 config.py          sovereign.yaml schema (Pydantic)
 core/
+  state.py         state.json/status.json read-write helpers (file_hash, write_json, …)
   base_manager.py  ServiceManager Protocol + optional-capability Protocols
                    (SupportsModelPreparation, SupportsMemoryEstimate,
                    SupportsEstimateSource, RoutesModelRef, …)

@@ -24,7 +24,7 @@ from rich.table import Table
 from rich.text import Text
 
 from sovereign import __version__
-from sovereign.state import read_json
+from sovereign.core.state import read_json
 
 if TYPE_CHECKING:
     from sovereign.runtime.orchestrator import Orchestrator

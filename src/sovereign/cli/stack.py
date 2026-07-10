@@ -28,6 +28,7 @@ from sovereign.cli._common import (
     app,
     console,
 )
+from sovereign.core.state import file_hash, mark_stack_stopped, read_json
 from sovereign.runtime.dashboard import (
     MetricHistory,
     budget_footer,
@@ -37,7 +38,6 @@ from sovereign.runtime.dashboard import (
 )
 from sovereign.runtime.orchestrator import BootError, serve_forever
 from sovereign.runtime.teardown import stop_service_handle
-from sovereign.state import file_hash, mark_stack_stopped, read_json
 
 _VERDICT_COLORS = {"OK": "green", "REFUSED": "red", "ROUTING ERROR": "red", "CONFIG ERROR": "red"}
 

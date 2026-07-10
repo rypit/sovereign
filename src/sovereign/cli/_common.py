@@ -94,7 +94,7 @@ def _fast_exit(code: int) -> None:  # pragma: no cover - interactive
 def _config_path_for_harness_cli(file: Path | None, state_dir: Path) -> Path:
     """The stack file to read harnesses from: explicit ``-f``, else the recorded
     variant of a running stack, else the default ``sovereign.yaml``."""
-    from sovereign.state import read_json
+    from sovereign.core.state import read_json
 
     if file is not None:
         return file
@@ -114,7 +114,7 @@ def _load_harness(name: str, file: Optional[Path], state_dir: Path) -> Harness: 
     """Build and resolve one harness instance against the live stack's manifest."""
     from sovereign.core.provisioning import ProvisioningError
     from sovereign.core.resolver import ResolvedEndpoint, Resolver, ServiceRegistry
-    from sovereign.state import read_json
+    from sovereign.core.state import read_json
 
     manifest_path = state_dir / "manifest.json"
     if not manifest_path.exists():

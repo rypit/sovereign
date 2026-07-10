@@ -17,7 +17,7 @@ from sovereign.core.base_manager import (
     SupportsRunArgs,
     SupportsStartArgs,
 )
-from sovereign.state import write_json
+from sovereign.core.state import write_json
 
 if TYPE_CHECKING:
     from sovereign.runtime.orchestrator import Orchestrator

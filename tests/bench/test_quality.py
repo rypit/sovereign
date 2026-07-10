@@ -10,7 +10,7 @@ from sovereign.bench.spec import BenchSpec
 from sovereign.core.base_harness import RunResult
 from sovereign.core.registry import _HARNESSES
 from sovereign.core.resolver import ConsumerKind
-from sovereign.state import write_json
+from sovereign.core.state import write_json
 
 _BASE_TYPE = "bench_quality_fake_harness"
 

@@ -15,7 +15,7 @@ from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 
-from sovereign.state import read_json, write_json
+from sovereign.core.state import read_json, write_json
 
 _LOCK_FILENAME = "bench.lock"
 

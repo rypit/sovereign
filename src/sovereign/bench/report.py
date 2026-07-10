@@ -9,7 +9,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from sovereign.state import read_json
+from sovereign.core.state import read_json
 
 
 def _all_cells(state_dir: str | Path, run_ids: list[str] | None) -> list[dict[str, Any]]:

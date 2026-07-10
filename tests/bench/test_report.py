@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from sovereign.bench.report import build_comparison, flag_pareto
-from sovereign.state import write_json
+from sovereign.core.state import write_json
 
 
 def _write_run(state_dir, run_id: str, cells: list[dict]) -> None:
