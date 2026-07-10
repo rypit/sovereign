@@ -7,9 +7,10 @@ from pathlib import Path
 
 from typer.testing import CliRunner
 
-from sovereign import main
-from sovereign.main import _load_dotenv, app
-from sovereign.utils.state import file_hash, write_json
+from sovereign.cli import app
+from sovereign.cli import stack as main
+from sovereign.cli._common import _load_dotenv
+from sovereign.state import file_hash, write_json
 
 runner = CliRunner()
 
@@ -145,7 +146,7 @@ def test_down_stops_handles_and_updates_state(tmp_path, monkeypatch) -> None:
     assert [h["kind"] for h in stopped] == ["docker", "native"]
 
     # state.json updated
-    from sovereign.utils.state import read_json
+    from sovereign.state import read_json
 
     state = read_json(tmp_path / "state.json")
     assert state["services"] == {"engine": "stopped", "frontend": "stopped"}
@@ -398,7 +399,7 @@ def test_bench_run_attach_mode_success(tmp_path, monkeypatch) -> None:
     import sys
     import types
 
-    from sovereign.utils.state import write_json
+    from sovereign.state import write_json
 
     fake_httpx = types.ModuleType("httpx")
 

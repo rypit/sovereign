@@ -1,9 +1,11 @@
 """The core contract for coding harnesses: ``Harness`` (§4b).
 
 Harnesses are **leaf consumers** of the service registry: they reuse the resolver
-and dependency edges, but nothing depends on them. Three capabilities, mirroring
-the service lifecycle:
+and dependency edges, but nothing depends on them. Three required lifecycle steps,
+plus one optional capability:
 
+* ``resolve(resolver)`` — resolve ``{{ }}``/``${ENV:}`` templates in the harness's
+  config block; called once all ``dependencies`` are ``READY``.
 * ``prepare_environment()`` — install/validate everything the tool needs
   (toolchain, binary, package), so a harness declared in ``sovereign.yaml``
   is usable without manual setup. The harness analog of a service's
@@ -11,8 +13,11 @@ the service lifecycle:
 * ``materialize()`` — project resolved endpoints/secrets into the tool's own
   config format. Runs only after dependencies are ``READY``; re-runs when an
   endpoint changes.
-* ``invoke(task)`` — run one headless, non-interactive session to completion.
-  Not all harnesses support this.
+
+Optional capability (discovered via ``isinstance()``):
+
+* :class:`SupportsInvoke` — run one headless, non-interactive session to
+  completion. Not all harnesses support this.
 
 ``Task`` and ``RunResult`` are intentionally minimal here; fields grow when the
 harness/bench tracks land.
@@ -73,6 +78,14 @@ class Harness(Protocol):
     def __init__(self, entry: HarnessEntry) -> None:
         """Harnesses are constructed from their entry (the registry's contract)."""
 
+    def resolve(self, resolver: Resolver) -> None:
+        """Resolve ``{{ }}``/``${ENV:}`` templates in this harness's config block.
+
+        Called by the Orchestrator once all ``dependencies`` are ``READY``, and
+        again whenever one of those endpoints changes.
+        """
+        ...
+
     def prepare_environment(self) -> None:
         """Pre-flight/provisioning hook run before ``materialize()``.
 
@@ -86,8 +99,43 @@ class Harness(Protocol):
         """Write resolved endpoints/secrets into the tool's own config format."""
         ...
 
+
+# ---------------------------------------------------------------------------
+# Optional capabilities
+#
+# Not every harness implements every hook. The CLI, Orchestrator, and bench
+# discover these capabilities via ``isinstance()`` against the
+# runtime-checkable Protocols below — never via ad-hoc ``getattr`` probing —
+# so the full harness contract is visible in one place.
+# ---------------------------------------------------------------------------
+
+
+@runtime_checkable
+class SupportsInvoke(Protocol):
+    """Harnesses that can run one headless, non-interactive session to completion.
+
+    Not all harnesses implement this — a harness that only materialises config
+    for a tool the user drives interactively would not. The CLI and bench
+    runner discover this capability via ``isinstance(harness, SupportsInvoke)``
+    before calling ``invoke()``.
+    """
+
     def invoke(self, task: Task) -> RunResult:
         """Run one headless, non-interactive session and return its result."""
+        ...
+
+
+@runtime_checkable
+class SupportsFingerprint(Protocol):
+    """Harnesses that expose a stable identity for the manifest and bench cell keys.
+
+    The manifest builder and bench runner discover this capability via
+    ``isinstance(harness, SupportsFingerprint)`` before calling
+    ``fingerprint()``.
+    """
+
+    def fingerprint(self) -> dict[str, object]:
+        """Return a stable identity dict for this harness instance."""
         ...
 
 

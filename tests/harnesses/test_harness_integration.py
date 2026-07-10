@@ -6,7 +6,7 @@ import asyncio
 
 from sovereign.config import SovereignConfig
 from sovereign.core.resolver import ConsumerKind, ResolvedEndpoint
-from sovereign.orchestrator import Orchestrator
+from sovereign.runtime.orchestrator import Orchestrator
 
 
 class FakeEngineManager:

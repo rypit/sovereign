@@ -17,10 +17,10 @@ from sovereign.bench.grading import grade_task, prepare_workspace
 from sovereign.bench.runner import stack_identity
 from sovereign.bench.suites import load_suite
 from sovereign.config import load_config
-from sovereign.core.base_harness import Task
+from sovereign.core.base_harness import SupportsInvoke, Task
 from sovereign.core.registry import get_harness
 from sovereign.core.resolver import ResolvedEndpoint, Resolver, ServiceRegistry
-from sovereign.utils.state import read_json
+from sovereign.state import read_json
 
 if TYPE_CHECKING:
     from sovereign.bench.runner import CellExecutor, Job
@@ -101,14 +101,14 @@ def run_quality_cell(
         raise QualityError(f"unknown harness '{job.harness}' in stack '{job.stack}'")
 
     harness = get_harness(entry.base_type)(entry)
-    resolve = getattr(harness, "resolve", None)
-    if callable(resolve):
-        resolve(Resolver(_registry_from_manifest(manifest)))
+    harness.resolve(Resolver(_registry_from_manifest(manifest)))
     # Provision like the Orchestrator/CLI do — a bench sweep on a fresh cell
     # must not fail just because the harness's tool isn't installed yet.
-    prepare = getattr(harness, "prepare_environment", None)
-    if callable(prepare):
-        prepare()
+    harness.prepare_environment()
+    if not isinstance(harness, SupportsInvoke):
+        raise QualityError(
+            f"harness '{job.harness}' (base_type={entry.base_type!r}) does not support invoke"
+        )
     harness.materialize()
 
     suite = load_suite(job.suite)

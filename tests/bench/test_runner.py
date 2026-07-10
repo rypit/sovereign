@@ -148,7 +148,7 @@ def test_cleanroom_mode_acquires_and_releases_lock(tmp_path) -> None:
 
 def test_cleanroom_mode_refuses_when_daemon_stack_up(tmp_path) -> None:
     from sovereign.bench.lock import BenchLockError
-    from sovereign.utils.state import write_json
+    from sovereign.state import write_json
 
     write_json(tmp_path / "state.json", {"runtime": {"engine": {"kind": "native", "pid": 1}}})
     spec = _spec(trials=1, mode="cleanroom")

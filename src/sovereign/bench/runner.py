@@ -19,7 +19,7 @@ from typing import Any
 from sovereign.bench.cells import cell_key, is_complete, read_cell_result, write_cell_result
 from sovereign.bench.lock import acquire_bench_lock
 from sovereign.bench.spec import BenchMode, BenchSpec
-from sovereign.utils.state import file_hash, write_json
+from sovereign.state import file_hash, write_json
 
 
 class JobState(StrEnum):

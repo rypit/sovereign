@@ -12,7 +12,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from sovereign.utils.state import read_json, write_json
+from sovereign.state import read_json, write_json
 
 _CELLS_SUBDIR = "cells"
 _RUNS_SUBDIR = "runs"

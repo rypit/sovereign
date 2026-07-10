@@ -11,15 +11,16 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from sovereign.core.base_harness import SupportsFingerprint
 from sovereign.core.base_manager import (
     SupportsPerSlotContext,
     SupportsRunArgs,
     SupportsStartArgs,
 )
-from sovereign.utils.state import write_json
+from sovereign.state import write_json
 
 if TYPE_CHECKING:
-    from sovereign.orchestrator import Orchestrator
+    from sovereign.runtime.orchestrator import Orchestrator
 
 
 def _model_fingerprint(model_path: str) -> dict[str, Any] | None:
@@ -106,9 +107,8 @@ def _harness_entry(orch: Orchestrator, entry) -> dict[str, Any]:
         "dependencies": list(entry.dependencies),
     }
     harness = orch.harnesses.get(entry.name)
-    fingerprint_fn = getattr(harness, "fingerprint", None)
-    if callable(fingerprint_fn):
-        item["fingerprint"] = fingerprint_fn()
+    if isinstance(harness, SupportsFingerprint):
+        item["fingerprint"] = harness.fingerprint()
     return item
 
 

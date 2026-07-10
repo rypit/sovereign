@@ -24,7 +24,7 @@ from sovereign.bench.perf import (
 )
 from sovereign.bench.runner import Job
 from sovereign.bench.spec import BenchSpec, Thresholds
-from sovereign.utils.state import write_json
+from sovereign.state import write_json
 
 
 # --- fake httpx ---
