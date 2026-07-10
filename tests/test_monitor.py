@@ -12,8 +12,10 @@ from rich.console import Console
 from rich.spinner import Spinner
 from typer.testing import CliRunner
 
-from sovereign import __version__, main
-from sovereign.dashboard import (
+from sovereign import __version__
+from sovereign.cli import app
+from sovereign.cli import stack as main
+from sovereign.runtime.dashboard import (
     MetricHistory,
     dashboard,
     dashboard_task_factory,
@@ -23,8 +25,7 @@ from sovereign.dashboard import (
     sparkline,
     status_cell,
 )
-from sovereign.main import app
-from sovereign.utils.state import write_json
+from sovereign.state import write_json
 
 runner = CliRunner()
 

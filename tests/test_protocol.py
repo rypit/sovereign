@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from sovereign.core.base_harness import Harness, RunResult, Task
+from sovereign.core.base_harness import Harness, RunResult, SupportsInvoke, Task
 from sovereign.core.base_manager import ServiceManager
+from sovereign.core.resolver import Resolver
 
 
 class FakeManager:
@@ -30,6 +31,8 @@ class FakeHarness:
     def __init__(self) -> None:
         self.name = "fake_harness"
         self.dependencies: list[str] = []
+
+    def resolve(self, resolver: Resolver) -> None: ...
 
     def prepare_environment(self) -> None: ...
 
@@ -68,6 +71,10 @@ def test_incomplete_harness_is_rejected() -> None:
         name = "x"
         dependencies: list[str] = []
 
-        def materialize(self) -> None: ...  # no prepare_environment / invoke
+        def materialize(self) -> None: ...  # no resolve / prepare_environment
 
     assert not isinstance(Incomplete(), Harness)
+
+
+def test_fake_harness_satisfies_supports_invoke() -> None:
+    assert isinstance(FakeHarness(), SupportsInvoke)

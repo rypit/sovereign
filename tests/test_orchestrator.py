@@ -10,7 +10,7 @@ import pytest
 
 from sovereign.config import ServiceEntry, SovereignConfig
 from sovereign.core.resolver import ConsumerKind, ResolvedEndpoint
-from sovereign.orchestrator import (
+from sovereign.runtime.orchestrator import (
     BootError,
     CircularDependencyError,
     Orchestrator,
@@ -300,7 +300,7 @@ def test_manager_without_prepare_model_skips_downloading() -> None:
 
 # --- auto base_type routing (M4) ---
 def test_build_routes_auto_base_type(monkeypatch) -> None:
-    import sovereign.orchestrator as orch_mod
+    import sovereign.runtime.orchestrator as orch_mod
 
     monkeypatch.setattr(orch_mod, "route_entry", lambda entry, state_dir: "mlx_lm")
     cfg = _config([{"name": "engine", "base_type": "auto", "config": {"model": "org/m"}}])

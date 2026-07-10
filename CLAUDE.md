@@ -22,10 +22,13 @@ macOS/arm64 (platform marker); code must never import it at module scope.
 ## Architecture map
 
 ```
-main.py            Typer CLI (thin: parsing, tables, exit codes)
-dashboard.py       Rich live dashboard; renders core/status.StatusSnapshot
-orchestrator.py    async DAG boot, reconcile loops, persistence; drives sync
-                   managers via asyncio.to_thread — managers stay synchronous
+cli/               Typer CLI (thin: parsing, tables, exit codes)
+  __init__.py      root app + --verbose callback; mounts sub-apps
+  _common.py       shared app/console/helpers (loaded first; no circular deps)
+  stack.py         stack lifecycle commands on the root app (up/down/plan/status/…)
+  harness.py       harness sub-app (list/materialize/invoke)
+  models.py        models sub-app (list/prune)
+state.py           state.json/status.json read-write helpers (file_hash, write_json, …)
 config.py          sovereign.yaml schema (Pydantic)
 core/
   base_manager.py  ServiceManager Protocol + optional-capability Protocols
@@ -38,6 +41,14 @@ core/
   planning.py      shared dry-run used by `sovereign plan` (same seams as boot)
   resources.py     memory budget / admission control (refuse-to-boot)
   provisioning.py  per-integration dependency install (Brewfile + commands)
+runtime/
+  orchestrator.py  async DAG boot, reconcile loops, persistence; drives sync
+                   managers via asyncio.to_thread — managers stay synchronous
+  dashboard.py     Rich live dashboard; renders runtime/status.StatusSnapshot
+  status.py        StatusSnapshot TypedDicts (the schema orchestrator produces
+                   and dashboard consumes)
+  manifest.py      resolved stack manifest written at boot (§7b)
+  teardown.py      cross-process stop from persisted runtime handles (`sovereign down`)
 services/
   docker/         auxiliary services in Docker
   inference/     native engines + their shared base
@@ -49,8 +60,7 @@ services/
     llama_cpp/  mlx_lm/   the two native engines (auto-discovered)
 harnesses/         cline_cli, mini_swe_agent          (auto-discovered)
 bench/             content-addressed bench cells; only cleanroom.py may
-                   import the Orchestrator
-utils/             state.json/manifest.json IO
+                   import the Orchestrator; bench sub-app CLI lives in bench/cli.py
 ```
 
 Dependency direction: `config` depends only on Pydantic (the "golden rule" —
@@ -58,8 +68,8 @@ never subprocess/os/docker in a config module). The HF pipeline
 (`services/inference/hf.py`) imports no managers; nothing above
 `services/` imports it — the orchestrator/planner/CLI route through
 `core.registry.route_entry` and catch `core.errors`, so the engine-domain HF
-code stays a leaf. `orchestrator` imports `core/*`; nothing in `orchestrator`
-imports `bench`.
+code stays a leaf. `runtime/orchestrator` imports `core/*`; nothing in
+`runtime/` imports `bench`.
 
 ## Conventions and gotchas
 

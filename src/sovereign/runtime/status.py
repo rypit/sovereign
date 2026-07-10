@@ -1,7 +1,7 @@
 """The status-snapshot schema shared by producer and consumers (§8).
 
 ``Orchestrator.status_snapshot()`` produces this shape; it is persisted as
-``status.json`` and rendered by :mod:`sovereign.dashboard`. TypedDicts (rather
+``status.json`` and rendered by :mod:`sovereign.runtime.dashboard`. TypedDicts (rather
 than Pydantic models) because the snapshot is written/read as plain JSON on a
 2-second cadence — this is a type-checker contract, not runtime validation.
 """

@@ -47,7 +47,7 @@ from sovereign.core.errors import (
     ModelNotFoundError,
     ModelResolutionError,
 )
-from sovereign.utils.state import read_json, write_json
+from sovereign.state import read_json, write_json
 
 log = logging.getLogger(__name__)
 

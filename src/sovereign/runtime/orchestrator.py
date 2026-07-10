@@ -24,6 +24,7 @@ from enum import StrEnum
 from pathlib import Path
 
 from sovereign.config import HarnessEntry, ServiceEntry, SovereignConfig
+from sovereign.core.base_harness import Harness
 from sovereign.core.base_manager import (
     ServiceManager,
     SupportsEndpoint,
@@ -38,9 +39,9 @@ from sovereign.core.resources import (
     ResourceExhaustedError,
     estimate_service_memory,
 )
-from sovereign.core.status import StatusSnapshot
-from sovereign.utils.manifest import write_manifest
-from sovereign.utils.state import file_hash, write_json
+from sovereign.runtime.manifest import write_manifest
+from sovereign.runtime.status import StatusSnapshot
+from sovereign.state import file_hash, write_json
 
 log = logging.getLogger(__name__)
 
@@ -91,7 +92,7 @@ class Orchestrator:
         config: SovereignConfig,
         *,
         manager_factory: ManagerFactory | None = None,
-        harness_factory: Callable[[HarnessEntry], object] | None = None,
+        harness_factory: Callable[[HarnessEntry], Harness] | None = None,
         env: Mapping[str, str] | None = None,
         variant_file: str | Path | None = None,
         state_dir: str | Path = ".sovereign",
@@ -109,7 +110,7 @@ class Orchestrator:
         )
 
         self.managers: dict[str, ServiceManager] = {}
-        self.harnesses: dict[str, object] = {}
+        self.harnesses: dict[str, Harness] = {}
         #: name -> "auto" for services whose base_type was routed at build time.
         self.requested_base_types: dict[str, str] = {}
         self.states: dict[str, ServiceState] = {}
@@ -151,7 +152,7 @@ class Orchestrator:
         populate_registries()
         return get_service_manager(entry.base_type)(entry)
 
-    def _default_harness_factory(self, entry: HarnessEntry) -> object:
+    def _default_harness_factory(self, entry: HarnessEntry) -> Harness:
         from sovereign.core.registry import get_harness, populate_registries
 
         populate_registries()
@@ -339,15 +340,9 @@ class Orchestrator:
                 # Provision first, mirroring the service PROVISIONING phase —
                 # a declared harness installs what it needs before it's wired.
                 # Must be idempotent: re-materialization re-runs this.
-                prepare = getattr(harness, "prepare_environment", None)
-                if callable(prepare):
-                    prepare()
-                resolve = getattr(harness, "resolve", None)
-                if callable(resolve):
-                    resolve(self.resolver)
-                materialize = getattr(harness, "materialize", None)
-                if callable(materialize):
-                    materialize()
+                harness.prepare_environment()
+                harness.resolve(self.resolver)
+                harness.materialize()
 
     # --- reconciliation (§6.3) ---
     async def reconcile(self, stop: asyncio.Event) -> None:
@@ -429,7 +424,7 @@ class Orchestrator:
         self.write_status()
 
     def status_snapshot(self) -> StatusSnapshot:
-        """Live dashboard snapshot (§8) — the schema `sovereign.dashboard` renders."""
+        """Live dashboard snapshot (§8) — the schema `sovereign.runtime.dashboard` renders."""
         reservations = self.budgeter.reservations()
         return {
             "updated_at": datetime.now(UTC).isoformat(),

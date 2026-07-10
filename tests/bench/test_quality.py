@@ -10,7 +10,7 @@ from sovereign.bench.spec import BenchSpec
 from sovereign.core.base_harness import RunResult
 from sovereign.core.registry import _HARNESSES
 from sovereign.core.resolver import ConsumerKind
-from sovereign.utils.state import write_json
+from sovereign.state import write_json
 
 _BASE_TYPE = "bench_quality_fake_harness"
 
@@ -29,6 +29,9 @@ class ScriptedHarness:
         self.materialized = False
 
     def resolve(self, resolver) -> None:
+        pass
+
+    def prepare_environment(self) -> None:
         pass
 
     def materialize(self) -> None:

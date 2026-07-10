@@ -20,7 +20,7 @@ from sovereign.bench.quality import run_quality_cell
 from sovereign.bench.runner import is_perf_only_cell
 from sovereign.config import SovereignConfig, load_config
 from sovereign.core.resources import ResourceBudgeter, estimate_service_memory
-from sovereign.orchestrator import Orchestrator
+from sovereign.runtime.orchestrator import Orchestrator
 
 if TYPE_CHECKING:
     from sovereign.bench.runner import CellExecutor, Job

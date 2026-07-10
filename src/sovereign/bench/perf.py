@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from sovereign.bench.spec import BenchSpec, Thresholds
-from sovereign.utils.state import read_json
+from sovereign.state import read_json
 
 if TYPE_CHECKING:
     from sovereign.bench.runner import CellExecutor, Job

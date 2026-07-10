@@ -26,7 +26,7 @@ harness = ["mini-swe-agent>=1.0"]
 bench = ["httpx>=0.27"]
 
 [project.scripts]
-sovereign = "sovereign.main:app"
+sovereign = "sovereign.cli:app"
 
 [tool.uv]
 # mlx-lm pulls transformers>=5.0.0, but 5.13.0 regressed AutoTokenizer.register
@@ -62,7 +62,8 @@ select = ["E", "F", "I", "UP", "B"]
 
 [tool.ruff.lint.per-file-ignores]
 # Typer's idiom requires calling typer.Option() in argument defaults.
-"src/sovereign/main.py" = ["B008"]
+"src/sovereign/cli/*.py" = ["B008"]
+"src/sovereign/bench/cli.py" = ["B008"]
 
 [tool.mypy]
 # The sources are densely annotated; mypy keeps them honest. Non-strict to start —

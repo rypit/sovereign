@@ -1,6 +1,6 @@
 """The live dashboard (§8): Rich rendering for `sovereign up` and `sovereign monitor`.
 
-Pure presentation — consumes the :class:`~sovereign.core.status.StatusSnapshot`
+Pure presentation — consumes the :class:`~sovereign.runtime.status.StatusSnapshot`
 shape that ``Orchestrator.status_snapshot()`` produces (and persists as
 ``status.json``), and renders the service table, sparklines, activity lines, and
 budget footer. No orchestration logic lives here; no rendering logic lives in the
@@ -24,10 +24,10 @@ from rich.table import Table
 from rich.text import Text
 
 from sovereign import __version__
-from sovereign.utils.state import read_json
+from sovereign.state import read_json
 
 if TYPE_CHECKING:
-    from sovereign.orchestrator import Orchestrator
+    from sovereign.runtime.orchestrator import Orchestrator
 
 STATE_COLORS = {
     "ready": "green",

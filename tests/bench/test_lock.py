@@ -10,7 +10,7 @@ from sovereign.bench.lock import (
     check_no_live_daemon_stack,
     lock_path,
 )
-from sovereign.utils.state import read_json, write_json
+from sovereign.state import read_json, write_json
 
 
 def test_check_no_live_daemon_stack_passes_without_state(tmp_path) -> None:
