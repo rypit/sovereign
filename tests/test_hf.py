@@ -117,6 +117,16 @@ def test_parse_existing_path_treated_as_local(tmp_path):
     assert ref.local_path == model
 
 
+def test_parse_repo_id_wins_over_same_named_cwd_dir(tmp_path, monkeypatch):
+    """Regression: a directory named like the repo id in the CWD must not turn
+    a repo ref into a local one."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "org" / "model").mkdir(parents=True)
+    ref = parse_model_ref("org/model")
+    assert not ref.is_local
+    assert ref.repo_id == "org/model"
+
+
 def test_parse_raw_preserved():
     raw = "org/name:Q8_0"
     ref = parse_model_ref(raw)
