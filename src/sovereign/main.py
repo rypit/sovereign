@@ -118,6 +118,18 @@ def _load_dotenv(path: Path = Path(".env")) -> None:
         os.environ.setdefault(key.strip(), value)
 
 
+def _fast_exit(code: int) -> None:  # pragma: no cover - interactive
+    """Terminate now, skipping asyncio.Runner/executor teardown.
+
+    A Ctrl+C mid-download leaves huggingface_hub worker threads blocked in
+    un-cancellable network I/O; the normal loop/atexit teardown would *join* them
+    for minutes. os._exit skips those joins — the OS reaps the threads, and HF's
+    partial downloads are resumable, so nothing corrupts.
+    """
+    console.file.flush()
+    os._exit(code)
+
+
 def _boot_and_serve(file: Path, *, with_dashboard: bool) -> None:
     """Load a variant, boot the stack, and run until interrupted."""
     if lock_path(_DEFAULT_STATE_DIR).exists():
@@ -133,8 +145,15 @@ def _boot_and_serve(file: Path, *, with_dashboard: bool) -> None:
     # Foreground: the live dashboard shows transitions. Headless: print them instead.
     extra_tasks = [dashboard_task_factory(live_console=console)] if with_dashboard else []
     on_transition = None if with_dashboard else _print_transition
+    # Drive the loop with an explicit Runner so we can skip its teardown: a
+    # Ctrl+C mid-download leaves an un-cancellable huggingface_hub worker thread,
+    # and asyncio.run()/Runner.close() would join it for minutes. serve_forever
+    # has already stopped services and torn down the dashboard by the time it
+    # returns, so _fast_exit terminates cleanly and lets the OS reap the thread.
+    runner = asyncio.Runner()
+    code = 0
     try:
-        asyncio.run(
+        runner.run(
             serve_forever(
                 config,
                 variant_file=file,
@@ -142,12 +161,13 @@ def _boot_and_serve(file: Path, *, with_dashboard: bool) -> None:
                 on_transition=on_transition,
             )
         )
+        console.print("[green]Stack stopped.[/green]")
     except BootError as exc:
         console.print(f"[red]Boot failed:[/red] {exc}")
-        raise typer.Exit(1) from exc
+        code = 1
     except KeyboardInterrupt:  # pragma: no cover - interactive
         pass
-    console.print("[green]Stack stopped.[/green]")
+    _fast_exit(code)
 
 
 @app.command()

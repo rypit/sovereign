@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import os
 import signal
 from collections.abc import Callable, Coroutine, Mapping, Sequence
 from datetime import UTC, datetime
@@ -498,10 +499,23 @@ async def serve_forever(
     orch.build()  # populate PENDING states so watchers see the full list immediately
 
     stop = asyncio.Event()
+    interrupts = 0
+
+    def _request_stop() -> None:  # pragma: no cover - interactive
+        # First signal begins graceful shutdown; a second forces an immediate
+        # exit, skipping the join of an un-cancellable in-flight download thread
+        # (huggingface_hub network I/O ignores asyncio cancellation).
+        nonlocal interrupts
+        interrupts += 1
+        if interrupts == 1:
+            stop.set()
+        else:
+            os._exit(130)
+
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGINT, signal.SIGTERM):
         try:
-            loop.add_signal_handler(sig, stop.set)
+            loop.add_signal_handler(sig, _request_stop)
         except NotImplementedError:  # pragma: no cover - non-Unix
             pass
 

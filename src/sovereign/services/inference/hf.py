@@ -51,6 +51,14 @@ from sovereign.utils.state import read_json, write_json
 
 log = logging.getLogger(__name__)
 
+# tqdm's default write lock is a multiprocessing.RLock, which allocates a
+# semaphore. Downloads run in threads (never processes), so that lock is
+# unneeded — and on a Ctrl+C mid-download we fast-exit via os._exit
+# (see main._fast_exit), which skips multiprocessing cleanup and makes the
+# resource_tracker warn about the "leaked" semaphore. A threading lock is
+# sufficient and leaves nothing to leak.
+_BaseTqdm.set_lock(threading.RLock())
+
 
 # ---------------------------------------------------------------------------
 # Local-path helpers
