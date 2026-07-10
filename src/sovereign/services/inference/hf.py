@@ -65,9 +65,26 @@ _BaseTqdm.set_lock(threading.RLock())
 # ---------------------------------------------------------------------------
 
 
+# A HuggingFace repo id: exactly two /-separated segments (org/name), optionally
+# with a ":quant" suffix. Segments are word chars, dots, and dashes.
+_REPO_ID_RE = re.compile(r"^[\w.-]+/[\w.-]+(?::[\w.-]+)?$")
+
+
 def looks_local(model: str) -> bool:
-    """Whether ``model`` refers to a local path (vs. a HuggingFace repo id)."""
-    return model.startswith(("/", "~", ".")) or Path(os.path.expanduser(model)).exists()
+    """Whether ``model`` refers to a local path (vs. a HuggingFace repo id).
+
+    Explicit path prefixes (``/``, ``~``, ``.``) are always local. A repo-id-
+    shaped string (``org/name[:quant]``) is always a repo — even when a
+    same-named directory happens to exist in the CWD, which would otherwise
+    silently hijack the ref. The existence-on-disk fallback only applies to
+    strings that cannot be repo ids (e.g. ``models/foo/bar.gguf``,
+    ``weights.gguf``).
+    """
+    if model.startswith(("/", "~", ".")):
+        return True
+    if _REPO_ID_RE.match(model):
+        return False
+    return Path(os.path.expanduser(model)).exists()
 
 
 def local_model_bytes(model: str) -> int:

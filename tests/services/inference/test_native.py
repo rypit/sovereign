@@ -35,6 +35,35 @@ def test_looks_local_existing_relative_path(tmp_path, monkeypatch) -> None:
     assert looks_local("model.gguf") is True
 
 
+def test_looks_local_repo_id_not_hijacked_by_same_named_dir(tmp_path, monkeypatch) -> None:
+    """A bare org/name is a repo id even when a same-named directory exists in
+    the CWD — otherwise `mlx-community/foo` silently resolves to a local dir."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "mlx-community" / "foo-4bit").mkdir(parents=True)
+    assert looks_local("mlx-community/foo-4bit") is False
+
+
+def test_looks_local_repo_with_quant_not_hijacked(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "org").mkdir()
+    assert looks_local("org/model:Q4_K_M") is False
+
+
+def test_looks_local_multi_segment_existing_path_still_local(tmp_path, monkeypatch) -> None:
+    """The existence fallback still applies to strings that can't be repo ids."""
+    monkeypatch.chdir(tmp_path)
+    nested = tmp_path / "models" / "sub" / "x.gguf"
+    nested.parent.mkdir(parents=True)
+    nested.write_bytes(b"x")
+    assert looks_local("models/sub/x.gguf") is True
+
+
+def test_looks_local_dot_prefixed_missing_path_is_local() -> None:
+    """An explicit ./ prefix is local even when the path doesn't exist (so the
+    pre-flight check reports a missing file instead of querying the Hub)."""
+    assert looks_local("./definitely/not/there.gguf") is True
+
+
 # --- local_model_bytes ---
 def test_local_model_bytes_file(tmp_path) -> None:
     model = tmp_path / "m.gguf"
