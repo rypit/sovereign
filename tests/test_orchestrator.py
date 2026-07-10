@@ -759,6 +759,38 @@ def test_harness_not_remateralized_when_endpoint_unchanged() -> None:
     asyncio.run(scenario())
 
 
+def test_unknown_harness_base_type_fails_boot() -> None:
+    """A typo'd harness base_type is a config error, not a silent no-op."""
+    cfg = _config(
+        [{"name": "engine", "base_type": "x"}],
+        harnesses=[{"name": "h", "base_type": "not_a_real_harness"}],
+    )
+    orch = _orch(cfg)  # default harness factory -> registry lookup
+    with pytest.raises(BootError, match="not_a_real_harness"):
+        orch.build()
+
+
+def test_harness_missing_optional_dep_warns_but_boots(caplog) -> None:
+    """A harness whose optional package isn't installed logs a clear warning
+    and the services still boot."""
+    import logging
+
+    cfg = _config(
+        [{"name": "engine", "base_type": "x"}],
+        harnesses=[{"name": "h", "base_type": "y"}],
+    )
+
+    def factory(entry):
+        raise ImportError("No module named 'minisweagent'")
+
+    orch = _orch(cfg, harness_factory=factory)
+    with caplog.at_level(logging.WARNING, logger="sovereign.runtime.orchestrator"):
+        asyncio.run(orch.boot())
+    assert orch.states["engine"] is ServiceState.READY
+    messages = [r.getMessage() for r in caplog.records]
+    assert any("harness 'h'" in m and "minisweagent" in m for m in messages)
+
+
 def test_manifest_includes_harnesses(tmp_path) -> None:
     cfg = _config(
         [{"name": "engine", "base_type": "x"}],

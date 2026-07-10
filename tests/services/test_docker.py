@@ -166,6 +166,22 @@ def test_is_healthy_true_on_2xx(monkeypatch) -> None:
     assert _manager({"image": "img:latest", "port": 3000}).is_healthy() is True
 
 
+def test_is_healthy_false_on_redirect(monkeypatch) -> None:
+    """A 3xx is not "ready" — acceptance is 2xx-only, same as native engines."""
+
+    class FakeResp:
+        status = 302
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    monkeypatch.setattr(mgr_mod.urllib.request, "urlopen", lambda url, timeout=None: FakeResp())
+    assert _manager({"image": "img:latest", "port": 3000}).is_healthy() is False
+
+
 def test_is_healthy_false_on_error(monkeypatch) -> None:
     def boom(url, timeout=None):
         raise mgr_mod.urllib.error.URLError("refused")
