@@ -33,8 +33,8 @@ class FakeCleanroomManager:
         self.dependencies = entry.dependencies
         self.activity = ()
 
-    def estimated_memory_gb(self) -> float:
-        return 1.0
+    def estimated_memory_bytes(self) -> int:
+        return 1 * 10**9
 
     def prepare_environment(self) -> None:
         pass

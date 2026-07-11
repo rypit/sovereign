@@ -139,7 +139,7 @@ def test_summarize_handles_missing_values() -> None:
 def test_passes_thresholds_all_pass() -> None:
     result = {"tok_s": {"mean": 20.0}, "ttft_ms": {"mean": 100.0}}
     thresholds = Thresholds(min_tok_s=10, max_ttft_ms=500, min_headroom_gb=5)
-    passed, reasons = _passes_thresholds(result, thresholds, available_gb=10.0)
+    passed, reasons = _passes_thresholds(result, thresholds, available_bytes=10 * 10**9)
     assert passed is True
     assert reasons == []
 
@@ -147,16 +147,24 @@ def test_passes_thresholds_all_pass() -> None:
 def test_passes_thresholds_reports_failures() -> None:
     result = {"tok_s": {"mean": 2.0}, "ttft_ms": {"mean": 900.0}}
     thresholds = Thresholds(min_tok_s=10, max_ttft_ms=500)
-    passed, reasons = _passes_thresholds(result, thresholds, available_gb=None)
+    passed, reasons = _passes_thresholds(result, thresholds, available_bytes=None)
     assert passed is False
     assert len(reasons) == 2
 
 
 def test_passes_thresholds_no_thresholds_always_passes() -> None:
     result = {"tok_s": {"mean": None}, "ttft_ms": {"mean": None}}
-    passed, reasons = _passes_thresholds(result, Thresholds(), available_gb=None)
+    passed, reasons = _passes_thresholds(result, Thresholds(), available_bytes=None)
     assert passed is True
     assert reasons == []
+
+
+def test_passes_thresholds_headroom_reason_uses_humanized_sizes() -> None:
+    result = {"tok_s": {"mean": 20.0}, "ttft_ms": {"mean": 100.0}}
+    thresholds = Thresholds(min_headroom_gb=5)
+    passed, reasons = _passes_thresholds(result, thresholds, available_bytes=1 * 10**9)
+    assert passed is False
+    assert reasons == ["available 1.0 GB < min_headroom 5.0 GB"]
 
 
 # --- _primary_engine ---
@@ -206,7 +214,7 @@ def _write_manifest(state_dir, *, with_engine=True) -> None:
         state_dir / "manifest.json",
         {
             "variant_hash": "abc123",
-            "memory_budget": {"available_gb": 20.0},
+            "memory_budget": {"available_bytes": 20 * 10**9},
             "services": services,
         },
     )

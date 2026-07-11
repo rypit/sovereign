@@ -25,6 +25,7 @@ from rich.text import Text
 
 from sovereign import __version__
 from sovereign.core.state import read_json_or_none
+from sovereign.core.units import fmt_size
 
 if TYPE_CHECKING:
     from sovereign.runtime.orchestrator import Orchestrator
@@ -122,7 +123,7 @@ class MetricHistory:
         for name, svc in services.items():
             metrics = svc.get("metrics") or {}
             buckets = self._data.setdefault(name, {})
-            for key in ("cpu_percent", "memory_mb"):
+            for key in ("cpu_percent", "memory_bytes"):
                 if key in metrics:
                     dq = buckets.setdefault(key, deque())
                     dq.append((now, metrics[key]))
@@ -178,8 +179,8 @@ def dashboard(status: Mapping[str, Any], history: MetricHistory | None = None) -
     table.add_column("STATUS")
     table.add_column("DURATION")
     table.add_column("CPU %")
-    table.add_column("MEM (MB)")
-    table.add_column("EST (GB)")
+    table.add_column("MEM")
+    table.add_column("EST")
     table.add_column("ENDPOINT")
 
     activity_lines: list[str] = []
@@ -187,14 +188,14 @@ def dashboard(status: Mapping[str, Any], history: MetricHistory | None = None) -
         state = svc.get("state", "unknown")
         metrics = svc.get("metrics") or {}
         cpu = f"{metrics['cpu_percent']:.1f}%" if "cpu_percent" in metrics else "-"
-        mem = f"{metrics['memory_mb']:.0f}" if "memory_mb" in metrics else "-"
+        mem = fmt_size(metrics["memory_bytes"]) if "memory_bytes" in metrics else "-"
         cpu_spark = sparkline(history.values(name, "cpu_percent")) if history else ""
-        mem_spark = sparkline(history.values(name, "memory_mb")) if history else ""
+        mem_spark = sparkline(history.values(name, "memory_bytes")) if history else ""
         duration = duration_cell(svc.get("since"))
         endpoint = svc.get("endpoint") or "-"
         descriptor = svc.get("descriptor") or "-"
-        estimated = svc.get("estimated_gb")
-        est = f"{estimated:.1f}" if estimated is not None else "-"
+        estimated = svc.get("estimated_bytes")
+        est = fmt_size(estimated) if estimated is not None else "-"
         table.add_row(
             name,
             descriptor,
@@ -229,12 +230,12 @@ def budget_footer(budget: dict | None) -> Text | None:
     """A one-line unified-memory summary, or None when the status predates budgets."""
     if not budget:
         return None
-    reserved = budget.get("reserved_gb", 0.0)
-    usable = budget.get("usable_gb", 0.0)
-    available = budget.get("available_gb", 0.0)
+    reserved = budget.get("reserved_bytes", 0)
+    usable = budget.get("usable_bytes", 0)
+    available = budget.get("available_bytes", 0)
     return Text(
-        f"Memory: {reserved:.1f} reserved / {usable:.0f} usable GB "
-        f"— {available:.1f} GB headroom",
+        f"Memory: {fmt_size(reserved)} reserved / {fmt_size(usable)} usable "
+        f"— {fmt_size(available)} headroom",
         style="bold",
     )
 

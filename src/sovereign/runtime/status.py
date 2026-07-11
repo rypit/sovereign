@@ -14,9 +14,9 @@ from typing import TypedDict
 class BudgetStatus(TypedDict):
     """Unified-memory budget summary for the dashboard footer."""
 
-    usable_gb: float
-    reserved_gb: float
-    available_gb: float
+    usable_bytes: int
+    reserved_bytes: int
+    available_bytes: int
 
 
 class ActivityStatus(TypedDict):
@@ -36,7 +36,7 @@ class ServiceStatus(TypedDict):
     since: str | None
     endpoint: str | None
     descriptor: str | None
-    estimated_gb: float | None
+    estimated_bytes: int | None
     metrics: dict[str, float | str]
     activity: ActivityStatus
 
