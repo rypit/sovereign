@@ -137,9 +137,12 @@ def test_down_stops_handles_and_updates_state(tmp_path, monkeypatch) -> None:
     _write_state(tmp_path, variant, h, runtime=runtime)
 
     stopped: list = []
-    monkeypatch.setattr(
-        main, "stop_service_handle", lambda handle, **kw: stopped.append(handle) or "stopped"
-    )
+
+    def _record_stop(handle, **kw):
+        stopped.append(handle)
+        return "stopped"
+
+    monkeypatch.setattr(main, "stop_service_handle", _record_stop)
     result = runner.invoke(app, ["down", "--state-dir", str(tmp_path)])
     assert result.exit_code == 0
     # reverse order: frontend before engine
@@ -322,6 +325,7 @@ def test_harness_invoke_prints_result(tmp_path, monkeypatch) -> None:
     assert result.exit_code == 0, result.stdout
     assert "success=True" in result.stdout
     assert "did the thing" in result.stdout
+    assert _FakeTestHarness.invoked_with is not None
     assert _FakeTestHarness.invoked_with.prompt == "do the thing"
     assert _FakeTestHarness.prepared_count == 1  # CLI provisions like the Orchestrator
 
@@ -447,7 +451,7 @@ def test_bench_run_attach_mode_success(tmp_path, monkeypatch) -> None:
         def stream(self, *a, **kw):
             return FakeResponse()
 
-    fake_httpx.AsyncClient = FakeAsyncClient
+    fake_httpx.AsyncClient = FakeAsyncClient  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, "httpx", fake_httpx)
 
     write_json(
@@ -763,10 +767,15 @@ def test_models_prune_confirms_and_deletes(monkeypatch) -> None:
         expected_freed_size=20 * 1024**3, execute=lambda: None
     )
     deleted: list = []
+
+    def _record_delete(*hashes):
+        deleted.append(hashes)
+        return strategy
+
     cache = types.SimpleNamespace(
         repos=[_fake_repo("org/big", 20 * 1024**3)],
         size_on_disk=20 * 1024**3,
-        delete_revisions=lambda *hashes: deleted.append(hashes) or strategy,
+        delete_revisions=_record_delete,
     )
     monkeypatch.setattr(huggingface_hub, "scan_cache_dir", lambda: cache)
     result = runner.invoke(app, ["models", "prune", "org/big"], input="y\n")

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import contextlib
 import subprocess
+from typing import cast
 
 import pytest
 
@@ -335,13 +336,13 @@ def test_is_healthy_false_when_no_process() -> None:
 
 def test_is_healthy_false_when_process_exited() -> None:
     m = _manager()
-    m.process = FakeProc(poll_value=0)
+    m.process = cast("subprocess.Popen[bytes]", FakeProc(poll_value=0))
     assert m.is_healthy() is False
 
 
 def test_is_healthy_true_on_http_200(monkeypatch) -> None:
     m = _manager()
-    m.process = FakeProc(poll_value=None)
+    m.process = cast("subprocess.Popen[bytes]", FakeProc(poll_value=None))
 
     class FakeResp:
         status = 200
@@ -358,7 +359,7 @@ def test_is_healthy_true_on_http_200(monkeypatch) -> None:
 
 def test_is_healthy_false_on_connection_error(monkeypatch) -> None:
     m = _manager()
-    m.process = FakeProc(poll_value=None)
+    m.process = cast("subprocess.Popen[bytes]", FakeProc(poll_value=None))
 
     def boom(url, timeout=None):
         raise native_mod.urllib.error.URLError("refused")
@@ -411,7 +412,7 @@ def test_get_metrics_stopped_when_no_process() -> None:
 
 def test_get_metrics_running(monkeypatch) -> None:
     m = _manager()
-    m.process = FakeProc(pid=4242, poll_value=None)
+    m.process = cast("subprocess.Popen[bytes]", FakeProc(pid=4242, poll_value=None))
 
     class FakeMem:
         rss = 6000 * 1024**2
@@ -435,7 +436,7 @@ def test_get_metrics_running(monkeypatch) -> None:
 
 def test_get_metrics_uses_phys_footprint_when_available(monkeypatch) -> None:
     m = _manager()
-    m.process = FakeProc(pid=4242, poll_value=None)
+    m.process = cast("subprocess.Popen[bytes]", FakeProc(pid=4242, poll_value=None))
 
     class FakeMem:
         rss = 6000 * 1024**2
@@ -462,7 +463,7 @@ def test_get_metrics_uses_phys_footprint_when_available(monkeypatch) -> None:
 
 def test_get_metrics_falls_back_to_rss_when_footprint_unavailable(monkeypatch) -> None:
     m = _manager()
-    m.process = FakeProc(pid=4242, poll_value=None)
+    m.process = cast("subprocess.Popen[bytes]", FakeProc(pid=4242, poll_value=None))
 
     class FakeMem:
         rss = 6000 * 1024**2

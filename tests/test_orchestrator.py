@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+from typing import cast
 
 import pytest
 
@@ -34,6 +35,7 @@ class FakeManager:
         prepare_delay: float = 0.0,
         has_prepare_model: bool = True,
         prepare_model_raises: bool = False,
+        estimate_source: str | None = None,
     ):
         self.name = entry.name
         self.dependencies = entry.dependencies
@@ -43,13 +45,17 @@ class FakeManager:
         self._mem_gb = mem_gb
         self._prepare_delay = prepare_delay
         self._prepare_model_raises = prepare_model_raises
-        self.resolved_with = None
-        self.activity = ()
+        self.resolved_with: object | None = None
+        self.activity: tuple[str, ...] = ()
         # A native engine exposes prepare_model (pre-download); managers without
         # the capability (docker, older fakes) simply lack the attribute,
         # which is what the SupportsModelPreparation isinstance check keys on.
         if has_prepare_model:
             self.prepare_model = self._prepare_model
+        # Likewise, only managers that opt in report where their estimate came
+        # from — the SupportsEstimateSource isinstance check keys on presence.
+        if estimate_source is not None:
+            self.estimated_memory_source = lambda: estimate_source
 
     def estimated_memory_gb(self) -> float:
         return self._mem_gb
@@ -114,6 +120,16 @@ class FakeHarness:
         self._log.append((self.name, "materialize"))
 
 
+def _fm(orch: Orchestrator, name: str) -> FakeManager:
+    """Narrow back to the concrete fake so tests can reach its recording internals
+    (the orchestrator's public dict is typed against the ``ServiceManager`` Protocol)."""
+    return cast(FakeManager, orch.managers[name])
+
+
+def _fh(orch: Orchestrator, name: str) -> FakeHarness:
+    return cast(FakeHarness, orch.harnesses[name])
+
+
 def _config(
     services: list[dict],
     version: str = "1.1",
@@ -140,6 +156,7 @@ def _orch(
     prepare_delays = kwargs.pop("prepare_delays", {})
     no_prepare_model = kwargs.pop("no_prepare_model", set())
     prepare_model_raises = kwargs.pop("prepare_model_raises", set())
+    estimate_sources = kwargs.pop("estimate_sources", {})
 
     def factory(entry: ServiceEntry) -> FakeManager:
         return FakeManager(
@@ -151,6 +168,7 @@ def _orch(
             prepare_delay=prepare_delays.get(entry.name, 0.0),
             has_prepare_model=entry.name not in no_prepare_model,
             prepare_model_raises=entry.name in prepare_model_raises,
+            estimate_source=estimate_sources.get(entry.name),
         )
 
     if harness_log is not None and "harness_factory" not in kwargs:
@@ -231,7 +249,7 @@ def test_resolve_called_during_boot() -> None:
     cfg = _config([{"name": "engine", "base_type": "x"}])
     orch = _orch(cfg)
     asyncio.run(orch.boot())
-    assert orch.managers["engine"].resolved_with is orch.resolver
+    assert _fm(orch, "engine").resolved_with is orch.resolver
 
 
 def test_unhealthy_service_fails_boot() -> None:
@@ -341,7 +359,7 @@ def test_reconcile_detects_health_loss() -> None:
     async def scenario() -> None:
         await orch.boot()
         assert orch.states["engine"] is ServiceState.READY
-        orch.managers["engine"]._healthy = False  # simulate a crash
+        _fm(orch, "engine")._healthy = False  # simulate a crash
         stop = asyncio.Event()
         task = asyncio.create_task(orch.reconcile(stop))
         await asyncio.sleep(0.1)
@@ -380,7 +398,7 @@ def test_health_loop_survives_probe_exception() -> None:
         def boom() -> bool:
             raise RuntimeError("probe blew up")
 
-        orch.managers["flaky"].is_healthy = boom
+        orch.managers["flaky"].is_healthy = boom  # type: ignore[method-assign]
         stop = asyncio.Event()
         task = asyncio.create_task(orch.reconcile(stop))
         await asyncio.sleep(0.1)
@@ -402,7 +420,7 @@ def test_metrics_loop_survives_metrics_exception() -> None:
         def boom() -> dict:
             raise RuntimeError("docker stats went weird")
 
-        orch.managers["flaky"].get_metrics = boom
+        orch.managers["flaky"].get_metrics = boom  # type: ignore[method-assign]
         stop = asyncio.Event()
         task = asyncio.create_task(orch.reconcile(stop))
         await asyncio.sleep(0.1)
@@ -501,6 +519,7 @@ def test_status_snapshot_shape() -> None:
 
     from datetime import datetime
 
+    assert engine["since"] is not None
     assert datetime.fromisoformat(engine["since"])
 
 
@@ -546,7 +565,9 @@ def test_status_snapshot_since_present_immediately_after_build() -> None:
     orch = _orch(_config([{"name": "a", "base_type": "x"}]))
     orch.build()
     snap = orch.status_snapshot()
-    assert datetime.fromisoformat(snap["services"]["a"]["since"])
+    since = snap["services"]["a"]["since"]
+    assert since is not None
+    assert datetime.fromisoformat(since)
 
 
 def test_set_state_updates_since_only_on_real_transition() -> None:
@@ -655,9 +676,8 @@ def test_boot_no_unknown_warning_when_source_known(caplog) -> None:
     import logging
 
     cfg = _config([{"name": "engine", "base_type": "x"}])
-    orch = _orch(cfg, mems={"engine": 8.0})
+    orch = _orch(cfg, mems={"engine": 8.0}, estimate_sources={"engine": "local"})
     orch.build()
-    orch.managers["engine"].estimated_memory_source = lambda: "local"
     with caplog.at_level(logging.WARNING, logger="sovereign.runtime.orchestrator"):
         asyncio.run(orch.boot())
     assert not any("UNKNOWN memory footprint" in r.message for r in caplog.records)
@@ -673,8 +693,8 @@ def test_harness_materialized_after_deps_ready() -> None:
     orch = _orch(cfg, log, harness_log=log)
     asyncio.run(orch.boot())
     assert ("h", "materialize") in log
-    assert orch.harnesses["h"].resolved_with is orch.resolver
-    assert orch.harnesses["h"].materialize_count == 1
+    assert _fh(orch, "h").resolved_with is orch.resolver
+    assert _fh(orch, "h").materialize_count == 1
 
 
 def test_harness_provisioned_before_materialize() -> None:
@@ -686,7 +706,7 @@ def test_harness_provisioned_before_materialize() -> None:
     orch = _orch(cfg, log, harness_log=log)
     asyncio.run(orch.boot())
     assert log.index(("h", "prepare_environment")) < log.index(("h", "materialize"))
-    assert orch.harnesses["h"].prepare_count == 1
+    assert _fh(orch, "h").prepare_count == 1
 
 
 def test_harness_reprovisioned_on_endpoint_change() -> None:
@@ -699,11 +719,11 @@ def test_harness_reprovisioned_on_endpoint_change() -> None:
 
     async def scenario() -> None:
         await orch.boot()
-        orch.managers["engine"]._port = 11999
+        _fm(orch, "engine")._port = 11999
         await orch._restart("engine")
         # Re-materialization re-runs the (idempotent) provisioning hook too.
-        assert orch.harnesses["h"].prepare_count == 2
-        assert orch.harnesses["h"].materialize_count == 2
+        assert _fh(orch, "h").prepare_count == 2
+        assert _fh(orch, "h").materialize_count == 2
 
     asyncio.run(scenario())
 
@@ -719,7 +739,7 @@ def test_harness_not_materialized_when_deps_not_ready() -> None:
     orch._health_timeout = lambda name: 0.05  # type: ignore[method-assign]
     with pytest.raises(BootError):
         asyncio.run(orch.boot())
-    assert orch.harnesses["h"].materialize_count == 0
+    assert _fh(orch, "h").materialize_count == 0
 
 
 def test_harness_remateralized_when_endpoint_changes() -> None:
@@ -732,12 +752,12 @@ def test_harness_remateralized_when_endpoint_changes() -> None:
 
     async def scenario() -> None:
         await orch.boot()
-        assert orch.harnesses["h"].materialize_count == 1
+        assert _fh(orch, "h").materialize_count == 1
         # Simulate a restart landing on a new port.
-        orch.managers["engine"]._port = 11999
+        _fm(orch, "engine")._port = 11999
         await orch._restart("engine")
         assert orch.registry.get("engine").port == 11999
-        assert orch.harnesses["h"].materialize_count == 2
+        assert _fh(orch, "h").materialize_count == 2
 
     asyncio.run(scenario())
 
@@ -752,9 +772,9 @@ def test_harness_not_remateralized_when_endpoint_unchanged() -> None:
 
     async def scenario() -> None:
         await orch.boot()
-        assert orch.harnesses["h"].materialize_count == 1
+        assert _fh(orch, "h").materialize_count == 1
         await orch._restart("engine")  # same port
-        assert orch.harnesses["h"].materialize_count == 1
+        assert _fh(orch, "h").materialize_count == 1
 
     asyncio.run(scenario())
 

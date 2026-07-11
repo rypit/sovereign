@@ -214,12 +214,15 @@ def test_prepare_environment_provisions_first(monkeypatch) -> None:
     from sovereign.core.provisioning import Provisioner
 
     order: list[str] = []
+
+    def _record_which(_b: str) -> str:
+        order.append("which")
+        return "/usr/local/bin/docker"
+
     monkeypatch.setattr(
         Provisioner, "provision", classmethod(lambda cls: order.append("provision"))
     )
-    monkeypatch.setattr(
-        mgr_mod.shutil, "which", lambda _b: order.append("which") or "/usr/local/bin/docker"
-    )
+    monkeypatch.setattr(mgr_mod.shutil, "which", _record_which)
     monkeypatch.setattr(mgr_mod.subprocess, "run", _fake_run(returncode=0, stdout="29.6.1"))
     m = _manager({"image": "img:latest", "port": 3000, "auto_pull": False})
     m.prepare_environment()

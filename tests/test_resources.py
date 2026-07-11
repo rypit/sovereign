@@ -59,12 +59,36 @@ def test_denial_message_when_nothing_reserved() -> None:
 
 
 # --- estimation ---
-class _FakeManager:
-    def __init__(self, gb: float | None):
-        if gb is not None:
-            self._gb = gb
+class _ManagerStub:
+    """Minimal but *complete* ServiceManager, so the fakes here actually
+    conform to the Protocol estimate_service_memory() is typed against."""
 
-    def estimated_memory_gb(self) -> float:  # only defined when _gb set
+    def __init__(self) -> None:
+        self.name = "s"
+        self.dependencies: list[str] = []
+        self.activity: tuple[str, ...] = ()
+
+    def start(self) -> None: ...
+
+    def stop(self) -> None: ...
+
+    def is_healthy(self) -> bool:
+        return True
+
+    def get_metrics(self) -> dict:
+        return {}
+
+    def prepare_environment(self) -> None: ...
+
+    def adjust_resources(self, memory_limit_mb: int) -> None: ...
+
+
+class _EstimatingManager(_ManagerStub):
+    def __init__(self, gb: float):
+        super().__init__()
+        self._gb = gb
+
+    def estimated_memory_gb(self) -> float:
         return self._gb
 
 
@@ -73,21 +97,15 @@ def _entry(memory_gb: float | None = None) -> ServiceEntry:
 
 
 def test_estimate_prefers_manager_method() -> None:
-    assert estimate_service_memory(_FakeManager(12.5), _entry()) == 12.5
+    assert estimate_service_memory(_EstimatingManager(12.5), _entry()) == 12.5
 
 
 def test_estimate_falls_back_to_entry_hint() -> None:
-    class NoEstimate:
-        pass
-
-    assert estimate_service_memory(NoEstimate(), _entry(memory_gb=7)) == 7.0
+    assert estimate_service_memory(_ManagerStub(), _entry(memory_gb=7)) == 7.0
 
 
 def test_estimate_defaults_to_zero_when_unknown() -> None:
-    class NoEstimate:
-        pass
-
-    assert estimate_service_memory(NoEstimate(), _entry()) == 0.0
+    assert estimate_service_memory(_ManagerStub(), _entry()) == 0.0
 
 
 @pytest.mark.parametrize(

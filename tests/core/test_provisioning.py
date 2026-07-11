@@ -53,11 +53,12 @@ def test_brewfile_discovered_by_convention() -> None:
     from sovereign.services.docker.manager import DockerManager
     from sovereign.services.inference.llama_cpp.manager import LlamaCppManager
 
-    for cls, needle in [
+    cases: list[tuple[type[provisioning.Provisioner], str]] = [
         (ClineCliHarness, 'brew "node"'),
         (LlamaCppManager, 'brew "llama.cpp"'),
         (DockerManager, 'cask "docker-desktop"'),
-    ]:
+    ]
+    for cls, needle in cases:
         brewfile = cls.provisioning_brewfile()
         assert brewfile is not None, cls.__name__
         assert brewfile.parent == Path(inspect.getfile(cls)).parent  # next to the module
@@ -68,11 +69,19 @@ def test_no_brewfile_returns_none() -> None:
     assert BinaryProvisioner.provisioning_brewfile() is None  # tests/core has no Brewfile
 
 
+def _record_run(runs: list[list[str]]):
+    def _run(cmd, **kw):
+        runs.append(cmd)
+        return (0, "")
+
+    return _run
+
+
 # --- provision() flow ---
 def test_provision_noop_when_satisfied(monkeypatch) -> None:
     monkeypatch.setattr(provisioning.shutil, "which", _which_fake({"xyz-fake-binary"}))
     runs: list[list[str]] = []
-    monkeypatch.setattr(provisioning, "_run", lambda cmd, **kw: runs.append(cmd) or (0, ""))
+    monkeypatch.setattr(provisioning, "_run", _record_run(runs))
     BinaryProvisioner.provision()
     assert runs == []
 
@@ -126,7 +135,7 @@ def test_provision_requires_brew_when_brewfile_present(monkeypatch) -> None:
 
     monkeypatch.setattr(provisioning.shutil, "which", _which_fake(set()))
     runs: list[list[str]] = []
-    monkeypatch.setattr(provisioning, "_run", lambda cmd, **kw: runs.append(cmd) or (0, ""))
+    monkeypatch.setattr(provisioning, "_run", _record_run(runs))
     with pytest.raises(ProvisioningError, match="brew.sh"):
         WithBrewfile.provision()
     assert runs == []  # never ran anything without brew
