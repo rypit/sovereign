@@ -17,7 +17,6 @@ imports it as ``hf_models``), so tests patch
 
 from __future__ import annotations
 
-import contextlib
 import io
 import logging
 import os
@@ -556,8 +555,10 @@ class RoutingCache:
         self._path = path
         self._data: dict[str, dict] = {}
         if path.exists():
-            with contextlib.suppress(Exception):
+            try:
                 self._data = read_json(path)
+            except Exception as exc:
+                log.warning("Failed to load routing cache from %s: %s", path, exc)
 
     def get(self, raw_ref: str) -> dict | None:
         return self._data.get(raw_ref)
@@ -568,5 +569,7 @@ class RoutingCache:
             "weight_bytes": weight_bytes,
             "resolved_at": datetime.now(UTC).isoformat(),
         }
-        with contextlib.suppress(Exception):
+        try:
             write_json(self._path, self._data)
+        except Exception as exc:
+            log.warning("Failed to write routing cache to %s: %s", self._path, exc)
