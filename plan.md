@@ -23,7 +23,7 @@ Fixes the findings from a full project audit ("roast"): the headline guarantees 
 - `648c6a3` P2.3 complete — add `tests/` to mypy; test fakes checked against Protocols; integration smoke test (`test_llama_stack_boots_serves_and_tears_down`) added and deselected by default (marked `integration`, excluded via `-m 'not integration'`)
 - `P2.4` complete — coverage visibility (`pytest-cov` + `make coverage` + HTML report in `htmlcov/`)
 - `113c81f` P3.3 complete — Protocol `isinstance` checks: `SupportsProvisioning` in CLI provision, `ActivityMixin` in orchestrator status snapshot
-- [ ] P3.4 — repo-root cleanup (`sovereign.yaml`/`mlx.yaml` → `examples/`, plan docs → `docs/`)
+- `aa91c75` P3.4 complete — repo-root cleanup: `sovereign.yaml`/`mlx.yaml` → `examples/`, `sovereign-implementation-plan-v1.1.md` → `docs/`
 - [ ] P3.5 — RoutingCache IO errors logged instead of `contextlib.suppress(Exception)`
 
 ---
