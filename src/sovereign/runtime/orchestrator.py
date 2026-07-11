@@ -22,6 +22,7 @@ from collections.abc import Callable, Coroutine, Mapping, Sequence
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
+from typing import Any, cast
 
 from sovereign.config import HarnessEntry, ServiceEntry, SovereignConfig
 from sovereign.core.base_harness import Harness
@@ -43,13 +44,23 @@ from sovereign.core.resources import (
 from sovereign.core.state import file_hash, write_json
 from sovereign.core.units import fmt_size
 from sovereign.runtime.manifest import write_manifest
-from sovereign.runtime.status import StatusSnapshot
+from sovereign.runtime.status import StatusSnapshot, TelemetryStatus
+from sovereign.runtime.telemetry import (
+    DockerMonitorWorker,
+    TelemetryHub,
+    TelemetryHubAlreadyOwned,
+    TelemetryStateCache,
+)
+from sovereign.workers.protocol import EventType
 
 log = logging.getLogger(__name__)
 
 # Default cadences (§6.2/§6.3): 2s health polling, 2s metrics (fresh enough for sparklines).
 _HEALTH_INTERVAL = 2.0
 _METRICS_INTERVAL = 2.0
+# Freshness window (§5) for preferring a live telemetry sample over the
+# manager's psutil/docker-stats fallback poll.
+_TELEMETRY_FRESHNESS_SECONDS = 6.0
 
 
 class ServiceState(StrEnum):
@@ -113,6 +124,10 @@ class Orchestrator:
 
         self.managers: dict[str, ServiceManager] = {}
         self.harnesses: dict[str, Harness] = {}
+        #: Bounded, thread-safe aggregate of worker/docker telemetry (§5) — fed by
+        #: the TelemetryHub (UDS) and DockerMonitorWorker started in serve_forever();
+        #: read here by _effective_metrics() and status_snapshot().
+        self.telemetry = TelemetryStateCache()
         #: name -> "auto" for services whose base_type was routed at build time.
         self.requested_base_types: dict[str, str] = {}
         self.states: dict[str, ServiceState] = {}
@@ -404,13 +419,43 @@ class Orchestrator:
                     # a manager hiccup shows as an error cell, not a crashed loop.
                     try:
                         self.metrics[name] = await asyncio.to_thread(
-                            self.managers[name].get_metrics
+                            self._effective_metrics, name, self.managers[name]
                         )
                     except Exception:  # noqa: BLE001 - keep supervising
                         log.warning("metrics of %s raised", name, exc_info=True)
                         self.metrics[name] = {"status": "error"}
             self.write_status()
             await self._sleep_or_stop(stop, self.metrics_interval)
+
+    def _effective_metrics(self, name: str, manager: ServiceManager) -> dict[str, Any]:
+        """Prefer fresh live telemetry over the manager's poll-based fallback.
+
+        A recent (<``_TELEMETRY_FRESHNESS_SECONDS``) MEMORY event (native
+        workers) or DOCKER_STATS event (docker services) in the cache wins —
+        it's push-driven and cheaper than psutil/`docker stats`; otherwise
+        fall through to ``manager.get_metrics()`` unchanged. Either way, the
+        latest generation stats (tokens_per_second/prompt_tps) are merged in
+        when present, since those never come from the polling fallback.
+        """
+        event_type = EventType.DOCKER_STATS if name in self._docker_service_names() else (
+            EventType.MEMORY
+        )
+        if self.telemetry.has_fresh(name, event_type, _TELEMETRY_FRESHNESS_SECONDS):
+            memory_bytes = self.telemetry.fresh_memory_bytes(name, _TELEMETRY_FRESHNESS_SECONDS)
+            metrics: dict[str, Any] = {"status": "running"}
+            if memory_bytes is not None:
+                metrics["memory_bytes"] = memory_bytes
+        else:
+            metrics = dict(manager.get_metrics())
+        snap = self.telemetry.snapshot(name)
+        if snap.get("generation_tps") is not None:
+            metrics["tokens_per_second"] = snap["generation_tps"]
+        if snap.get("prompt_tps") is not None:
+            metrics["prompt_tps"] = snap["prompt_tps"]
+        return metrics
+
+    def _docker_service_names(self) -> set[str]:
+        return {n for n in self._service_names if self._entries[n].base_type == "docker"}
 
     async def _restart(self, name: str) -> None:
         try:
@@ -498,6 +543,7 @@ class Orchestrator:
                     "estimated_bytes": reservations.get(name),
                     "metrics": self.metrics.get(name, {}),
                     "activity": {"lines": self._activity_lines(name)},
+                    "telemetry": cast(TelemetryStatus, self.telemetry.snapshot(name)),
                 }
                 for name in self._service_names
             },
@@ -529,6 +575,8 @@ async def serve_forever(
     state_dir: str | Path = ".sovereign",
     extra_tasks: Sequence[ExtraTask] = (),
     on_transition: TransitionHook | None = None,
+    manager_factory: ManagerFactory | None = None,
+    harness_factory: Callable[[HarnessEntry], Harness] | None = None,
 ) -> Orchestrator:
     """Boot the stack, run reconciliation (plus any extra tasks) until SIGINT/SIGTERM.
 
@@ -538,9 +586,38 @@ async def serve_forever(
     event, so a signal (even mid-boot) tears everything down together.
     """
     orch = Orchestrator(
-        config, variant_file=variant_file, state_dir=state_dir, on_transition=on_transition
+        config,
+        variant_file=variant_file,
+        state_dir=state_dir,
+        on_transition=on_transition,
+        manager_factory=manager_factory,
+        harness_factory=harness_factory,
     )
     orch.build()  # populate PENDING states so watchers see the full list immediately
+
+    hub = TelemetryHub(Path(state_dir) / "telemetry.sock", orch.telemetry)
+    hub_started = False
+    try:
+        hub.start()
+        hub_started = True
+    except (TelemetryHubAlreadyOwned, OSError):
+        log.warning(
+            "telemetry socket already owned by another process — running "
+            "without live telemetry (status.json will lag ~%.0fs behind)",
+            orch.metrics_interval,
+        )
+
+    # Imported lazily (not at module scope) so runtime/orchestrator.py never
+    # forces a services.docker import for stacks that don't use Docker.
+    from sovereign.services.docker.manager import DockerManager
+
+    docker_services = [
+        (name, manager._container_name(), manager.config.binary)
+        for name in orch.service_names
+        if isinstance((manager := orch.managers[name]), DockerManager)
+    ]
+    docker_monitor = DockerMonitorWorker(docker_services, orch.telemetry)
+    docker_monitor.start()
 
     stop = asyncio.Event()
     interrupts = 0
@@ -582,4 +659,7 @@ async def serve_forever(
             with contextlib.suppress(Exception):
                 await task
         await orch.shutdown()
+        docker_monitor.stop()
+        if hub_started:
+            hub.stop()
     return orch
