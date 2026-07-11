@@ -13,7 +13,7 @@ from pathlib import Path
 import yaml
 from pydantic import Field, ValidationError
 
-from sovereign.core.base_config import SovereignBaseModel
+from sovereign.core.base_config import GbBytes, SovereignBaseModel
 
 
 class BenchSpecError(Exception):
@@ -34,7 +34,7 @@ class Thresholds(SovereignBaseModel):
 
     min_tok_s: float | None = Field(default=None, gt=0)
     max_ttft_ms: float | None = Field(default=None, gt=0)
-    min_headroom_gb: float | None = Field(default=None, ge=0)
+    min_headroom_bytes: GbBytes | None = Field(default=None, ge=0, validation_alias="min_headroom_gb")
 
 
 class Budgets(SovereignBaseModel):

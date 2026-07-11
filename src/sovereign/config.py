@@ -18,7 +18,7 @@ from typing import Any, Literal
 import yaml
 from pydantic import Field, ValidationError, field_validator, model_validator
 
-from sovereign.core.base_config import SovereignBaseModel, validate_identifier
+from sovereign.core.base_config import GbBytes, SovereignBaseModel, validate_identifier
 
 
 class ConfigError(Exception):
@@ -37,8 +37,8 @@ class Priority(StrEnum):
 class ResourcesConfig(SovereignBaseModel):
     """Global unified-memory budget (§7)."""
 
-    max_unified_memory_gb: int = Field(gt=0)
-    safety_margin_gb: int = Field(ge=0)
+    max_unified_memory_bytes: GbBytes = Field(gt=0, validation_alias="max_unified_memory_gb")
+    safety_margin_bytes: GbBytes = Field(ge=0, validation_alias="safety_margin_gb")
     default_priority: Priority = Priority.MEDIUM
 
 
@@ -61,9 +61,10 @@ class ServiceEntry(SovereignBaseModel):
     priority: Priority | None = None
     dependencies: list[str] = Field(default_factory=list)
 
-    #: Admission-control memory estimate/override (GB). Used by the ResourceBudgeter
-    #: when the manager can't estimate its own footprint (§7).
-    memory_gb: float | None = Field(default=None, gt=0)
+    #: Admission-control memory estimate/override. YAML declares GB (``memory_gb``);
+    #: this field holds int bytes. Used by the ResourceBudgeter when the manager
+    #: can't estimate its own footprint (§7).
+    memory_bytes: GbBytes | None = Field(default=None, gt=0, validation_alias="memory_gb")
 
     health_check: HealthCheck | None = None
 
