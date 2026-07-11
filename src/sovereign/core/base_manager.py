@@ -208,3 +208,19 @@ class SupportsPerSlotContext(Protocol):
     """Engines with parallel slots: context window available per agent."""
 
     def per_slot_context(self) -> int | None: ...
+
+
+@runtime_checkable
+class SupportsProvisioning(Protocol):
+    """Integrations that install their own dependencies (Brewfile + commands).
+
+    The ``provision`` command checks this with ``issubclass`` so a manager class
+    predating the :class:`~sovereign.core.provisioning.Provisioner` mixin is
+    skipped rather than ``getattr``-probed for the hooks.
+    """
+
+    @classmethod
+    def provisioning_satisfied(cls) -> bool: ...
+
+    @classmethod
+    def provision(cls) -> None: ...
