@@ -36,6 +36,7 @@ class ServiceStatus(TypedDict):
     since: str | None
     endpoint: str | None
     descriptor: str | None
+    engine: str
     estimated_bytes: int | None
     metrics: dict[str, float | str]
     activity: ActivityStatus

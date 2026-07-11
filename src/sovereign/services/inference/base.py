@@ -305,7 +305,6 @@ class NativeEngineManager(ActivityMixin, Provisioner):
                 memory_bytes = footprint if footprint is not None else p.memory_info().rss
                 return {
                     "memory_bytes": memory_bytes,
-                    "cpu_percent": p.cpu_percent(interval=None),
                     "status": "running",
                 }
         except psutil.NoSuchProcess:

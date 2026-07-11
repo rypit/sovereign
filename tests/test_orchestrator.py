@@ -515,6 +515,7 @@ def test_status_snapshot_shape() -> None:
 
     engine = snapshot["services"]["engine"]
     assert engine["endpoint"] == "http://127.0.0.1:11435"
+    assert engine["engine"] == "x"
     assert frontend["endpoint"] is None  # no port configured for this fake manager
 
     from datetime import datetime
@@ -549,6 +550,9 @@ def test_status_snapshot_descriptor_by_base_type() -> None:
     assert snap["services"]["webui"]["descriptor"] == "ghcr.io/open-webui/open-webui:main"
     assert snap["services"]["heavy"]["descriptor"] == "mlx-community/Qwen3.6-27B-8bit"
     assert snap["services"]["cline_local"]["descriptor"] is None
+    assert snap["services"]["webui"]["engine"] == "docker"
+    assert snap["services"]["heavy"]["engine"] == "mlx_lm"
+    assert snap["services"]["cline_local"]["engine"] == "cline_cli"
 
 
 def test_status_snapshot_includes_activity() -> None:

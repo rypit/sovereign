@@ -427,13 +427,9 @@ def test_get_metrics_running(monkeypatch) -> None:
         def memory_info(self):
             return FakeMem()
 
-        def cpu_percent(self, interval=None):
-            return 9.9
-
     monkeypatch.setattr(native_mod.psutil, "Process", FakePsProc)
     assert m.get_metrics() == {
         "memory_bytes": 6000 * 1024**2,
-        "cpu_percent": 9.9,
         "status": "running",
     }
 
@@ -455,14 +451,10 @@ def test_get_metrics_uses_phys_footprint_when_available(monkeypatch) -> None:
         def memory_info(self):
             return FakeMem()
 
-        def cpu_percent(self, interval=None):
-            return 9.9
-
     monkeypatch.setattr(native_mod.psutil, "Process", FakePsProc)
     monkeypatch.setattr(native_mod, "macos_phys_footprint", lambda pid: 999 * 1024**2)
     metrics = m.get_metrics()
     assert metrics["memory_bytes"] == 999 * 1024**2  # footprint wins over the rss stub
-    assert metrics["cpu_percent"] == 9.9
 
 
 def test_get_metrics_falls_back_to_rss_when_footprint_unavailable(monkeypatch) -> None:
@@ -481,9 +473,6 @@ def test_get_metrics_falls_back_to_rss_when_footprint_unavailable(monkeypatch) -
 
         def memory_info(self):
             return FakeMem()
-
-        def cpu_percent(self, interval=None):
-            return 9.9
 
     monkeypatch.setattr(native_mod.psutil, "Process", FakePsProc)
     monkeypatch.setattr(native_mod, "macos_phys_footprint", lambda pid: None)
