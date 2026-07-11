@@ -58,11 +58,11 @@ class MlxLmManager(NativeEngineManager):
         return None
 
     # --- resource estimation (§7) ---
-    def extra_memory_gb(self) -> float:
+    def extra_memory_bytes(self) -> int:
         """mlx_lm's engine-specific term on top of the weights: a declared
         ``prompt_cache_bytes`` is a hard KV-cache reservation that also lives
         in unified memory."""
-        return (self.config.prompt_cache_bytes or 0) / (1024**3)
+        return self.config.prompt_cache_bytes or 0
 
     # --- flag generation ---
     def get_start_args(self) -> list[str]:
@@ -111,5 +111,5 @@ class MlxLmManager(NativeEngineManager):
                 self.config.draft_model, kind="mlx_lm draft_model", service=self.name
             )
 
-    def adjust_resources(self, memory_limit_mb: int) -> None:
+    def adjust_resources(self, memory_limit_bytes: int) -> None:
         """No-op: MLX's Metal cache limit isn't reachable through the server subprocess."""

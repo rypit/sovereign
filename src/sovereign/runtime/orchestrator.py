@@ -106,8 +106,8 @@ class Orchestrator:
         self.registry = ServiceRegistry()
         self.resolver = Resolver(self.registry, env)
         self.budgeter = ResourceBudgeter(
-            config.resources.max_unified_memory_gb,
-            config.resources.safety_margin_gb,
+            total_bytes=config.resources.max_unified_memory_bytes,
+            safety_margin_bytes=config.resources.safety_margin_bytes,
         )
 
         self.managers: dict[str, ServiceManager] = {}
