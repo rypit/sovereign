@@ -151,15 +151,23 @@ class NativeEngineManager(ActivityMixin, Provisioner):
     def estimated_memory_gb(self) -> float:
         """Estimate resident memory from model weights and engine-specific overhead.
 
-        The base implementation sums model + draft model bytes; engines override
-        to add their specific overhead (KV cache, prompt cache, etc.).
+        The base implementation sums model + draft model bytes and calls
+        `_engine_overhead_gb()` for engine-specific additions.
         """
         if self.memory_override_gb is not None:
             return round(self.memory_override_gb, 2)
         total = self._model_bytes(self.config.model)
         if self.config.draft_model is not None:
             total += self._model_bytes(self.config.draft_model)
-        return round(total / (1024**3), 2)
+        overhead = self._engine_overhead_gb()
+        return round(total / (1024**3) + overhead, 2)
+
+    def _engine_overhead_gb(self) -> float:
+        """Engine-specific memory overhead (KV cache, prompt cache, etc.).
+
+        Override in subclasses to add engine-specific overhead beyond model weights.
+        """
+        return 0.0
 
     def estimated_memory_source(self) -> str:
         """Where admission's weight estimate came from (local|cached|hub|unknown).

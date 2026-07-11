@@ -67,18 +67,9 @@ class LlamaCppManager(NativeEngineManager):
         return None
 
     # --- resource estimation (§7) ---
-    def estimated_memory_gb(self) -> float:
-        """Model (+ draft) weights + KV cache, or a declared override.
-
-        For HuggingFace repo ids the weight estimate comes from repo metadata
-        (selected GGUF file sizes); unknown (offline + uncached) contributes 0.0.
-        """
-        if self.memory_override_gb is not None:
-            return round(self.memory_override_gb, 2)
-        total = self._model_bytes(self.config.model)
-        if self.config.draft_model is not None:
-            total += self._model_bytes(self.config.draft_model)
-        return round(total / (1024**3) + self.estimated_kv_cache_gb(), 2)
+    def _engine_overhead_gb(self) -> float:
+        """KV cache overhead based on context size and tokens per byte."""
+        return self.estimated_kv_cache_gb()
 
     def estimated_kv_cache_gb(self) -> float:
         """KV cache grows with total context (§7 — slots×context is joint)."""

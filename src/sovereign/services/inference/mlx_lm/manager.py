@@ -58,23 +58,11 @@ class MlxLmManager(NativeEngineManager):
         return None
 
     # --- resource estimation (§7) ---
-    def estimated_memory_gb(self) -> float:
-        """Estimate resident memory from the model weights (or an override).
-
-        Includes the draft model when speculative decoding is configured — both models
-        live in unified memory simultaneously. A declared ``prompt_cache_bytes`` is a
-        hard KV-cache reservation that also lives in unified memory. For HuggingFace
-        repo ids the estimate comes from repo metadata (weight-file sizes); unknown
-        (offline + uncached) contributes 0.0.
-        """
-        if self.memory_override_gb is not None:
-            return round(self.memory_override_gb, 2)
-        total = self._model_bytes(self.config.model)
-        if self.config.draft_model is not None:
-            total += self._model_bytes(self.config.draft_model)
+    def _engine_overhead_gb(self) -> float:
+        """Prompt cache overhead if configured."""
         if self.config.prompt_cache_bytes is not None:
-            total += self.config.prompt_cache_bytes
-        return round(total / (1024**3), 2)
+            return round(self.config.prompt_cache_bytes / (1024**3), 2)
+        return 0.0
 
     # --- flag generation ---
     def get_start_args(self) -> list[str]:
