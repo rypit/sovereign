@@ -489,7 +489,9 @@ class Orchestrator:
                     "estimated_gb": reservations.get(name),
                     "metrics": self.metrics.get(name, {}),
                     "activity": {
-                        "lines": list(getattr(self.managers.get(name), "activity", ()) or ())
+                        "lines": list(
+                            getattr(self.managers.get(name), "activity", ()) or ()
+                        )
                     },
                 }
                 for name in self._service_names

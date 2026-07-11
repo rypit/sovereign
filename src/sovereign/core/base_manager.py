@@ -208,3 +208,14 @@ class SupportsPerSlotContext(Protocol):
     """Engines with parallel slots: context window available per agent."""
 
     def per_slot_context(self) -> int | None: ...
+
+
+@runtime_checkable
+class SupportsProvisioning(Protocol):
+    """Provisioning hooks for dependency installation."""
+
+    @classmethod
+    def provisioning_satisfied(cls) -> bool: ...
+
+    @classmethod
+    def provision(cls) -> None: ...

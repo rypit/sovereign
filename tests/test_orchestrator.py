@@ -9,6 +9,7 @@ import time
 import pytest
 
 from sovereign.config import ServiceEntry, SovereignConfig
+from sovereign.core.base_manager import ActivityMixin
 from sovereign.core.resolver import ConsumerKind, ResolvedEndpoint
 from sovereign.runtime.orchestrator import (
     BootError,
@@ -18,7 +19,7 @@ from sovereign.runtime.orchestrator import (
 )
 
 
-class FakeManager:
+class FakeManager(ActivityMixin):
     """Records lifecycle calls into a shared log for ordering assertions."""
 
     consumer_kind = ConsumerKind.NATIVE
@@ -158,7 +159,7 @@ def _orch(
 
     kwargs.setdefault("health_interval", 0.01)
     kwargs.setdefault("metrics_interval", 0.01)
-    return Orchestrator(config, manager_factory=factory, **kwargs)  # type: ignore[arg-type]
+    return Orchestrator(config, manager_factory=factory, **kwargs)
 
 
 # --- topological sort ---

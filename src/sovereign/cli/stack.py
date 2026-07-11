@@ -29,6 +29,7 @@ from sovereign.cli._common import (
     app,
     console,
 )
+from sovereign.core.base_manager import SupportsProvisioning
 from sovereign.core.state import file_hash, mark_stack_stopped, read_json
 from sovereign.runtime.dashboard import (
     MetricHistory,
@@ -379,16 +380,14 @@ def provision(
 
     failed = False
     for base_type, cls in sorted(_provision_targets(file).items()):
-        provision_fn = getattr(cls, "provision", None)
-        satisfied_fn = getattr(cls, "provisioning_satisfied", None)
-        if not callable(provision_fn):
+        if not isinstance(cls, type) or not issubclass(cls, SupportsProvisioning):
             continue  # integration predates the Provisioner mixin — nothing declared
-        if callable(satisfied_fn) and satisfied_fn():
+        if cls.provisioning_satisfied():
             console.print(f"  [green]✓[/green] {base_type} — satisfied")
             continue
         console.print(f"  [cyan]→[/cyan] {base_type} — installing…")
         try:
-            provision_fn()
+            cls.provision()
             console.print(f"  [green]✓[/green] {base_type} — installed")
         except (ProvisioningError, FileNotFoundError, ImportError) as exc:
             console.print(f"  [red]✗ {base_type}: {exc}[/red]")
