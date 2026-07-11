@@ -125,14 +125,14 @@ def parse_mem_to_bytes(value: str) -> int:
 def container_metrics(container: str, *, binary: str = "docker") -> dict[str, Any]:
     """Point-in-time metrics for a running container via ``docker stats``.
 
-    Shared by every Docker service. Returns ``{memory_bytes, cpu_percent, status}`` when
+    Shared by every Docker service. Returns ``{memory_bytes, status}`` when
     running, else ``{"status": "stopped"}``.
     """
     stats_args = [
         "stats",
         "--no-stream",
         "--format",
-        "{{.CPUPerc}};{{.MemUsage}}",
+        "{{.MemUsage}}",
         container,
     ]
     try:
@@ -141,17 +141,17 @@ def container_metrics(container: str, *, binary: str = "docker") -> dict[str, An
         return {"status": "stopped"}
     if result.returncode != 0 or not result.stdout.strip():
         return {"status": "stopped"}
-    cpu_str, _, mem_str = result.stdout.strip().partition(";")
+    mem_field = result.stdout.strip().split("/")[0].strip()
+    # A restarting/exiting container reports "-- / --": not a number, and not
+    # a reason to crash the metrics loop.
+    if not mem_field or mem_field.startswith("--"):
+        return {"status": "stopped"}
     try:
-        # A restarting/exiting container reports "--%" / "-- / --": not a
-        # number, and not a reason to crash the metrics loop.
-        cpu_percent = float(cpu_str.strip().rstrip("%"))
-        memory_bytes = parse_mem_to_bytes(mem_str.split("/")[0])
+        memory_bytes = parse_mem_to_bytes(mem_field)
     except ValueError:
         return {"status": "stopped"}
     return {
         "memory_bytes": memory_bytes,
-        "cpu_percent": cpu_percent,
         "status": "running",
     }
 

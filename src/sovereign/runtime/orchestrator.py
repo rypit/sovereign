@@ -494,6 +494,7 @@ class Orchestrator:
                         else None
                     ),
                     "descriptor": _service_descriptor(self._entries[name]),
+                    "engine": self._entries[name].base_type,
                     "estimated_bytes": reservations.get(name),
                     "metrics": self.metrics.get(name, {}),
                     "activity": {"lines": self._activity_lines(name)},

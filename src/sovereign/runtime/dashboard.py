@@ -123,7 +123,7 @@ class MetricHistory:
         for name, svc in services.items():
             metrics = svc.get("metrics") or {}
             buckets = self._data.setdefault(name, {})
-            for key in ("cpu_percent", "memory_bytes"):
+            for key in ("memory_bytes",):
                 if key in metrics:
                     dq = buckets.setdefault(key, deque())
                     dq.append((now, metrics[key]))
@@ -175,10 +175,10 @@ def dashboard(status: Mapping[str, Any], history: MetricHistory | None = None) -
     """Render the §8 dashboard table, plus a live "Provisioning" activity area."""
     table = Table(title=f"Sovereign Control Plane v{__version__}", title_justify="left")
     table.add_column("SERVICE")
+    table.add_column("ENGINE")
     table.add_column("DESCRIPTOR")
     table.add_column("STATUS")
     table.add_column("DURATION")
-    table.add_column("CPU %")
     table.add_column("MEM")
     table.add_column("EST")
     table.add_column("ENDPOINT")
@@ -187,21 +187,20 @@ def dashboard(status: Mapping[str, Any], history: MetricHistory | None = None) -
     for name, svc in status.get("services", {}).items():
         state = svc.get("state", "unknown")
         metrics = svc.get("metrics") or {}
-        cpu = f"{metrics['cpu_percent']:.1f}%" if "cpu_percent" in metrics else "-"
         mem = fmt_size(metrics["memory_bytes"]) if "memory_bytes" in metrics else "-"
-        cpu_spark = sparkline(history.values(name, "cpu_percent")) if history else ""
         mem_spark = sparkline(history.values(name, "memory_bytes")) if history else ""
         duration = duration_cell(svc.get("since"))
         endpoint = svc.get("endpoint") or "-"
+        engine = svc.get("engine") or "-"
         descriptor = svc.get("descriptor") or "-"
         estimated = svc.get("estimated_bytes")
         est = fmt_size(estimated) if estimated is not None else "-"
         table.add_row(
             name,
+            engine,
             descriptor,
             status_cell(state),
             duration,
-            _metric_cell(cpu, cpu_spark),
             _metric_cell(mem, mem_spark),
             est,
             endpoint,

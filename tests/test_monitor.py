@@ -65,13 +65,15 @@ _STATUS = {
             "since": "2026-07-05T00:00:00+00:00",
             "endpoint": "http://127.0.0.1:11435",
             "descriptor": "mlx-community/Qwen3.6-27B-8bit",
-            "metrics": {"cpu_percent": 12.4, "memory_bytes": 14_500_000_000, "status": "running"},
+            "engine": "mlx_lm",
+            "metrics": {"memory_bytes": 14_500_000_000, "status": "running"},
         },
         "open_webui": {
             "state": "starting",
             "since": "2026-07-05T00:03:12+00:00",
             "endpoint": None,
             "descriptor": None,
+            "engine": "docker",
             "metrics": {},
         },
     },
@@ -88,18 +90,19 @@ def test_dashboard_matches_mockup_shape() -> None:
     text = _render(dashboard(_STATUS))
     assert f"Sovereign Control Plane v{__version__}" in text
     for header in (
-        "SERVICE", "DESCRIPTOR", "STATUS", "DURATION", "CPU %", "MEM", "ENDPOINT",
+        "SERVICE", "ENGINE", "DESCRIPTOR", "STATUS", "DURATION", "MEM", "ENDPOINT",
     ):
         assert header in text
     assert "DEPENDENCIES" not in text
+    assert "CPU %" not in text
     # ready -> RUNNING label; metrics rendered; endpoint rendered
     assert "RUNNING" in text
-    assert "12.4%" in text
     assert "14.5 GB" in text
     assert "STARTING" in text
     assert "http://127.0.0.1:11435" in text
     assert "mlx-community/Qwen3.6-27B-8bit" in text
-    # missing endpoint/metrics/descriptor render as "-"
+    assert "mlx_lm" in text
+    # missing endpoint/metrics/descriptor/engine render as "-"
     assert "-" in text
 
 
@@ -129,40 +132,32 @@ def test_sparkline_capped_to_render_width() -> None:
 # --- MetricHistory ---
 def test_metric_history_prunes_old_samples_by_age() -> None:
     history = MetricHistory(window_seconds=0.05)
-    history.record({"services": {"a": {"metrics": {"cpu_percent": 1.0}}}})
+    history.record({"services": {"a": {"metrics": {"memory_bytes": 1.0}}}})
     time.sleep(0.1)
-    history.record({"services": {"a": {"metrics": {"cpu_percent": 2.0}}}})
-    assert history.values("a", "cpu_percent") == [2.0]
+    history.record({"services": {"a": {"metrics": {"memory_bytes": 2.0}}}})
+    assert history.values("a", "memory_bytes") == [2.0]
 
 
 def test_metric_history_keeps_recent_samples() -> None:
     history = MetricHistory(window_seconds=5.0)
-    history.record({"services": {"a": {"metrics": {"cpu_percent": 1.0}}}})
-    history.record({"services": {"a": {"metrics": {"cpu_percent": 2.0}}}})
-    assert history.values("a", "cpu_percent") == [1.0, 2.0]
+    history.record({"services": {"a": {"metrics": {"memory_bytes": 1.0}}}})
+    history.record({"services": {"a": {"metrics": {"memory_bytes": 2.0}}}})
+    assert history.values("a", "memory_bytes") == [1.0, 2.0]
 
 
 def test_metric_history_prunes_services_no_longer_present() -> None:
     history = MetricHistory()
-    history.record({"services": {"a": {"metrics": {"cpu_percent": 1.0}}}})
-    history.record({"services": {"b": {"metrics": {"cpu_percent": 2.0}}}})
-    assert history.values("a", "cpu_percent") == []
-    assert history.values("b", "cpu_percent") == [2.0]
-
-
-def test_metric_history_per_metric_independence() -> None:
-    history = MetricHistory()
-    history.record({"services": {"a": {"metrics": {"cpu_percent": 1.0}}}})
-    history.record({"services": {"a": {"metrics": {"cpu_percent": 2.0, "memory_bytes": 100}}}})
-    assert history.values("a", "cpu_percent") == [1.0, 2.0]
-    assert history.values("a", "memory_bytes") == [100]
+    history.record({"services": {"a": {"metrics": {"memory_bytes": 1.0}}}})
+    history.record({"services": {"b": {"metrics": {"memory_bytes": 2.0}}}})
+    assert history.values("a", "memory_bytes") == []
+    assert history.values("b", "memory_bytes") == [2.0]
 
 
 def test_metric_history_instances_share_no_state() -> None:
     a = MetricHistory()
     b = MetricHistory()
-    a.record({"services": {"x": {"metrics": {"cpu_percent": 1.0}}}})
-    assert b.values("x", "cpu_percent") == []
+    a.record({"services": {"x": {"metrics": {"memory_bytes": 1.0}}}})
+    assert b.values("x", "memory_bytes") == []
 
 
 # --- _status_cell ---
@@ -181,7 +176,6 @@ def test_status_cell_plain_markup_for_steady_states() -> None:
 def test_dashboard_without_history_has_no_sparkline_artifacts() -> None:
     text = _render(dashboard(_STATUS))
     assert "RUNNING" in text
-    assert "12.4%" in text
     assert "14.5 GB" in text
     assert "STARTING" in text
     assert "http://127.0.0.1:11435" in text

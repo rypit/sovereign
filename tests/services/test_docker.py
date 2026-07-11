@@ -392,11 +392,10 @@ def test_parse_mem_to_bytes(text: str, expected: int) -> None:
 def test_container_metrics_running(monkeypatch) -> None:
     monkeypatch.setattr(
         mgr_mod, "run_docker",
-        lambda args, **kw: subprocess.CompletedProcess(args, 0, "12.34%;15.5MiB / 2GiB\n", ""),
+        lambda args, **kw: subprocess.CompletedProcess(args, 0, "15.5MiB / 2GiB\n", ""),
     )
     m = mgr_mod.container_metrics("c1")
     assert m["status"] == "running"
-    assert m["cpu_percent"] == 12.34
     assert m["memory_bytes"] == 16_252_928
 
 
@@ -409,11 +408,11 @@ def test_container_metrics_stopped(monkeypatch) -> None:
 
 
 def test_container_metrics_restarting_container_dashes(monkeypatch) -> None:
-    """Docker emits "--%" / "-- / --" for a restarting container — the metrics
+    """Docker emits "-- / --" for a restarting container — the metrics
     loop must see {"status": "stopped"}, not a ValueError crash."""
     monkeypatch.setattr(
         mgr_mod, "run_docker",
-        lambda args, **kw: subprocess.CompletedProcess(args, 0, "--%;-- / --\n", ""),
+        lambda args, **kw: subprocess.CompletedProcess(args, 0, "-- / --\n", ""),
     )
     assert mgr_mod.container_metrics("c1") == {"status": "stopped"}
 
