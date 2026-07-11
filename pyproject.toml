@@ -81,7 +81,7 @@ warn_unused_ignores = true
 
 [[tool.mypy.overrides]]
 # Untyped (or platform-absent) third parties.
-module = ["mlx_lm.*", "minisweagent.*"]
+module = ["mlx_lm.*", "minisweagent.*", "llama_cpp.*", "uvicorn.*", "fastapi.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
