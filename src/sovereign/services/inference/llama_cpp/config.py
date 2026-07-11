@@ -64,5 +64,6 @@ class LlamaCppConfig(NativeEngineConfig):
     # --- admission-control estimation (§7) ---
     #: Approximate KV-cache bytes per context token (default ~256 KiB, large-model
     #: rough figure). Used for the model-file + KV memory estimate. A top-level
-    #: ``memory_gb`` on the service entry overrides the whole estimate.
+    #: ``memory_gb`` (YAML) / ``memory_bytes`` override on the service entry
+    #: overrides the whole estimate.
     kv_bytes_per_token: int = Field(default=262144, gt=0)

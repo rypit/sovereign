@@ -120,7 +120,7 @@ class NativeEngineManager(ActivityMixin, Provisioner):
         self.port = entry.health_check.port
         self.health_path = entry.health_check.endpoint
         self.priority = entry.priority
-        self.memory_override_gb = entry.memory_gb
+        self.memory_override_bytes = entry.memory_bytes
 
         self.process: subprocess.Popen[bytes] | None = None
         self._log_file: IO[str] | None = None
@@ -142,25 +142,25 @@ class NativeEngineManager(ActivityMixin, Provisioner):
         return {}
 
     # --- resource estimation (§7) ---
-    def estimated_memory_gb(self) -> float:
+    def estimated_memory_bytes(self) -> int:
         """Model (+ draft) weights plus the engine's extra term, or a declared override.
 
         Speculative decoding keeps both models in unified memory simultaneously,
         so the draft model's weights always count. For HuggingFace repo ids the
         weight estimate comes from repo metadata; unknown (offline + uncached)
-        contributes 0.0.
+        contributes 0.
         """
-        if self.memory_override_gb is not None:
-            return round(self.memory_override_gb, 2)
+        if self.memory_override_bytes is not None:
+            return self.memory_override_bytes
         total = self._model_bytes(self.config.model)
         if self.config.draft_model is not None:
             total += self._model_bytes(self.config.draft_model)
-        return round(total / (1024**3) + self.extra_memory_gb(), 2)
+        return total + self.extra_memory_bytes()
 
-    def extra_memory_gb(self) -> float:
-        """Engine-specific footprint beyond the weights (GB) — e.g. llama_cpp's
+    def extra_memory_bytes(self) -> int:
+        """Engine-specific footprint beyond the weights (bytes) — e.g. llama_cpp's
         KV cache, mlx_lm's hard prompt-cache reservation. Default: nothing."""
-        return 0.0
+        return 0
 
     def _model_bytes(self, model: str) -> int:
         """Weight-byte estimate for one model ref (local disk, HF cache, or repo
@@ -304,7 +304,7 @@ class NativeEngineManager(ActivityMixin, Provisioner):
                 footprint = macos_phys_footprint(proc.pid)
                 memory_bytes = footprint if footprint is not None else p.memory_info().rss
                 return {
-                    "memory_mb": round(memory_bytes / (1024**2), 2),
+                    "memory_bytes": memory_bytes,
                     "cpu_percent": p.cpu_percent(interval=None),
                     "status": "running",
                 }
@@ -334,5 +334,5 @@ class NativeEngineManager(ActivityMixin, Provisioner):
                 if ref.repo_id is not None:
                     hf_models.fetch_repo_info(ref.repo_id)
 
-    def adjust_resources(self, memory_limit_mb: int) -> None:
+    def adjust_resources(self, memory_limit_bytes: int) -> None:
         """No-op by default; engines override when they can shrink under pressure."""

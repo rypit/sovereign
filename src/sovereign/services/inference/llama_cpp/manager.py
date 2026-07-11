@@ -67,14 +67,14 @@ class LlamaCppManager(NativeEngineManager):
         return None
 
     # --- resource estimation (§7) ---
-    def extra_memory_gb(self) -> float:
+    def extra_memory_bytes(self) -> int:
         """llama_cpp's engine-specific term on top of the weights: the KV cache."""
-        return self.estimated_kv_cache_gb()
+        return self.estimated_kv_cache_bytes()
 
-    def estimated_kv_cache_gb(self) -> float:
+    def estimated_kv_cache_bytes(self) -> int:
         """KV cache grows with total context (§7 — slots×context is joint)."""
         ctx = self.config.context_size or 0
-        return round(ctx * self.config.kv_bytes_per_token / (1024**3), 2)
+        return ctx * self.config.kv_bytes_per_token
 
     def per_slot_context(self) -> int | None:
         """Context available *per agent* — total context divided across -np slots."""

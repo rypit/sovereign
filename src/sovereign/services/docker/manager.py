@@ -102,8 +102,8 @@ def stream_pull(
         raise RuntimeError(f"docker pull failed for {image}: {last}")
 
 
-def parse_mem_to_mb(value: str) -> float:
-    """Parse a ``docker stats`` memory field (e.g. ``"15.5MiB"``) into MB."""
+def parse_mem_to_bytes(value: str) -> int:
+    """Parse a ``docker stats`` memory field (e.g. ``"15.5MiB"``) into bytes."""
     value = value.strip()
     units = {
         "B": 1,
@@ -118,14 +118,14 @@ def parse_mem_to_mb(value: str) -> float:
     for unit in sorted(units, key=len, reverse=True):
         if value.endswith(unit):
             number = float(value[: -len(unit)])
-            return round(number * units[unit] / (1024**2), 2)
-    return 0.0
+            return round(number * units[unit])
+    return 0
 
 
 def container_metrics(container: str, *, binary: str = "docker") -> dict[str, Any]:
     """Point-in-time metrics for a running container via ``docker stats``.
 
-    Shared by every Docker service. Returns ``{memory_mb, cpu_percent, status}`` when
+    Shared by every Docker service. Returns ``{memory_bytes, cpu_percent, status}`` when
     running, else ``{"status": "stopped"}``.
     """
     stats_args = [
