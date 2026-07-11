@@ -493,6 +493,7 @@ class Orchestrator:
                             getattr(self.managers.get(name), "activity", ()) or ()
                         )
                     },
+                    "base_type": self._entries[name].base_type,
                 }
                 for name in self._service_names
             },

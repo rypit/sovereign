@@ -66,6 +66,7 @@ _STATUS = {
             "endpoint": "http://127.0.0.1:11435",
             "descriptor": "mlx-community/Qwen3.6-27B-8bit",
             "metrics": {"cpu_percent": 12.4, "memory_mb": 14500.0, "status": "running"},
+            "base_type": "mlx_lm",
         },
         "open_webui": {
             "state": "starting",
@@ -73,6 +74,7 @@ _STATUS = {
             "endpoint": None,
             "descriptor": None,
             "metrics": {},
+            "base_type": "docker",
         },
     },
 }
@@ -88,13 +90,12 @@ def test_dashboard_matches_mockup_shape() -> None:
     text = _render(dashboard(_STATUS))
     assert f"Sovereign Control Plane v{__version__}" in text
     for header in (
-        "SERVICE", "DESCRIPTOR", "STATUS", "DURATION", "CPU %", "MEM (MB)", "ENDPOINT",
+        "SERVICE", "ENGINE", "DESCRIPTOR", "STATUS", "DURATION", "MEM (MB)", "ENDPOINT",
     ):
         assert header in text
     assert "DEPENDENCIES" not in text
     # ready -> RUNNING label; metrics rendered; endpoint rendered
     assert "RUNNING" in text
-    assert "12.4%" in text
     assert "14500" in text
     assert "STARTING" in text
     assert "http://127.0.0.1:11435" in text
@@ -181,7 +182,6 @@ def test_status_cell_plain_markup_for_steady_states() -> None:
 def test_dashboard_without_history_has_no_sparkline_artifacts() -> None:
     text = _render(dashboard(_STATUS))
     assert "RUNNING" in text
-    assert "12.4%" in text
     assert "14500" in text
     assert "STARTING" in text
     assert "http://127.0.0.1:11435" in text

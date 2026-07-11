@@ -39,6 +39,7 @@ class ServiceStatus(TypedDict):
     estimated_gb: float | None
     metrics: dict[str, float | str]
     activity: ActivityStatus
+    base_type: str | None
 
 
 class StatusSnapshot(TypedDict):

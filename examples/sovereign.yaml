@@ -22,7 +22,7 @@ version: "1.1"
 
 resources:
   max_unified_memory_gb: 128     # adjust to your machine
-  safety_margin_gb: 8
+  safety_margin_gb: 16
   default_priority: medium
 
 services:
@@ -117,9 +117,9 @@ services:
       timeout_seconds: 120
     config:
       model: "mlx-community/Qwen3-Coder-Next-8bit"
-      prompt_cache_size: 32768
-      prompt_cache_bytes: 17179869184
-      max_tokens: 8192
+      prompt_cache_size: 8192        # Reduced from 32768 (4x smaller)
+      prompt_cache_bytes: 4294967296 # 4GB (reduced from 16GB, 4x smaller)
+      max_tokens: 4096               # Reduced from 8192
       trust_remote_code: true
       host: 127.0.0.1
       temp: 0
