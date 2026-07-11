@@ -25,8 +25,10 @@ jobs:
       - name: Sync dependencies
         run: uv sync --locked --dev --all-extras
 
-      - name: make test
-        run: make test
+      # Coverage is a visibility report, not a gate: the job fails on test
+      # failures only, never on a coverage number.
+      - name: make coverage
+        run: make coverage
 
   test-macos:
     name: test (macos arm64)
