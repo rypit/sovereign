@@ -270,7 +270,7 @@ def test_estimated_memory_override() -> None:
         config={"model": "mlx-community/foo"},
         memory_gb=6,
     )
-    assert MlxLmManager(entry).estimated_memory_gb() == 6.0
+    assert MlxLmManager(entry).estimated_memory_bytes() == 6 * 10**9
 
 
 def test_estimated_memory_from_local_dir(tmp_path, sparse_file) -> None:
@@ -278,13 +278,13 @@ def test_estimated_memory_from_local_dir(tmp_path, sparse_file) -> None:
     model_dir.mkdir()
     sparse_file(model_dir / "weights.safetensors", 2 * 1024**3)  # 2 GiB
     m = _manager({"model": str(model_dir)})
-    assert m.estimated_memory_gb() == pytest.approx(2.0, abs=0.05)
+    assert m.estimated_memory_bytes() == 2 * 1024**3
 
 
 def test_estimated_memory_repo_id_unknown(monkeypatch) -> None:
-    # Offline + uncached: metadata fetch returns None → contributes 0.0.
+    # Offline + uncached: metadata fetch returns None → contributes 0.
     monkeypatch.setattr(models_mod, "fetch_repo_info", lambda repo_id: None)
-    assert _manager({"model": "mlx-community/foo-4bit"}).estimated_memory_gb() == 0.0
+    assert _manager({"model": "mlx-community/foo-4bit"}).estimated_memory_bytes() == 0
 
 
 def test_estimated_memory_repo_id_from_metadata(monkeypatch) -> None:
@@ -295,10 +295,10 @@ def test_estimated_memory_repo_id_from_metadata(monkeypatch) -> None:
          ("config.json", 1000)],
     )
     monkeypatch.setattr(models_mod, "fetch_repo_info", lambda repo_id: info)
-    # 3 GiB + 1 GiB safetensors weights = 4.0 GB (config.json is not weight bytes).
-    assert _manager({"model": "mlx-community/foo-4bit"}).estimated_memory_gb() == pytest.approx(
-        4.0, abs=0.05
-    )
+    # 3 GiB + 1 GiB safetensors weights = exact 4 GiB (config.json is not weight bytes).
+    assert _manager(
+        {"model": "mlx-community/foo-4bit"}
+    ).estimated_memory_bytes() == 4 * 1024**3
 
 
 def test_estimated_memory_includes_prompt_cache_bytes(tmp_path, sparse_file) -> None:
@@ -306,7 +306,7 @@ def test_estimated_memory_includes_prompt_cache_bytes(tmp_path, sparse_file) -> 
     model_dir.mkdir()
     sparse_file(model_dir / "weights.safetensors", 4 * 1024**3)  # 4 GiB
     m = _manager({"model": str(model_dir), "prompt_cache_bytes": 2 * 1024**3})
-    assert m.estimated_memory_gb() == pytest.approx(6.0, abs=0.05)
+    assert m.estimated_memory_bytes() == 6 * 1024**3
 
 
 def test_estimated_memory_includes_local_draft_model(tmp_path, sparse_file) -> None:
@@ -317,16 +317,16 @@ def test_estimated_memory_includes_local_draft_model(tmp_path, sparse_file) -> N
     draft_dir.mkdir()
     sparse_file(draft_dir / "weights.safetensors", 1 * 1024**3)  # 1 GiB
     m = _manager({"model": str(model_dir), "draft_model": str(draft_dir)})
-    assert m.estimated_memory_gb() == pytest.approx(3.0, abs=0.05)
+    assert m.estimated_memory_bytes() == 3 * 1024**3
 
 
 def test_estimated_memory_repo_id_draft_contributes_zero(tmp_path, sparse_file) -> None:
-    # draft repo id is offline (autouse fixture) → contributes 0.0
+    # draft repo id is offline (autouse fixture) → contributes 0.
     model_dir = tmp_path / "main"
     model_dir.mkdir()
     sparse_file(model_dir / "weights.safetensors", 2 * 1024**3)  # 2 GiB
     m = _manager({"model": str(model_dir), "draft_model": "mlx-community/draft-4bit"})
-    assert m.estimated_memory_gb() == pytest.approx(2.0, abs=0.05)
+    assert m.estimated_memory_bytes() == 2 * 1024**3
 
 
 # --- health ---
@@ -431,7 +431,11 @@ def test_get_metrics_running(monkeypatch) -> None:
             return 9.9
 
     monkeypatch.setattr(native_mod.psutil, "Process", FakePsProc)
-    assert m.get_metrics() == {"memory_mb": 6000.0, "cpu_percent": 9.9, "status": "running"}
+    assert m.get_metrics() == {
+        "memory_bytes": 6000 * 1024**2,
+        "cpu_percent": 9.9,
+        "status": "running",
+    }
 
 
 def test_get_metrics_uses_phys_footprint_when_available(monkeypatch) -> None:
@@ -457,7 +461,7 @@ def test_get_metrics_uses_phys_footprint_when_available(monkeypatch) -> None:
     monkeypatch.setattr(native_mod.psutil, "Process", FakePsProc)
     monkeypatch.setattr(native_mod, "macos_phys_footprint", lambda pid: 999 * 1024**2)
     metrics = m.get_metrics()
-    assert metrics["memory_mb"] == 999.0  # footprint wins over the rss stub
+    assert metrics["memory_bytes"] == 999 * 1024**2  # footprint wins over the rss stub
     assert metrics["cpu_percent"] == 9.9
 
 
@@ -483,7 +487,7 @@ def test_get_metrics_falls_back_to_rss_when_footprint_unavailable(monkeypatch) -
 
     monkeypatch.setattr(native_mod.psutil, "Process", FakePsProc)
     monkeypatch.setattr(native_mod, "macos_phys_footprint", lambda pid: None)
-    assert m.get_metrics()["memory_mb"] == 6000.0
+    assert m.get_metrics()["memory_bytes"] == 6000 * 1024**2
 
 
 # --- served_model_name / api_model_name (harness+bench wiring) ---

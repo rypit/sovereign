@@ -493,7 +493,11 @@ def test_get_metrics_running(monkeypatch) -> None:
             return 12.4
 
     monkeypatch.setattr(native_mod.psutil, "Process", FakePsProc)
-    assert m.get_metrics() == {"memory_mb": 14500.0, "cpu_percent": 12.4, "status": "running"}
+    assert m.get_metrics() == {
+        "memory_bytes": 14500 * 1024**2,
+        "cpu_percent": 12.4,
+        "status": "running",
+    }
 
 
 def test_get_metrics_uses_phys_footprint_when_available(monkeypatch) -> None:
@@ -519,7 +523,7 @@ def test_get_metrics_uses_phys_footprint_when_available(monkeypatch) -> None:
     monkeypatch.setattr(native_mod.psutil, "Process", FakePsProc)
     monkeypatch.setattr(native_mod, "macos_phys_footprint", lambda pid: 999 * 1024**2)
     metrics = m.get_metrics()
-    assert metrics["memory_mb"] == 999.0  # footprint wins over the rss stub
+    assert metrics["memory_bytes"] == 999 * 1024**2  # footprint wins over the rss stub
     assert metrics["cpu_percent"] == 12.4
 
 
@@ -545,7 +549,7 @@ def test_get_metrics_falls_back_to_rss_when_footprint_unavailable(monkeypatch) -
 
     monkeypatch.setattr(native_mod.psutil, "Process", FakePsProc)
     monkeypatch.setattr(native_mod, "macos_phys_footprint", lambda pid: None)
-    assert m.get_metrics()["memory_mb"] == 14500.0
+    assert m.get_metrics()["memory_bytes"] == 14500 * 1024**2
 
 
 # --- Phase 7: resource estimation ---
@@ -557,7 +561,7 @@ def test_estimated_memory_uses_declared_override() -> None:
         config={"model": "/x.gguf"},
         memory_gb=40,
     )
-    assert LlamaCppManager(entry).estimated_memory_gb() == 40.0
+    assert LlamaCppManager(entry).estimated_memory_bytes() == 40 * 10**9
 
 
 def test_estimated_memory_from_model_file_plus_kv(tmp_path, sparse_file) -> None:
@@ -566,8 +570,8 @@ def test_estimated_memory_from_model_file_plus_kv(tmp_path, sparse_file) -> None
     m = _manager(
         {"model": str(model), "context_size": 4096, "kv_bytes_per_token": 1024**2}
     )
-    # 2 GiB model + 4096 tokens * 1 MiB = 4 GiB KV -> ~6.0 GB
-    assert m.estimated_memory_gb() == pytest.approx(6.0, abs=0.05)
+    # 2 GiB model + 4096 tokens * 1 MiB = 4 GiB KV -> exact byte sum
+    assert m.estimated_memory_bytes() == 2 * 1024**3 + 4096 * 1024**2
 
 
 def test_estimated_memory_repo_id_is_kv_only(monkeypatch) -> None:
@@ -576,7 +580,7 @@ def test_estimated_memory_repo_id_is_kv_only(monkeypatch) -> None:
     m = _manager(
         {"model": "org/repo", "context_size": 4096, "kv_bytes_per_token": 1024**2}
     )
-    assert m.estimated_memory_gb() == pytest.approx(m.estimated_kv_cache_gb(), abs=0.001)
+    assert m.estimated_memory_bytes() == m.estimated_kv_cache_bytes()
 
 
 def test_estimated_memory_repo_id_from_metadata(monkeypatch) -> None:
@@ -585,9 +589,9 @@ def test_estimated_memory_repo_id_from_metadata(monkeypatch) -> None:
         [("model.Q4_K_M.gguf", 2 * 1024**3), ("model.Q8_0.gguf", 4 * 1024**3)],
     )
     monkeypatch.setattr(models_mod, "fetch_repo_info", lambda repo_id: info)
-    # Bare repo, two quants: prefers Q4_K_M (2 GiB) + no KV (context unset) → ~2.0 GB.
+    # Bare repo, two quants: prefers Q4_K_M (2 GiB) + no KV (context unset) → exact 2 GiB.
     m = _manager({"model": "org/repo"})
-    assert m.estimated_memory_gb() == pytest.approx(2.0, abs=0.05)
+    assert m.estimated_memory_bytes() == 2 * 1024**3
 
 
 def test_estimated_memory_includes_local_draft(tmp_path, sparse_file) -> None:
@@ -597,7 +601,7 @@ def test_estimated_memory_includes_local_draft(tmp_path, sparse_file) -> None:
     sparse_file(draft, 1 * 1024**3)  # 1 GiB
     m = _manager({"model": str(model), "draft_model": str(draft)})
     # 2 GiB + 1 GiB model bytes + 0 KV (no context_size set)
-    assert m.estimated_memory_gb() == pytest.approx(3.0, abs=0.05)
+    assert m.estimated_memory_bytes() == 3 * 1024**3
 
 
 def test_per_slot_context_divides_across_slots() -> None:

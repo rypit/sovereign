@@ -146,11 +146,11 @@ def container_metrics(container: str, *, binary: str = "docker") -> dict[str, An
         # A restarting/exiting container reports "--%" / "-- / --": not a
         # number, and not a reason to crash the metrics loop.
         cpu_percent = float(cpu_str.strip().rstrip("%"))
-        memory_mb = parse_mem_to_mb(mem_str.split("/")[0])
+        memory_bytes = parse_mem_to_bytes(mem_str.split("/")[0])
     except ValueError:
         return {"status": "stopped"}
     return {
-        "memory_mb": memory_mb,
+        "memory_bytes": memory_bytes,
         "cpu_percent": cpu_percent,
         "status": "running",
     }
@@ -296,5 +296,5 @@ class DockerManager(ActivityMixin, Provisioner):
             finally:
                 self.clear_activity()
 
-    def adjust_resources(self, memory_limit_mb: int) -> None:
+    def adjust_resources(self, memory_limit_bytes: int) -> None:
         """No-op for now (container memory caps are a future phase)."""
