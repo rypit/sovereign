@@ -24,6 +24,6 @@ Fixes the findings from a full project audit ("roast"): the headline guarantees 
 - `P2.4` complete — coverage visibility (`pytest-cov` + `make coverage` + HTML report in `htmlcov/`)
 - `113c81f` P3.3 complete — Protocol `isinstance` checks: `SupportsProvisioning` in CLI provision, `ActivityMixin` in orchestrator status snapshot
 - `aa91c75` P3.4 complete — repo-root cleanup: `sovereign.yaml`/`mlx.yaml` → `examples/`, `sovereign-implementation-plan-v1.1.md` → `docs/`
-- [ ] P3.5 — RoutingCache IO errors logged instead of `contextlib.suppress(Exception)`
+- `7e7f5bf` P3.5 complete — RoutingCache logs IO errors via `log.warning()` instead of `contextlib.suppress(Exception)`
 
 ---
