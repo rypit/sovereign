@@ -378,10 +378,15 @@ def test_stream_pull_raises_on_failure(monkeypatch) -> None:
 
 @pytest.mark.parametrize(
     ("text", "expected"),
-    [("15.5MiB", 15.5), ("1GiB", 1024.0), ("512KiB", 0.5), ("100MB", 95.37)],
+    [
+        ("15.5MiB", 16_252_928),
+        ("1GiB", 1_073_741_824),
+        ("512KiB", 524_288),
+        ("100MB", 100_000_000),
+    ],
 )
-def test_parse_mem_to_mb(text: str, expected: float) -> None:
-    assert mgr_mod.parse_mem_to_mb(text) == pytest.approx(expected, abs=0.05)
+def test_parse_mem_to_bytes(text: str, expected: int) -> None:
+    assert mgr_mod.parse_mem_to_bytes(text) == expected
 
 
 def test_container_metrics_running(monkeypatch) -> None:
@@ -392,7 +397,7 @@ def test_container_metrics_running(monkeypatch) -> None:
     m = mgr_mod.container_metrics("c1")
     assert m["status"] == "running"
     assert m["cpu_percent"] == 12.34
-    assert m["memory_mb"] == pytest.approx(15.5, abs=0.1)
+    assert m["memory_bytes"] == 16_252_928
 
 
 def test_container_metrics_stopped(monkeypatch) -> None:
