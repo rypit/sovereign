@@ -13,6 +13,8 @@ dependencies = [
     # huggingface_hub: metadata, routing, and download for HF models. Unconditional
     # (works on all platforms) unlike mlx-lm which is Apple-Silicon only.
     "huggingface-hub>=1.22",
+    # humanize: decimal-unit size formatting for the bytes-everywhere display seam.
+    "humanize>=4.9",
     # mlx_lm engine — provides the `mlx_lm.server` console script. Apple-Silicon
     # only (mlx ships wheels for macOS arm64), so guard resolution on other platforms.
     "mlx-lm>=0.31; sys_platform == 'darwin' and platform_machine == 'arm64'",

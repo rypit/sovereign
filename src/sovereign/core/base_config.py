@@ -6,7 +6,11 @@ Per the golden rule (§2.3), config depends on Pydantic **only** — never on
 
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict, Field
+from typing import Annotated
+
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field
+
+from sovereign.core.units import gb_to_bytes
 
 
 class SovereignBaseModel(BaseModel):
@@ -46,6 +50,18 @@ class NativeEngineConfig(SovereignBaseModel):
     extra_args: list[str] = Field(default_factory=list)
     #: Directory for the captured stdout/stderr log (created on start).
     log_dir: str = ".sovereign/logs"
+
+
+def _gb_input_to_bytes(value: object) -> object:
+    """YAML declares GB; internal fields hold int bytes (1 GB = 10**9)."""
+    if value is None or not isinstance(value, (int, float)) or isinstance(value, bool):
+        return value  # let Pydantic produce the normal type error
+    return gb_to_bytes(value)
+
+
+#: Field type for "GB in YAML, bytes internally". Pair with
+#: Field(validation_alias="<name>_gb") so the YAML key keeps its GB name.
+GbBytes = Annotated[int, BeforeValidator(_gb_input_to_bytes)]
 
 
 def validate_identifier(value: str) -> str:
