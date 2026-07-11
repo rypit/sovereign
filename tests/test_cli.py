@@ -459,7 +459,7 @@ def test_bench_run_attach_mode_success(tmp_path, monkeypatch) -> None:
         tmp_path / "manifest.json",
         {
             "variant_hash": "abc",
-            "memory_budget": {"available_gb": 10.0},
+            "memory_budget": {"available_bytes": 10 * 10**9},
             "services": [
                 {
                     "name": "engine",

@@ -65,7 +65,7 @@ _STATUS = {
             "since": "2026-07-05T00:00:00+00:00",
             "endpoint": "http://127.0.0.1:11435",
             "descriptor": "mlx-community/Qwen3.6-27B-8bit",
-            "metrics": {"cpu_percent": 12.4, "memory_mb": 14500.0, "status": "running"},
+            "metrics": {"cpu_percent": 12.4, "memory_bytes": 14_500_000_000, "status": "running"},
         },
         "open_webui": {
             "state": "starting",
@@ -88,14 +88,14 @@ def test_dashboard_matches_mockup_shape() -> None:
     text = _render(dashboard(_STATUS))
     assert f"Sovereign Control Plane v{__version__}" in text
     for header in (
-        "SERVICE", "DESCRIPTOR", "STATUS", "DURATION", "CPU %", "MEM (MB)", "ENDPOINT",
+        "SERVICE", "DESCRIPTOR", "STATUS", "DURATION", "CPU %", "MEM", "ENDPOINT",
     ):
         assert header in text
     assert "DEPENDENCIES" not in text
     # ready -> RUNNING label; metrics rendered; endpoint rendered
     assert "RUNNING" in text
     assert "12.4%" in text
-    assert "14500" in text
+    assert "14.5 GB" in text
     assert "STARTING" in text
     assert "http://127.0.0.1:11435" in text
     assert "mlx-community/Qwen3.6-27B-8bit" in text
@@ -153,9 +153,9 @@ def test_metric_history_prunes_services_no_longer_present() -> None:
 def test_metric_history_per_metric_independence() -> None:
     history = MetricHistory()
     history.record({"services": {"a": {"metrics": {"cpu_percent": 1.0}}}})
-    history.record({"services": {"a": {"metrics": {"cpu_percent": 2.0, "memory_mb": 100.0}}}})
+    history.record({"services": {"a": {"metrics": {"cpu_percent": 2.0, "memory_bytes": 100}}}})
     assert history.values("a", "cpu_percent") == [1.0, 2.0]
-    assert history.values("a", "memory_mb") == [100.0]
+    assert history.values("a", "memory_bytes") == [100]
 
 
 def test_metric_history_instances_share_no_state() -> None:
@@ -182,7 +182,7 @@ def test_dashboard_without_history_has_no_sparkline_artifacts() -> None:
     text = _render(dashboard(_STATUS))
     assert "RUNNING" in text
     assert "12.4%" in text
-    assert "14500" in text
+    assert "14.5 GB" in text
     assert "STARTING" in text
     assert "http://127.0.0.1:11435" in text
     assert not any(ch in text for ch in "▁▂▃▄▅▆▇█")
@@ -211,12 +211,16 @@ def test_dashboard_renders_activity_area() -> None:
 # --- M5: budget footer, EST column, download progress ---
 def test_dashboard_renders_est_column_and_budget_footer() -> None:
     status = {
-        "budget": {"usable_gb": 120.0, "reserved_gb": 27.0, "available_gb": 93.0},
+        "budget": {
+            "usable_bytes": 120 * 10**9,
+            "reserved_bytes": 27 * 10**9,
+            "available_bytes": 93 * 10**9,
+        },
         "services": {
             "mlx_heavy": {
                 "state": "downloading",
                 "descriptor": "mlx-community/Qwen3.6-27B-8bit",
-                "estimated_gb": 27.0,
+                "estimated_bytes": 27 * 10**9,
                 "metrics": {},
                 # activity is huggingface_hub's own tqdm-rendered lines, forwarded as-is
                 "activity": {
@@ -228,10 +232,11 @@ def test_dashboard_renders_est_column_and_budget_footer() -> None:
         },
     }
     text = _render(dashboard(status))
-    assert "EST (GB)" in text
-    assert "27.0" in text  # estimate column value
+    assert "EST" in text
+    assert "EST (GB)" not in text
+    assert "27.0 GB" in text  # estimate column value
     assert "93.0 GB headroom" in text  # budget footer
-    assert "120 usable GB" in text
+    assert "120.0 GB usable" in text
     # DOWNLOADING activity flows through the activity area (brackets render literally).
     assert "3.20G/17.8G" in text
 
