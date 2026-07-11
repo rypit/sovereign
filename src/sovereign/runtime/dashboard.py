@@ -5,6 +5,16 @@ shape that ``Orchestrator.status_snapshot()`` produces (and persists as
 ``status.json``), and renders the service table, sparklines, activity lines, and
 budget footer. No orchestration logic lives here; no rendering logic lives in the
 orchestrator.
+
+Two cadences are deliberately decoupled (§5/§8):
+
+- **1 Hz snapshot**: ``dashboard_task_factory``'s poll loop (and ``monitor``'s
+  own poll) re-reads ``orch.status_snapshot()`` / ``status.json`` once a
+  second — that's the ingest rate for MEM/TOK/S history and table content.
+- **12 fps render**: ``Live(..., refresh_per_second=12)`` redraws the same
+  frame far more often than the snapshot changes, purely so the STATUS
+  column's ``Spinner`` (provisioning/downloading/starting) and the prefill
+  pulse animate smoothly. It never causes an extra snapshot read.
 """
 
 from __future__ import annotations
@@ -111,28 +121,54 @@ class MetricHistory:
     exposed as a user-facing parameter; always defaults to _HISTORY_SECONDS.
     """
 
+    #: Metric keys recorded from each service's ``metrics`` dict into sparkline
+    #: history — memory (MEM column) and generation throughput (TOK/S column).
+    _RECORDED_KEYS = ("memory_bytes", "tokens_per_second")
+
     def __init__(self, window_seconds: float = _HISTORY_SECONDS) -> None:
         self._window = window_seconds
         self._data: dict[str, dict[str, deque[tuple[float, float]]]] = {}
+        #: First-seen monotonic time per (service, request_id), so an
+        #: indeterminate prefill (total=None) can render a "pulse" with a
+        #: real elapsed duration — the telemetry cache/status.json don't
+        #: carry a per-request start timestamp, so this is tracked here,
+        #: dashboard-side, across successive record() calls.
+        self._prefill_started: dict[tuple[str, str], float] = {}
 
     def record(self, status: Mapping[str, Any]) -> None:
         now = time.monotonic()
         services = status.get("services", {})
         for stale in set(self._data) - set(services):
             del self._data[stale]
+        live_requests: set[tuple[str, str]] = set()
         for name, svc in services.items():
             metrics = svc.get("metrics") or {}
             buckets = self._data.setdefault(name, {})
-            for key in ("memory_bytes",):
+            for key in self._RECORDED_KEYS:
                 if key in metrics:
                     dq = buckets.setdefault(key, deque())
                     dq.append((now, metrics[key]))
                     cutoff = now - self._window
                     while dq and dq[0][0] < cutoff:
                         dq.popleft()
+            for entry in (svc.get("telemetry") or {}).get("prefill", []):
+                request_id = entry.get("request_id")
+                if not request_id:
+                    continue
+                req_key = (name, request_id)
+                live_requests.add(req_key)
+                self._prefill_started.setdefault(req_key, now)
+        # Drop bookkeeping for requests no longer active (completed/abandoned).
+        for req_key in set(self._prefill_started) - live_requests:
+            del self._prefill_started[req_key]
 
     def values(self, service: str, metric: str) -> list[float]:
         return [v for _, v in self._data.get(service, {}).get(metric, ())]
+
+    def prefill_elapsed(self, service: str, request_id: str) -> float:
+        """Seconds since this (service, request_id) prefill was first observed."""
+        started = self._prefill_started.get((service, request_id), time.monotonic())
+        return max(0.0, time.monotonic() - started)
 
 
 _SPARK_CHARS = "▁▂▃▄▅▆▇█"
@@ -161,6 +197,8 @@ def _metric_cell(text: str, spark: str) -> str:
 
 _SPINNER_STATES = {"provisioning", "downloading", "starting"}
 
+_PREFILL_BAR_WIDTH = 16
+
 
 def status_cell(state: str) -> str | Spinner:
     """Plain colored label for steady states; an animated spinner while coming online."""
@@ -169,6 +207,18 @@ def status_cell(state: str) -> str | Spinner:
     if state in _SPINNER_STATES:
         return Spinner("dots", text=Text.from_markup(markup))
     return markup
+
+
+def prefill_bar(processed: int, total: int | None, *, elapsed: float = 0.0) -> str:
+    """One prefill's activity-area line: a determinate fraction bar when the
+    total token count is known, or a "pulse" annotated with elapsed time when
+    it isn't (llama_cpp's start/finish-only progress — see §3a)."""
+    if total:
+        filled = min(_PREFILL_BAR_WIDTH, round(_PREFILL_BAR_WIDTH * processed / total))
+        bar = "█" * filled + "░" * (_PREFILL_BAR_WIDTH - filled)
+        return f"prefill ▕{bar}▏ {processed}/{total} tok"
+    pulse = "░" * _PREFILL_BAR_WIDTH
+    return f"prefill ▕{pulse}▏ {format_duration(elapsed)}"
 
 
 def dashboard(status: Mapping[str, Any], history: MetricHistory | None = None) -> RenderableType:
@@ -180,6 +230,7 @@ def dashboard(status: Mapping[str, Any], history: MetricHistory | None = None) -
     table.add_column("STATUS")
     table.add_column("DURATION")
     table.add_column("MEM")
+    table.add_column("TOK/S")
     table.add_column("EST")
     table.add_column("ENDPOINT")
 
@@ -189,6 +240,9 @@ def dashboard(status: Mapping[str, Any], history: MetricHistory | None = None) -
         metrics = svc.get("metrics") or {}
         mem = fmt_size(metrics["memory_bytes"]) if "memory_bytes" in metrics else "-"
         mem_spark = sparkline(history.values(name, "memory_bytes")) if history else ""
+        tps = metrics.get("tokens_per_second")
+        tok_s = f"{tps:.1f}" if isinstance(tps, int | float) else "-"
+        tok_spark = sparkline(history.values(name, "tokens_per_second")) if history else ""
         duration = duration_cell(svc.get("since"))
         endpoint = svc.get("endpoint") or "-"
         engine = svc.get("engine") or "-"
@@ -202,17 +256,27 @@ def dashboard(status: Mapping[str, Any], history: MetricHistory | None = None) -
             status_cell(state),
             duration,
             _metric_cell(mem, mem_spark),
+            _metric_cell(tok_s, tok_spark),
             est,
             endpoint,
         )
 
         lines = [ln for ln in (svc.get("activity") or {}).get("lines", []) if ln.strip()]
-        if lines:
+        prefill_lines = []
+        for entry in (svc.get("telemetry") or {}).get("prefill", []):
+            request_id = entry.get("request_id", "")
+            elapsed = history.prefill_elapsed(name, request_id) if history else 0.0
+            prefill_lines.append(
+                prefill_bar(entry.get("processed", 0), entry.get("total"), elapsed=elapsed)
+            )
+        all_lines = lines + prefill_lines
+        if all_lines:
             # A header naming the service, then each activity line indented under it
-            # (e.g. huggingface_hub's several concurrent download bars). State is
-            # already in the table's STATUS column, so it isn't repeated here.
+            # (e.g. huggingface_hub's several concurrent download bars, or an
+            # in-flight prefill's progress bar). State is already in the table's
+            # STATUS column, so it isn't repeated here.
             activity_lines.append(f"  {name}")
-            activity_lines.extend(f"    {ln}" for ln in lines)
+            activity_lines.extend(f"    {ln}" for ln in all_lines)
 
     footer = budget_footer(status.get("budget"))
     if not activity_lines and footer is None:

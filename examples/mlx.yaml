@@ -24,7 +24,8 @@ services:
       type: http
       endpoint: /health
       port: 8080
-      timeout_seconds: 120
+      # Generous: covers interpreter start + mlx_lm import + model load.
+      timeout_seconds: 300
     config:
       model: "mlx-community/SmolLM-135M-Instruct-4bit"
       host: 127.0.0.1
