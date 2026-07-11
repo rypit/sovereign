@@ -1,5 +1,4 @@
-"""Shared native-engine helpers: looks_local / local_model_bytes / check_local_artifact
-/ macos_phys_footprint."""
+"""Shared native-engine helpers: looks_local / local_model_bytes / check_local_artifact."""
 
 from __future__ import annotations
 
@@ -8,8 +7,7 @@ import struct
 import pytest
 
 from sovereign.core import procmem
-from sovereign.services.inference import base as base_native
-from sovereign.services.inference.base import check_local_artifact, macos_phys_footprint
+from sovereign.services.inference.base import check_local_artifact
 from sovereign.services.inference.hf import local_model_bytes, looks_local
 
 
@@ -104,19 +102,18 @@ def test_check_local_artifact_existing_local_passes(tmp_path) -> None:
 
 
 # --- macos_phys_footprint ---
-# The implementation lives in `sovereign.core.procmem` now (moved out of this
-# module so both the parent manager and the worker heartbeat thread can use
-# it); `base.macos_phys_footprint` / `base._parse_phys_footprint` are
-# re-exports, exercised here via the module patched at its real home.
+# The implementation lives in `sovereign.core.procmem` — a leaf module shared
+# by the parent manager and the worker heartbeat thread. Exercised directly
+# here (no re-export from services.inference.base).
 def test_parse_phys_footprint_reads_correct_offset() -> None:
     raw = bytearray(512)
     struct.pack_into("<Q", raw, 72, 12345678900)
-    assert base_native._parse_phys_footprint(bytes(raw)) == 12345678900
+    assert procmem._parse_phys_footprint(bytes(raw)) == 12345678900
 
 
 def test_macos_phys_footprint_none_on_non_darwin(monkeypatch) -> None:
     monkeypatch.setattr(procmem.sys, "platform", "linux")
-    assert macos_phys_footprint(123) is None
+    assert procmem.macos_phys_footprint(123) is None
 
 
 def test_macos_phys_footprint_none_when_cdll_raises(monkeypatch) -> None:
@@ -126,7 +123,7 @@ def test_macos_phys_footprint_none_when_cdll_raises(monkeypatch) -> None:
         raise OSError("no lib")
 
     monkeypatch.setattr(procmem.ctypes, "CDLL", boom)
-    assert macos_phys_footprint(123) is None
+    assert procmem.macos_phys_footprint(123) is None
 
 
 class _FakeLibc:
@@ -147,7 +144,7 @@ class _FakeLibc:
 def test_macos_phys_footprint_none_on_nonzero_returncode(monkeypatch) -> None:
     monkeypatch.setattr(procmem.sys, "platform", "darwin")
     monkeypatch.setattr(procmem.ctypes, "CDLL", lambda *a, **k: _FakeLibc(returncode=1))
-    assert macos_phys_footprint(123) is None
+    assert procmem.macos_phys_footprint(123) is None
 
 
 def test_macos_phys_footprint_success(monkeypatch) -> None:
@@ -155,4 +152,4 @@ def test_macos_phys_footprint_success(monkeypatch) -> None:
     monkeypatch.setattr(
         procmem.ctypes, "CDLL", lambda *a, **k: _FakeLibc(returncode=0, write=999999)
     )
-    assert macos_phys_footprint(123) == 999999
+    assert procmem.macos_phys_footprint(123) == 999999
