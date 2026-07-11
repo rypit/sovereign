@@ -41,13 +41,10 @@ class LlamaCppConfig(NativeEngineConfig):
     """Settings for a single ``llama-server`` instance.
 
     Shared fields (``model``, ``host``, ``draft_model``, ``served_model_name``,
-    ``extra_args``, ``log_dir``) come from :class:`NativeEngineConfig`. Here,
+    ``log_dir``) come from :class:`NativeEngineConfig`. Here,
     ``model`` is a local GGUF path or a HuggingFace repo id
     (``<user>/<model>[:quant]``); ``served_model_name`` maps to ``--alias``.
     """
-
-    #: ``llama-server`` binary; a bare name is resolved on ``PATH``.
-    binary: str = "llama-server"
 
     # Resource knobs — omitted flags let llama-server pick its own default.
     gpu_layers: int | None = Field(default=None, ge=0)  # -ngl

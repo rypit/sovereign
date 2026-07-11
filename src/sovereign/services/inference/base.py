@@ -25,18 +25,13 @@ import psutil
 from sovereign.config import ServiceEntry
 from sovereign.core.base_config import NativeEngineConfig
 from sovereign.core.base_manager import ActivityMixin
-from sovereign.core.procmem import _parse_phys_footprint, macos_phys_footprint
+from sovereign.core.procmem import macos_phys_footprint
 from sovereign.core.provisioning import Provisioner
 from sovereign.core.resolver import ConsumerKind, ResolvedEndpoint
 from sovereign.core.resources import priority_to_nice
 from sovereign.services.inference import hf as hf_models
 from sovereign.services.inference.hf import looks_local, parse_model_ref
 from sovereign.workers.worker_config import WorkerConfig, dump_worker_config
-
-# Re-exported so existing imports/patches (`sovereign.services.inference.base.
-# macos_phys_footprint`, `..._parse_phys_footprint`) keep working after the
-# move to `sovereign.core.procmem` — a leaf module shared with the workers.
-__all__ = ["macos_phys_footprint", "_parse_phys_footprint"]
 
 # Per-request health probe timeout (seconds) — distinct from the overall boot
 # timeout the Orchestrator enforces while polling.
