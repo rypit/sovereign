@@ -51,11 +51,13 @@ def test_brewfile_discovered_by_convention() -> None:
 
     from sovereign.harnesses.cline_cli.manager import ClineCliHarness
     from sovereign.services.docker.manager import DockerManager
-    from sovereign.services.inference.llama_cpp.manager import LlamaCppManager
 
+    # llama_cpp is no longer a Brewfile-provisioned integration (§4 phase 4):
+    # it's an embedded Python binding installed via provisioning_commands (a
+    # prebuilt Metal wheel), not a Homebrew CLI toolchain — see
+    # tests/services/inference/test_llama_cpp.py::test_provisioning_declaration.
     cases: list[tuple[type[provisioning.Provisioner], str]] = [
         (ClineCliHarness, 'brew "node"'),
-        (LlamaCppManager, 'brew "llama.cpp"'),
         (DockerManager, 'cask "docker-desktop"'),
     ]
     for cls, needle in cases:

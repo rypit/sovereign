@@ -1,8 +1,10 @@
-"""Phase 11: mlx_lm manager — mocked unit tests + Protocol/registry checks.
+"""Phase 11/4: mlx_lm manager — mocked unit tests + Protocol/registry checks.
 
-The real mlx_lm.server binary and an MLX model are not required here; the
-subprocess, HTTP probe, and psutil calls are mocked (via the shared inference.base
-module, where the process/health/metrics lifecycle now lives).
+The real mlx_lm.server module and an MLX model are not required here; the
+subprocess, HTTP probe, import-probe, and psutil calls are mocked (via the
+shared inference.base module, where the process/health/metrics lifecycle now
+lives). Flag-mapping assertions live on ``engine_kwargs()``; ``get_start_args()``
+is asserted only to produce the shared worker-launch argv + dumped JSON.
 """
 
 from __future__ import annotations
@@ -21,6 +23,7 @@ from sovereign.services.inference import base as native_mod
 from sovereign.services.inference import hf as models_mod
 from sovereign.services.inference.hf import RepoInfo
 from sovereign.services.inference.mlx_lm.manager import MlxLmManager
+from sovereign.workers.worker_config import load_worker_config
 
 
 def _repo_info(repo_id: str, siblings: list[tuple[str, int | None]], tags=()) -> RepoInfo:
@@ -47,6 +50,15 @@ def _entry(config: dict | None = None, with_health: bool = True) -> ServiceEntry
 
 def _manager(config: dict | None = None) -> MlxLmManager:
     return MlxLmManager(_entry(config))
+
+
+@pytest.fixture(autouse=True)
+def _chdir_tmp(tmp_path, monkeypatch):
+    """get_start_args() now writes a worker-config JSON under
+    ``<state_dir>/workers/`` (derived from log_dir's parent) — run every test
+    from an isolated tmp cwd so the default ``.sovereign/logs`` relative path
+    doesn't touch the real repo tree."""
+    monkeypatch.chdir(tmp_path)
 
 
 @pytest.fixture(autouse=True)
@@ -115,7 +127,7 @@ def test_port_and_path_from_health_check() -> None:
     assert m.health_path == "/health"
 
 
-# --- flag generation ---
+# --- worker argv + dumped WorkerConfig (get_start_args is now shared/final) ---
 def test_get_start_args_before_prepare_raises() -> None:
     with pytest.raises(RuntimeError, match="prepare_model"):
         _manager({"model": "mlx-community/foo-4bit"}).get_start_args()
@@ -127,7 +139,54 @@ def test_prepare_model_sets_paths() -> None:
     assert str(m.draft_model_path) == "mlx-community/draft-4bit"
 
 
-def test_get_start_args_full_flag_mapping() -> None:
+def test_get_start_args_launches_generic_engine_worker(tmp_path) -> None:
+    m = _prepared({"model": "mlx-community/foo-4bit", "log_dir": str(tmp_path / "logs")})
+    args = m.get_start_args()
+    assert args[1:4] == ["-m", "sovereign.workers.engine_worker", "--config"]
+    assert args[4] == str(tmp_path / "workers" / "mlx_fast.json")
+
+
+def test_get_start_args_dumps_worker_config(tmp_path) -> None:
+    m = _prepared(
+        {
+            "model": "mlx-community/foo-4bit",
+            "max_tokens": 1024,
+            "temp": 0.7,
+            "draft_model": "mlx-community/draft-4bit",
+            "num_draft_tokens": 5,
+            "log_dir": str(tmp_path / "logs"),
+        }
+    )
+    cfg = load_worker_config(m.get_start_args()[4])
+    assert cfg.service == "mlx_fast"
+    assert cfg.engine == "mlx_lm"
+    assert cfg.host == "127.0.0.1"
+    assert cfg.port == 8080
+    assert cfg.model_path == "mlx-community/foo-4bit"
+    assert cfg.draft_model_path == "mlx-community/draft-4bit"
+    assert cfg.telemetry_socket == str(tmp_path / "telemetry.sock")
+    assert cfg.engine_kwargs == {
+        "max_tokens": 1024,
+        "temp": 0.7,
+        "num_draft_tokens": 5,
+    }
+
+
+def test_get_start_args_expands_home(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("HOME", "/home/tester")
+    m = _prepared({"model": "~/models/mlx-foo", "log_dir": str(tmp_path / "logs")})
+    cfg = load_worker_config(m.get_start_args()[4])
+    assert cfg.model_path == str(m.model_path)
+
+
+def test_get_start_args_repo_id_resolves_to_snapshot_path(tmp_path) -> None:
+    m = _prepared({"model": "mlx-community/foo-4bit", "log_dir": str(tmp_path / "logs")})
+    cfg = load_worker_config(m.get_start_args()[4])
+    assert cfg.model_path == "mlx-community/foo-4bit"  # resolved path (fake download)
+
+
+# --- engine_kwargs (Sovereign config -> worker adapter mapping) ---
+def test_engine_kwargs_full_mapping() -> None:
     m = _prepared(
         {
             "model": "mlx-community/foo-4bit",
@@ -138,108 +197,68 @@ def test_get_start_args_full_flag_mapping() -> None:
             "prompt_cache_size": 2048,
             "prompt_cache_bytes": 8 * 1024**3,
             "adapter_path": "/adapters/a",
-            "draft_model": "mlx-community/draft-4bit",
             "num_draft_tokens": 5,
             "trust_remote_code": True,
         }
     )
-    args = m.get_start_args()
-    assert args[0] == "mlx_lm.server"
-    assert args[args.index("--model") + 1] == "mlx-community/foo-4bit"
-    for flag, value in [
-        ("--host", "127.0.0.1"),
-        ("--port", "8080"),
-        ("--max-tokens", "1024"),
-        ("--temp", "0.7"),
-        ("--top-p", "0.95"),
-        ("--decode-concurrency", "4"),
-        ("--prompt-cache-size", "2048"),
-        ("--prompt-cache-bytes", str(8 * 1024**3)),
-        ("--adapter-path", "/adapters/a"),
-        ("--draft-model", "mlx-community/draft-4bit"),
-        ("--num-draft-tokens", "5"),
-    ]:
-        assert args[args.index(flag) + 1] == value
-    assert "--trust-remote-code" in args
+    assert m.engine_kwargs() == {
+        "max_tokens": 1024,
+        "temp": 0.7,
+        "top_p": 0.95,
+        "decode_concurrency": 4,
+        "prompt_cache_size": 2048,
+        "prompt_cache_bytes": 8 * 1024**3,
+        "adapter_path": "/adapters/a",
+        "num_draft_tokens": 5,
+        "trust_remote_code": True,
+    }
 
 
-def test_get_start_args_minimal_omits_optional_flags() -> None:
-    args = _prepared().get_start_args()
-    for flag in [
-        "--max-tokens", "--temp", "--top-p", "--decode-concurrency",
-        "--prompt-cache-bytes", "--adapter-path", "--draft-model", "--num-draft-tokens",
-    ]:
-        assert flag not in args
-    assert "--trust-remote-code" not in args
+def test_engine_kwargs_minimal_omits_unset() -> None:
+    assert _prepared().engine_kwargs() == {}
 
 
-def test_prompt_cache_bytes_flag() -> None:
-    m = _prepared({"model": "mlx-community/foo", "prompt_cache_bytes": 4 * 1024**3})
-    args = m.get_start_args()
-    assert args[args.index("--prompt-cache-bytes") + 1] == str(4 * 1024**3)
+def test_engine_kwargs_config_override_wins_last() -> None:
+    m = _prepared(
+        {"model": "mlx-community/foo", "max_tokens": 10, "engine_kwargs": {"max_tokens": 99}}
+    )
+    assert m.engine_kwargs()["max_tokens"] == 99
 
 
-def test_draft_model_flag(tmp_path) -> None:
-    draft = tmp_path / "draft"
-    draft.mkdir()
-    m = _prepared({"model": "mlx-community/Llama-3.2-1B-Instruct-4bit",
-                   "draft_model": str(draft)})
-    args = m.get_start_args()
-    assert args[args.index("--draft-model") + 1] == str(draft)
-
-
-def test_num_draft_tokens_flag() -> None:
-    m = _prepared({"model": "mlx-community/Llama-3.2-1B-Instruct-4bit",
-                   "num_draft_tokens": 5})
-    args = m.get_start_args()
-    assert args[args.index("--num-draft-tokens") + 1] == "5"
-
-
-def test_draft_flags_absent_when_unset() -> None:
-    args = _prepared().get_start_args()
-    assert "--draft-model" not in args
-    assert "--num-draft-tokens" not in args
-
-
-def test_get_start_args_repo_id_resolves_to_snapshot_path() -> None:
-    args = _prepared({"model": "mlx-community/foo-4bit"}).get_start_args()
-    assert args[args.index("--model") + 1] == "mlx-community/foo-4bit"  # resolved path
-
-
-def test_get_start_args_expands_home(monkeypatch) -> None:
+def test_engine_kwargs_adapter_path_expands_home(monkeypatch) -> None:
     monkeypatch.setenv("HOME", "/home/tester")
-    args = _prepared({"model": "~/models/mlx-foo"}).get_start_args()
-    assert "/home/tester/models/mlx-foo" in args
+    m = _prepared({"model": "mlx-community/foo", "adapter_path": "~/adapters/a"})
+    assert m.engine_kwargs()["adapter_path"] == "/home/tester/adapters/a"
 
 
 # --- prepare_environment ---
-def test_prepare_environment_missing_binary(monkeypatch) -> None:
-    monkeypatch.setattr(native_mod.shutil, "which", lambda _b: None)
-    with pytest.raises(FileNotFoundError, match="mlx_lm.server"):
+def test_prepare_environment_missing_binding(monkeypatch) -> None:
+    monkeypatch.setattr(native_mod, "probe_import", lambda m: False)
+    with pytest.raises(FileNotFoundError, match="mlx_lm.server.*not importable"):
         _manager().prepare_environment()
 
 
 def test_prepare_environment_repo_id_ok(monkeypatch) -> None:
-    monkeypatch.setattr(native_mod.shutil, "which", lambda _b: "/usr/bin/mlx_lm.server")
+    monkeypatch.setattr(native_mod, "probe_import", lambda m: True)
     # A repo id that isn't local must NOT raise (mlx downloads it on start).
     _manager({"model": "mlx-community/foo-4bit"}).prepare_environment()
 
 
 def test_prepare_environment_local_path_missing(monkeypatch) -> None:
-    monkeypatch.setattr(native_mod.shutil, "which", lambda _b: "/usr/bin/mlx_lm.server")
+    monkeypatch.setattr(native_mod, "probe_import", lambda m: True)
     with pytest.raises(FileNotFoundError, match="model for 'mlx_fast' not found"):
         _manager({"model": "/nope/missing-mlx-model"}).prepare_environment()
 
 
 def test_prepare_environment_local_path_ok(tmp_path, monkeypatch) -> None:
-    monkeypatch.setattr(native_mod.shutil, "which", lambda _b: "/usr/bin/mlx_lm.server")
+    monkeypatch.setattr(native_mod, "probe_import", lambda m: True)
     model_dir = tmp_path / "mlx-model"
     model_dir.mkdir()
     _manager({"model": str(model_dir)}).prepare_environment()  # must not raise
 
 
 def test_prepare_environment_missing_local_draft_raises(monkeypatch) -> None:
-    monkeypatch.setattr(native_mod.shutil, "which", lambda _b: "/usr/bin/mlx_lm.server")
+    monkeypatch.setattr(native_mod, "probe_import", lambda m: True)
     with pytest.raises(FileNotFoundError, match="draft_model"):
         _manager(
             {"model": "mlx-community/foo-4bit", "draft_model": "/nope/missing-draft"}
@@ -247,14 +266,14 @@ def test_prepare_environment_missing_local_draft_raises(monkeypatch) -> None:
 
 
 def test_prepare_environment_hf_draft_ok(monkeypatch) -> None:
-    monkeypatch.setattr(native_mod.shutil, "which", lambda _b: "/usr/bin/mlx_lm.server")
+    monkeypatch.setattr(native_mod, "probe_import", lambda m: True)
     _manager(
         {"model": "mlx-community/foo-4bit", "draft_model": "mlx-community/draft-4bit"}
     ).prepare_environment()  # must not raise
 
 
 def test_prepare_environment_missing_adapter_raises(monkeypatch) -> None:
-    monkeypatch.setattr(native_mod.shutil, "which", lambda _b: "/usr/bin/mlx_lm.server")
+    monkeypatch.setattr(native_mod, "probe_import", lambda m: True)
     with pytest.raises(FileNotFoundError, match="adapter_path"):
         _manager(
             {"model": "mlx-community/foo-4bit", "adapter_path": "/nope/missing-adapter"}

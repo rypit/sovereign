@@ -1,13 +1,16 @@
 """Phase 4: llama_cpp manager — mocked unit tests + Protocol/registry checks.
 
-The real llama-server binary and a GGUF model are not required here; the
-subprocess, HTTP probe, and psutil calls are all mocked (via the shared
-inference.base module, where the process/health/metrics lifecycle now lives).
+The real llama-cpp-python binding and a GGUF model are not required here; the
+subprocess, HTTP probe, import-probe, and psutil calls are all mocked (via the
+shared inference.base module, where the process/health/metrics lifecycle now
+lives). Flag-mapping assertions live on ``engine_kwargs()``; ``get_start_args()``
+is asserted only to produce the shared worker-launch argv + dumped JSON.
 """
 
 from __future__ import annotations
 
 import contextlib
+import json
 import subprocess
 from typing import cast
 
@@ -20,7 +23,9 @@ from sovereign.core.registry import get_service_manager
 from sovereign.services.inference import base as native_mod
 from sovereign.services.inference import hf as models_mod
 from sovereign.services.inference.hf import RepoInfo
+from sovereign.services.inference.llama_cpp import manager as llama_manager_mod
 from sovereign.services.inference.llama_cpp.manager import LlamaCppManager
+from sovereign.workers.worker_config import load_worker_config
 
 
 def _repo_info(repo_id: str, siblings: list[tuple[str, int | None]], tags=()) -> RepoInfo:
@@ -49,6 +54,15 @@ def _entry(config: dict | None = None, with_health: bool = True) -> ServiceEntry
 
 def _manager(config: dict | None = None) -> LlamaCppManager:
     return LlamaCppManager(_entry(config))
+
+
+@pytest.fixture(autouse=True)
+def _chdir_tmp(tmp_path, monkeypatch):
+    """get_start_args() now writes a worker-config JSON under
+    ``<state_dir>/workers/`` (derived from log_dir's parent) — run every test
+    from an isolated tmp cwd so the default ``.sovereign/logs`` relative path
+    doesn't touch the real repo tree."""
+    monkeypatch.chdir(tmp_path)
 
 
 @pytest.fixture(autouse=True)
@@ -117,7 +131,7 @@ def test_port_and_path_taken_from_health_check() -> None:
     assert m.health_path == "/health"
 
 
-# --- flag generation ---
+# --- worker argv + dumped WorkerConfig (get_start_args is now shared/final) ---
 def test_get_start_args_before_prepare_raises() -> None:
     with pytest.raises(RuntimeError, match="prepare_model"):
         _manager({"model": "/models/x.gguf"}).get_start_args()
@@ -129,7 +143,63 @@ def test_prepare_model_sets_paths() -> None:
     assert str(m.draft_model_path) == "org/tiny-draft"
 
 
-def test_get_start_args_full_flag_mapping() -> None:
+def test_get_start_args_launches_generic_engine_worker(tmp_path) -> None:
+    m = _prepared({"model": "/models/x.gguf", "log_dir": str(tmp_path / "logs")})
+    args = m.get_start_args()
+    assert args[0].endswith(("python", "python3")) or "python" in args[0].lower()
+    assert args[1:4] == ["-m", "sovereign.workers.engine_worker", "--config"]
+    config_path = args[4]
+    assert config_path == str(tmp_path / "workers" / "llama_heavy_v1.json")
+
+
+def test_get_start_args_dumps_worker_config(tmp_path) -> None:
+    m = _prepared(
+        {
+            "model": "/models/llama3-70b.gguf",
+            "gpu_layers": 48,
+            "threads": 8,
+            "context_size": 32768,
+            "served_model_name": "llama3-70b",
+            "log_dir": str(tmp_path / "logs"),
+        }
+    )
+    args = m.get_start_args()
+    cfg = load_worker_config(args[4])
+    assert cfg.service == "llama_heavy_v1"
+    assert cfg.engine == "llama_cpp"
+    assert cfg.host == "127.0.0.1"
+    assert cfg.port == 11435
+    assert cfg.health_path == "/health"
+    assert cfg.model_path == "/models/llama3-70b.gguf"
+    assert cfg.served_model_name == "llama3-70b"
+    assert cfg.telemetry_socket == str(tmp_path / "telemetry.sock")
+    assert cfg.engine_kwargs == {
+        "gpu_layers": 48,
+        "threads": 8,
+        "context_size": 32768,
+    }
+
+
+def test_get_start_args_json_file_mode_0600(tmp_path) -> None:
+    import stat
+
+    m = _prepared({"model": "/models/x.gguf", "log_dir": str(tmp_path / "logs")})
+    m.get_start_args()
+    mode = stat.S_IMODE((tmp_path / "workers" / "llama_heavy_v1.json").stat().st_mode)
+    assert mode == 0o600
+
+
+def test_get_start_args_api_key_never_in_config_json(tmp_path) -> None:
+    m = _prepared(
+        {"model": "/models/x.gguf", "api_key": "secret", "log_dir": str(tmp_path / "logs")}
+    )
+    m.get_start_args()
+    raw = json.loads((tmp_path / "workers" / "llama_heavy_v1.json").read_text())
+    assert "secret" not in json.dumps(raw)
+
+
+# --- engine_kwargs (Sovereign config -> worker adapter mapping) ---
+def test_engine_kwargs_full_mapping() -> None:
     m = _prepared(
         {
             "model": "/models/llama3-70b.gguf",
@@ -137,36 +207,41 @@ def test_get_start_args_full_flag_mapping() -> None:
             "threads": 8,
             "context_size": 32768,
             "max_parallel": 4,
-            "api_key": "secret",
+            "num_draft_tokens": 2,
         }
     )
-    args = m.get_start_args()
-    assert args[0] == "llama-server"
-    assert "--model" in args and "/models/llama3-70b.gguf" in args
-    for flag, value in [
-        ("--host", "127.0.0.1"),
-        ("--port", "11435"),
-        ("-ngl", "48"),
-        ("-t", "8"),
-        ("-c", "32768"),
-        ("-np", "4"),
-    ]:
-        assert args[args.index(flag) + 1] == value
-    # The API key must never be on the ps-visible command line.
-    assert "--api-key" not in args
-    assert "secret" not in args
+    assert m.engine_kwargs() == {
+        "gpu_layers": 48,
+        "threads": 8,
+        "context_size": 32768,
+        "max_parallel": 4,
+        "num_draft_tokens": 2,
+    }
 
 
-def test_get_start_args_minimal_omits_optional_flags() -> None:
-    args = _prepared().get_start_args()
-    for flag in ["-ngl", "-t", "-c", "-np", "--api-key"]:
-        assert flag not in args
+def test_engine_kwargs_minimal_omits_unset() -> None:
+    assert _prepared().engine_kwargs() == {}
 
 
-# --- API key via environment (never argv) ---
+def test_engine_kwargs_kv_cache_type_from_enabled_caching() -> None:
+    m = _caching_manager({"enabled": True, "cache_path": "/tmp/c", "kv_cache_type": "q8_0"})
+    assert m.engine_kwargs()["kv_cache_type"] == "q8_0"
+
+
+def test_engine_kwargs_no_kv_cache_type_when_caching_disabled() -> None:
+    m = _caching_manager({"enabled": False, "cache_path": "/tmp/c"})
+    assert "kv_cache_type" not in m.engine_kwargs()
+
+
+def test_engine_kwargs_config_override_wins_last() -> None:
+    m = _prepared({"model": "/x.gguf", "gpu_layers": 10, "engine_kwargs": {"gpu_layers": 99}})
+    assert m.engine_kwargs()["gpu_layers"] == 99
+
+
+# --- API key via environment (never argv/config JSON) ---
 def test_start_env_carries_api_key() -> None:
     m = _manager({"model": "/models/x.gguf", "api_key": "secret"})
-    assert m.start_env() == {"LLAMA_API_KEY": "secret"}
+    assert m.start_env() == {"SOVEREIGN_API_KEY": "secret"}
 
 
 def test_start_env_empty_without_api_key() -> None:
@@ -183,7 +258,7 @@ def test_start_passes_api_key_in_subprocess_env(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(native_mod.subprocess, "Popen", fake_popen)
     m = _prepared({"model": "/models/x.gguf", "api_key": "secret", "log_dir": str(tmp_path)})
     m.start()
-    assert captured["env"]["LLAMA_API_KEY"] == "secret"
+    assert captured["env"]["SOVEREIGN_API_KEY"] == "secret"
     assert "PATH" in captured["env"]  # inherits the parent environment
 
 
@@ -201,66 +276,22 @@ def test_start_env_none_when_no_extra_env(tmp_path, monkeypatch) -> None:
     assert captured["env"] is None
 
 
-def test_get_start_args_expands_home(monkeypatch) -> None:
+def test_get_start_args_expands_home(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("HOME", "/home/tester")
-    args = _prepared({"model": "~/models/x.gguf"}).get_start_args()
-    assert "/home/tester/models/x.gguf" in args
+    m = _prepared({"model": "~/models/x.gguf", "log_dir": str(tmp_path / "logs")})
+    cfg = load_worker_config(m.get_start_args()[4])
+    assert cfg.model_path == str(m.model_path)  # resolution happens in prepare_model()
 
 
-def test_get_start_args_hf_repo_resolves_to_local_path() -> None:
-    args = _prepared({"model": "ggml-org/gemma-3-1b-it-GGUF"}).get_start_args()
-    assert args[args.index("--model") + 1] == "ggml-org/gemma-3-1b-it-GGUF"  # resolved path
-
-
-def test_argv_never_contains_hf_repo() -> None:
-    # HF repo ids are pre-downloaded and launched from the resolved path — the
-    # server never sees --hf-repo / --hf-repo-draft.
-    args = _prepared(
-        {"model": "ggml-org/gemma-3-1b-it-GGUF", "draft_model": "org/tiny-draft"}
-    ).get_start_args()
-    assert "--hf-repo" not in args
-    assert "--hf-repo-draft" not in args
-
-
-def test_get_start_args_local_draft_model(tmp_path) -> None:
-    draft = tmp_path / "draft.gguf"
-    draft.write_bytes(b"x")
-    args = _prepared({"model": "/models/x.gguf", "draft_model": str(draft)}).get_start_args()
-    assert args[args.index("--model-draft") + 1] == str(draft)
-
-
-def test_get_start_args_hf_draft_model() -> None:
-    args = _prepared(
-        {"model": "/models/x.gguf", "draft_model": "org/tiny-draft"}
-    ).get_start_args()
-    assert args[args.index("--model-draft") + 1] == "org/tiny-draft"  # resolved path
-
-
-def test_get_start_args_num_draft_tokens() -> None:
-    args = _prepared({"model": "/models/x.gguf", "num_draft_tokens": 2}).get_start_args()
-    assert args[args.index("--draft-max") + 1] == "2"
-
-
-def test_get_start_args_draft_flags_absent_when_unset() -> None:
-    args = _prepared().get_start_args()
-    assert "--model-draft" not in args
-    assert "--hf-repo-draft" not in args
-    assert "--draft-max" not in args
+def test_get_start_args_hf_repo_resolves_to_local_path(tmp_path) -> None:
+    m = _prepared(
+        {"model": "ggml-org/gemma-3-1b-it-GGUF", "log_dir": str(tmp_path / "logs")}
+    )
+    cfg = load_worker_config(m.get_start_args()[4])
+    assert cfg.model_path == "ggml-org/gemma-3-1b-it-GGUF"  # resolved path (fake download)
 
 
 # --- served_model_name / api_model_name (harness+bench wiring) ---
-def test_served_model_name_emits_alias_flag() -> None:
-    args = _prepared(
-        {"model": "/models/x.gguf", "served_model_name": "llama3-70b"}
-    ).get_start_args()
-    assert args[args.index("--alias") + 1] == "llama3-70b"
-
-
-def test_alias_flag_absent_when_unset() -> None:
-    args = _prepared().get_start_args()
-    assert "--alias" not in args
-
-
 def test_api_model_name_defaults_to_model() -> None:
     m = _manager({"model": "/models/x.gguf"})
     assert m.api_model_name() == "/models/x.gguf"
@@ -278,10 +309,31 @@ def test_endpoint_carries_api_model_name() -> None:
 
 # --- provisioning ---
 def test_provisioning_declaration() -> None:
-    assert LlamaCppManager.provisioning_binary == "llama-server"
-    brewfile = LlamaCppManager.provisioning_brewfile()
-    assert brewfile is not None
-    assert 'brew "llama.cpp"' in brewfile.read_text()
+    assert LlamaCppManager.import_probe_modules == ("llama_cpp", "llama_cpp.server.app")
+    assert LlamaCppManager.provisioning_brewfile() is None  # no more Brewfile/binary
+    assert any(
+        "llama-cpp-python[server]" in " ".join(cmd)
+        for cmd in LlamaCppManager.provisioning_commands
+    )
+
+
+def test_provisioning_satisfied_uses_import_probe(monkeypatch) -> None:
+    calls: list[str] = []
+
+    def fake_probe(module: str) -> bool:
+        calls.append(module)
+        return True
+
+    monkeypatch.setattr(llama_manager_mod, "probe_import", fake_probe)
+    assert LlamaCppManager.provisioning_satisfied() is True
+    assert set(calls) == {"llama_cpp", "llama_cpp.server.app"}
+
+
+def test_provisioning_not_satisfied_when_probe_fails(monkeypatch) -> None:
+    monkeypatch.setattr(
+        llama_manager_mod, "probe_import", lambda module: module != "llama_cpp"
+    )
+    assert LlamaCppManager.provisioning_satisfied() is False
 
 
 def test_prepare_environment_provisions_first(monkeypatch) -> None:
@@ -289,14 +341,14 @@ def test_prepare_environment_provisions_first(monkeypatch) -> None:
 
     order: list[str] = []
 
-    def _record_which(_b: str) -> str:
-        order.append("which")
-        return "/opt/homebrew/bin/llama-server"
+    def _record_probe(_m: str) -> bool:
+        order.append("probe")
+        return True
 
     monkeypatch.setattr(
         Provisioner, "provision", classmethod(lambda cls: order.append("provision"))
     )
-    monkeypatch.setattr(native_mod.shutil, "which", _record_which)
+    monkeypatch.setattr(native_mod, "probe_import", _record_probe)
     m = _manager({"model": "org/some-hf-repo"})  # repo id: no local file check
     m.prepare_environment()
     assert order[0] == "provision"  # install the toolchain before validating it
@@ -304,7 +356,7 @@ def test_prepare_environment_provisions_first(monkeypatch) -> None:
 
 # --- prepare_environment ---
 def test_prepare_environment_missing_model(monkeypatch) -> None:
-    monkeypatch.setattr(native_mod.shutil, "which", lambda _b: "/opt/homebrew/bin/llama-server")
+    monkeypatch.setattr(native_mod, "probe_import", lambda m: True)
     with pytest.raises(FileNotFoundError, match="model for 'llama_heavy_v1' not found"):
         _manager({"model": "/nope/missing.gguf"}).prepare_environment()
 
@@ -312,41 +364,41 @@ def test_prepare_environment_missing_model(monkeypatch) -> None:
 def test_prepare_environment_ok(tmp_path, monkeypatch) -> None:
     model = tmp_path / "m.gguf"
     model.write_bytes(b"gguf")
-    monkeypatch.setattr(native_mod.shutil, "which", lambda _b: "/opt/homebrew/bin/llama-server")
+    monkeypatch.setattr(native_mod, "probe_import", lambda m: True)
     _manager({"model": str(model)}).prepare_environment()  # must not raise
 
 
-def test_prepare_environment_missing_binary(tmp_path, monkeypatch) -> None:
+def test_prepare_environment_missing_binding(tmp_path, monkeypatch) -> None:
     model = tmp_path / "m.gguf"
     model.write_bytes(b"gguf")
-    monkeypatch.setattr(native_mod.shutil, "which", lambda _b: None)
-    with pytest.raises(FileNotFoundError, match="binary 'llama-server' not found"):
+    monkeypatch.setattr(native_mod, "probe_import", lambda m: False)
+    with pytest.raises(FileNotFoundError, match="llama_cpp.*not importable"):
         _manager({"model": str(model)}).prepare_environment()
 
 
 def test_prepare_environment_repo_id_ok(monkeypatch) -> None:
-    monkeypatch.setattr(native_mod.shutil, "which", lambda _b: "/opt/homebrew/bin/llama-server")
-    # A repo id that isn't local must NOT raise (llama-server downloads it on start).
+    monkeypatch.setattr(native_mod, "probe_import", lambda m: True)
+    # A repo id that isn't local must NOT raise (the worker downloads it on start).
     _manager({"model": "ggml-org/gemma-3-1b-it-GGUF"}).prepare_environment()
 
 
-def test_prepare_environment_missing_local_draft_raises(tmp_path, monkeypatch) -> None:
+def test_prepare_environment_draft_model_raises(tmp_path, monkeypatch) -> None:
     model = tmp_path / "m.gguf"
     model.write_bytes(b"gguf")
-    monkeypatch.setattr(native_mod.shutil, "which", lambda _b: "/opt/homebrew/bin/llama-server")
-    with pytest.raises(FileNotFoundError, match="draft_model"):
+    monkeypatch.setattr(native_mod, "probe_import", lambda m: True)
+    with pytest.raises(ValueError, match="no longer supports GGUF draft models"):
         _manager(
             {"model": str(model), "draft_model": "/nope/missing-draft.gguf"}
         ).prepare_environment()
 
 
-def test_prepare_environment_hf_draft_ok(tmp_path, monkeypatch) -> None:
+def test_prepare_environment_max_parallel_warns(tmp_path, monkeypatch, caplog) -> None:
     model = tmp_path / "m.gguf"
     model.write_bytes(b"gguf")
-    monkeypatch.setattr(native_mod.shutil, "which", lambda _b: "/opt/homebrew/bin/llama-server")
-    _manager(
-        {"model": str(model), "draft_model": "org/tiny-draft"}
-    ).prepare_environment()  # must not raise
+    monkeypatch.setattr(native_mod, "probe_import", lambda m: True)
+    with caplog.at_level("WARNING", logger="sovereign"):
+        _manager({"model": str(model), "max_parallel": 4}).prepare_environment()
+    assert any("max_parallel=4" in r.message for r in caplog.records)
 
 
 # --- health ---
@@ -583,14 +635,17 @@ def test_estimated_memory_repo_id_from_metadata(monkeypatch) -> None:
     assert m.estimated_memory_bytes() == 2 * 1024**3
 
 
-def test_estimated_memory_includes_local_draft(tmp_path, sparse_file) -> None:
+def test_estimated_memory_excludes_draft_weights(tmp_path, sparse_file) -> None:
+    # llama_cpp has no second-GGUF speculative decoding (supports_draft_model =
+    # False) — a configured draft_model's weights never load, so they must not
+    # inflate admission control's estimate even though prepare_environment()
+    # hard-errors on this config before boot.
     model = tmp_path / "m.gguf"
     sparse_file(model, 2 * 1024**3)  # 2 GiB
     draft = tmp_path / "d.gguf"
     sparse_file(draft, 1 * 1024**3)  # 1 GiB
     m = _manager({"model": str(model), "draft_model": str(draft)})
-    # 2 GiB + 1 GiB model bytes + 0 KV (no context_size set)
-    assert m.estimated_memory_bytes() == 3 * 1024**3
+    assert m.estimated_memory_bytes() == 2 * 1024**3
 
 
 def test_per_slot_context_divides_across_slots() -> None:
@@ -614,23 +669,29 @@ def _caching_manager(caching: dict, config: dict | None = None) -> LlamaCppManag
     return LlamaCppManager(entry)
 
 
-def test_prompt_caching_flags_added_when_enabled() -> None:
+def test_prompt_caching_kv_cache_type_in_engine_kwargs_when_enabled() -> None:
     m = _caching_manager({"enabled": True, "cache_path": "/tmp/c", "kv_cache_type": "q8_0"})
-    m.prepare_model()
-    args = m.get_start_args()
-    assert args[args.index("--slot-save-path") + 1] == "/tmp/c"
-    assert args[args.index("--cache-type-k") + 1] == "q8_0"
-    assert args[args.index("--cache-type-v") + 1] == "q8_0"
+    assert m.engine_kwargs()["kv_cache_type"] == "q8_0"
 
 
-def test_prompt_caching_no_flags_when_disabled() -> None:
+def test_prompt_caching_no_kv_cache_type_when_disabled() -> None:
     m = _caching_manager({"enabled": False, "cache_path": "/tmp/c"})
-    m.prepare_model()
-    assert "--slot-save-path" not in m.get_start_args()
+    assert "kv_cache_type" not in m.engine_kwargs()
+
+
+def test_prompt_caching_cache_path_inert_warning(tmp_path, monkeypatch, caplog) -> None:
+    monkeypatch.setattr(native_mod, "probe_import", lambda m: True)
+    model = tmp_path / "m.gguf"
+    model.write_bytes(b"gguf")
+    cache = tmp_path / "cache"
+    m = _caching_manager({"enabled": True, "cache_path": str(cache)}, {"model": str(model)})
+    with caplog.at_level("WARNING", logger="sovereign"):
+        m.prepare_environment()
+    assert any("inert" in r.message for r in caplog.records)
 
 
 def test_validate_prompt_caching_creates_dir(tmp_path, monkeypatch) -> None:
-    monkeypatch.setattr(native_mod.shutil, "which", lambda _b: "/opt/homebrew/bin/llama-server")
+    monkeypatch.setattr(native_mod, "probe_import", lambda m: True)
     model = tmp_path / "m.gguf"
     model.write_bytes(b"gguf")
     cache = tmp_path / "cache" / "llama"
@@ -642,7 +703,7 @@ def test_validate_prompt_caching_creates_dir(tmp_path, monkeypatch) -> None:
 
 
 def test_validate_prompt_caching_rejects_bad_kv_type(tmp_path, monkeypatch) -> None:
-    monkeypatch.setattr(native_mod.shutil, "which", lambda _b: "/opt/homebrew/bin/llama-server")
+    monkeypatch.setattr(native_mod, "probe_import", lambda m: True)
     model = tmp_path / "m.gguf"
     model.write_bytes(b"gguf")
     m = _caching_manager(
@@ -654,7 +715,7 @@ def test_validate_prompt_caching_rejects_bad_kv_type(tmp_path, monkeypatch) -> N
 
 
 def test_validate_prompt_caching_requires_cache_path(tmp_path, monkeypatch) -> None:
-    monkeypatch.setattr(native_mod.shutil, "which", lambda _b: "/opt/homebrew/bin/llama-server")
+    monkeypatch.setattr(native_mod, "probe_import", lambda m: True)
     model = tmp_path / "m.gguf"
     model.write_bytes(b"gguf")
     m = _caching_manager({"enabled": True}, {"model": str(model)})

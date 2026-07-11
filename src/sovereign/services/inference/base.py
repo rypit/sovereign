@@ -9,8 +9,8 @@ path come from the entry's ``health_check`` block.
 from __future__ import annotations
 
 import os
-import shutil
 import subprocess
+import sys
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -31,6 +31,7 @@ from sovereign.core.resolver import ConsumerKind, ResolvedEndpoint
 from sovereign.core.resources import priority_to_nice
 from sovereign.services.inference import hf as hf_models
 from sovereign.services.inference.hf import looks_local, parse_model_ref
+from sovereign.workers.worker_config import WorkerConfig, dump_worker_config
 
 # Re-exported so existing imports/patches (`sovereign.services.inference.base.
 # macos_phys_footprint`, `..._parse_phys_footprint`) keep working after the
@@ -42,6 +43,37 @@ __all__ = ["macos_phys_footprint", "_parse_phys_footprint"]
 HTTP_TIMEOUT = 2.0
 # How long to wait after SIGTERM before escalating to SIGKILL.
 STOP_TIMEOUT = 10.0
+# How long an `import <module>` probe subprocess is allowed to run (§4 phase 4).
+IMPORT_PROBE_TIMEOUT = 15.0
+
+# Per-module cache of import-probe results (module name -> importable). A
+# module-level seam (patched in tests as
+# `sovereign.services.inference.base.probe_import`) so a slow/expensive probe
+# only runs once per process even across many manager instances.
+_IMPORT_PROBE_CACHE: dict[str, bool] = {}
+
+
+def probe_import(module: str) -> bool:
+    """Whether ``import <module>`` succeeds in a fresh interpreter.
+
+    Run out-of-process (rather than importing directly here) so probing a
+    macOS/arm64-only binding never risks crashing or polluting the control
+    plane's own interpreter; cached per module name for the life of the
+    process.
+    """
+    if module in _IMPORT_PROBE_CACHE:
+        return _IMPORT_PROBE_CACHE[module]
+    try:
+        result = subprocess.run(  # noqa: S603 - fixed argv, no shell
+            [sys.executable, "-c", f"import {module}"],
+            capture_output=True,
+            timeout=IMPORT_PROBE_TIMEOUT,
+        )
+        ok = result.returncode == 0
+    except (subprocess.TimeoutExpired, OSError):
+        ok = False
+    _IMPORT_PROBE_CACHE[module] = ok
+    return ok
 
 
 def check_local_artifact(value: str, *, kind: str, service: str) -> None:
@@ -55,10 +87,14 @@ def check_local_artifact(value: str, *, kind: str, service: str) -> None:
 class NativeEngineManager(ActivityMixin, Provisioner):
     """Shared lifecycle for a native engine subprocess. Not registered itself.
 
-    Subclasses set ``base_type``, ``config_cls`` and implement ``get_start_args()``;
-    they extend ``prepare_environment()`` via ``super()``. Engine toolchains are
-    provisioned per-integration (a ``Brewfile`` next to the manager's module +
-    ``provisioning_binary``) via the shared :class:`Provisioner` mixin.
+    Subclasses set ``base_type``, ``config_cls`` and implement ``engine_kwargs()``;
+    they extend ``prepare_environment()`` via ``super()``. ``get_start_args()`` is
+    shared/final: it dumps a :class:`~sovereign.workers.worker_config.WorkerConfig`
+    and launches the generic ``sovereign.workers.engine_worker`` entrypoint, which
+    loads the model in-process via the engine's Python binding. Engine toolchains
+    are provisioned per-integration (a ``Brewfile`` next to the manager's module,
+    ``provisioning_commands``, and/or an import-probe override) via the shared
+    :class:`Provisioner` mixin.
     """
 
     base_type: ClassVar[str]
@@ -67,8 +103,19 @@ class NativeEngineManager(ActivityMixin, Provisioner):
     #: single *gguf* file. Drives metadata-based memory estimation and download.
     model_artifact_kind: ClassVar[Literal["snapshot", "gguf"]]
     consumer_kind = ConsumerKind.NATIVE
-    #: Optional extra sentence appended to the missing-binary error.
+    #: Optional extra sentence appended to the missing-binding error.
     binary_hint: ClassVar[str] = ""
+    #: Whether this engine's binding supports true multi-model speculative
+    #: decoding (a second set of weights loaded alongside the main model).
+    #: llama_cpp sets this to False (§3a hard gap) so a configured
+    #: ``draft_model`` doesn't inflate its admission-control estimate for
+    #: weights the worker will never actually load.
+    supports_draft_model: ClassVar[bool] = True
+    #: Modules whose importability (probed out-of-process, see
+    #: :func:`probe_import`) gates this engine's ``prepare_environment()`` —
+    #: replaces the old binary-on-PATH check now that engines run in-process
+    #: inside a Python worker rather than as an external CLI.
+    import_probe_modules: ClassVar[tuple[str, ...]] = ()
 
     def __init__(self, entry: ServiceEntry) -> None:
         self.name = entry.name
@@ -93,8 +140,59 @@ class NativeEngineManager(ActivityMixin, Provisioner):
         self.draft_model_path: Path | None = None
 
     # --- engine-specific surface ---
-    def get_start_args(self) -> list[str]:
+    def engine_kwargs(self) -> dict[str, Any]:
+        """Engine-agnostic settings for the worker's adapter to map onto its
+        real binding API (e.g. ``gpu_layers``, ``context_size``). Each engine
+        implements this; the base class assembles it (plus resolved model
+        paths) into the :class:`WorkerConfig` handed to the worker process."""
         raise NotImplementedError
+
+    def _worker_state_dir(self) -> Path:
+        """Where this stack's worker artifacts (config JSON, telemetry socket)
+        live — derived from ``log_dir`` since that's the one per-stack
+        location every engine config already carries. Matches the
+        ``.sovereign/logs`` default, i.e. ``.sovereign/``; overriding
+        ``log_dir`` to point somewhere other than ``<state_dir>/logs`` moves
+        the telemetry socket and worker-config directory along with it."""
+        return Path(self.config.log_dir).expanduser().parent
+
+    def worker_config(self) -> WorkerConfig:
+        """Assemble the JSON handoff this manager's worker process boots from."""
+        state_dir = self._worker_state_dir()
+        draft_path = (
+            self.resolved_draft_model_path() if self.config.draft_model is not None else None
+        )
+        return WorkerConfig(
+            service=self.name,
+            engine=self.base_type,
+            host=self.host,
+            port=self.port,
+            health_path=self.health_path,
+            telemetry_socket=str(state_dir / "telemetry.sock"),
+            model_path=self.resolved_model_path(),
+            draft_model_path=draft_path,
+            served_model_name=self.config.served_model_name,
+            engine_kwargs=self.engine_kwargs(),
+        )
+
+    def get_start_args(self) -> list[str]:
+        """Shared, final: dump this engine's :class:`WorkerConfig` and return the
+        argv that boots the generic ``engine_worker`` entrypoint against it.
+
+        Raises ``RuntimeError`` (via ``resolved_model_path()``) if called before
+        ``prepare_model()`` has resolved the model path — same contract as before.
+        """
+        cfg = self.worker_config()
+        state_dir = self._worker_state_dir()
+        config_path = state_dir / "workers" / f"{self.name}.json"
+        dump_worker_config(cfg, config_path)
+        return [
+            sys.executable,
+            "-m",
+            "sovereign.workers.engine_worker",
+            "--config",
+            str(config_path),
+        ]
 
     def start_env(self) -> dict[str, str]:
         """Extra environment variables for the engine subprocess.
@@ -117,7 +215,7 @@ class NativeEngineManager(ActivityMixin, Provisioner):
         if self.memory_override_bytes is not None:
             return self.memory_override_bytes
         total = self._model_bytes(self.config.model)
-        if self.config.draft_model is not None:
+        if self.config.draft_model is not None and self.supports_draft_model:
             total += self._model_bytes(self.config.draft_model)
         return total + self.extra_memory_bytes()
 
@@ -276,13 +374,22 @@ class NativeEngineManager(ActivityMixin, Provisioner):
 
     # --- Resource cooperation ---
     def prepare_environment(self) -> None:
-        """Shared pre-flight: provision declared deps, then validate binary + model."""
+        """Shared pre-flight: provision declared deps, then validate the binding + model.
+
+        Engines run in-process inside a Python worker now, not as an external
+        CLI, so "is it available" means "can this interpreter import it" —
+        probed out-of-process via :func:`probe_import` (never in ``binary``,
+        which is deprecated but still accepted for existing YAML).
+        """
         # Install the engine's own toolchain first (idempotent no-op once present),
         # so a declared service works on a fresh machine without manual setup.
         self.provision()
-        binary = self.config.binary
-        if shutil.which(binary) is None and not Path(binary).expanduser().is_file():
-            message = f"binary '{binary}' not found on PATH for '{self.name}'."
+        missing = [m for m in self.import_probe_modules if not probe_import(m)]
+        if missing:
+            message = (
+                f"{self.base_type} binding module(s) {', '.join(missing)} not importable "
+                f"for '{self.name}'."
+            )
             if self.binary_hint:
                 message += f" {self.binary_hint}"
             raise FileNotFoundError(message)

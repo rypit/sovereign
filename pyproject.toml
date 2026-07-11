@@ -18,6 +18,11 @@ dependencies = [
     # mlx_lm engine — provides the `mlx_lm.server` console script. Apple-Silicon
     # only (mlx ships wheels for macOS arm64), so guard resolution on other platforms.
     "mlx-lm>=0.31; sys_platform == 'darwin' and platform_machine == 'arm64'",
+    # llama_cpp engine — embedded via llama-cpp-python's built-in OpenAI-compatible
+    # server. Apple-Silicon only here (mirrors mlx-lm's guard); a from-source build
+    # needs cmake/CLT, so provisioning falls back to the prebuilt Metal wheel index
+    # if this marker's resolution can't find a wheel.
+    "llama-cpp-python[server]>=0.3; sys_platform == 'darwin' and platform_machine == 'arm64'",
 ]
 
 [project.optional-dependencies]
