@@ -92,7 +92,7 @@ def test_extra_field_rejected() -> None:
 
 def test_load_config_wraps_missing_file() -> None:
     with pytest.raises(ConfigError, match="cannot read config file"):
-        load_config(Path("/nonexistent/sovereign.yaml"))
+        load_config(Path("/nonexistent/examples/sovereign.yaml"))
 
 
 # --- auto base_type routing (M4) ---

@@ -5,12 +5,12 @@
 A declarative control plane for running local LLM infrastructure — engines,
 frontends, coding harnesses, and benchmarks — on macOS / Apple Silicon laptops.
 
-You describe the stack you want in a `sovereign.yaml`; Sovereign boots inference
+You describe the stack you want in `examples/sovereign.yaml`; Sovereign boots inference
 engines **natively** (for real Metal/MLX acceleration), runs auxiliary services in
 Docker, wires them together, and enforces a unified-memory budget so a second
 engine can't OOM-crash the machine.
 
-See [`sovereign-implementation-plan-v1.1.md`](./sovereign-implementation-plan-v1.1.md)
+See [`docs/sovereign-implementation-plan-v1.1.md`](./docs/sovereign-implementation-plan-v1.1.md)
 for the full design.
 
 The default stack also runs **SearXNG**, wired into Open WebUI for web search.
@@ -108,8 +108,8 @@ only), so `uv sync` provides the `mlx_lm.server` binary. Try it with a tiny mode
 `mlx.yaml` omits `base_type`, so it's routed to `mlx_lm` automatically:
 
 ```bash
-uv run sovereign plan -f mlx.yaml   # dry-run: shows the routed engine + memory estimate, no download
-uv run sovereign up   -f mlx.yaml   # DOWNLOADING (byte progress) -> STARTING -> READY
+uv run sovereign plan -f examples/mlx.yaml   # dry-run: shows the routed engine + memory estimate, no download
+uv run sovereign up   -f examples/mlx.yaml   # DOWNLOADING (byte progress) -> STARTING -> READY
 uv run sovereign models list        # what's in the shared HF cache
 ```
 
@@ -148,7 +148,7 @@ lockfile-friendly path (e.g. for CI):
 uv sync --extra harness --extra bench
 ```
 
-With a stack up (`sovereign up -f sovereign.yaml`) and harnesses declared in
+With a stack up (`sovereign up -f examples/sovereign.yaml`) and harnesses declared in
 its `harnesses:` section:
 
 ```bash

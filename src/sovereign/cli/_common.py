@@ -33,7 +33,7 @@ console = Console()
 # Shared constants
 # ---------------------------------------------------------------------------
 
-_DEFAULT_CONFIG = Path("sovereign.yaml")
+_DEFAULT_CONFIG = Path("examples/sovereign.yaml")
 _DEFAULT_STATE_DIR = Path(".sovereign")
 _DEFAULT_BENCH_SPEC = Path("bench.yaml")
 
@@ -93,7 +93,7 @@ def _fast_exit(code: int) -> None:  # pragma: no cover - interactive
 
 def _config_path_for_harness_cli(file: Path | None, state_dir: Path) -> Path:
     """The stack file to read harnesses from: explicit ``-f``, else the recorded
-    variant of a running stack, else the default ``sovereign.yaml``."""
+    variant of a running stack, else the default ``examples/sovereign.yaml``."""
     from sovereign.core.state import read_json_or_none
 
     if file is not None:

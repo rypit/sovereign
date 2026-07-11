@@ -26,7 +26,7 @@ Sovereign's MVP orchestration spine is done (Phases 0–8 + 10; the suite is gre
 3. **Quality suite v1:** custom local task-suite format (the doc's "10–15 of your own real tasks"); SWE-bench subset is a later optional phase.
 4. **Sandboxing v1:** throwaway host git workspaces; Docker sandboxes are a later phase (resolver already supports `ConsumerKind.DOCKER`).
 
-**Locked constraints (do not violate):** strictly local — no cloud baselines; `config.py` never imports `manager.py`; refuse-to-boot, never auto-kill; bench specs are NOT in `sovereign.yaml` (imperative `sovereign bench run` only); grade the repo, not the transcript.
+**Locked constraints (do not violate):** strictly local — no cloud baselines; `config.py` never imports `manager.py`; refuse-to-boot, never auto-kill; bench specs are NOT in `examples/sovereign.yaml` (imperative `sovereign bench run` only); grade the repo, not the transcript.
 
 **New dependencies:** `httpx>=0.27` (bench prober); `[project.optional-dependencies] harness = ["mini-swe-agent>=1.0"]` (imported lazily in the manager so the base install stays lean). Cline CLI is an npm binary — installed via Brewfile/npm, checked by `prepare_environment()`-style validation, never a Python dep.
 
@@ -130,7 +130,7 @@ Docker-sandboxed quality workspaces (throwaway container per task, engine via `C
 ## Verification (end-to-end)
 
 1. `uv run pytest -q` green after every phase (mock-based; no Docker/models needed in CI) and `uv run ruff check .` clean.
-2. **H-track live check (Apple Silicon):** `uv run sovereign up -f mlx.yaml`, then `sovereign harness invoke <name> --prompt "add a hello() to util.py" --workdir <throwaway repo>` → nonzero diff in the workdir; kill the engine, let it restart, confirm the harness config file re-materialized (mtime/content).
+2. **H-track live check (Apple Silicon):** `uv run sovereign up -f examples/mlx.yaml`, then `sovereign harness invoke <name> --prompt "add a hello() to util.py" --workdir <throwaway repo>` → nonzero diff in the workdir; kill the engine, let it restart, confirm the harness config file re-materialized (mtime/content).
 3. **B-track live check:** with the stack up, `sovereign bench run -f examples/bench/perf-attach.yaml` → results under `.sovereign/benchmarks/`; run twice, second run reports all cells skipped; `sovereign bench compare` renders the table. Then a clean-room spec with the smoke suite: full boot→invoke→grade→teardown cycle.
 4. Per-phase exit criteria above are the gate for moving on (matches the repo's roadmap discipline).
 

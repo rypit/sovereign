@@ -1,7 +1,7 @@
 # CLAUDE.md
 
 Sovereign is a declarative control plane for local LLM infrastructure on
-macOS/Apple Silicon: you describe a stack in `sovereign.yaml`, and it boots
+macOS/Apple Silicon: you describe a stack in `examples/sovereign.yaml`, and it boots
 inference engines natively (Metal/MLX), runs auxiliary services in Docker,
 wires them together, and enforces a unified-memory budget.
 
@@ -112,4 +112,4 @@ code stays a leaf. `runtime/orchestrator` imports `core/*`; nothing in
 - Diagnostics go to the `sovereign` logger (`--verbose` for DEBUG);
   user-facing output goes through the Rich `console`.
 - Docstrings cite plan sections (§N) — they refer to
-  `sovereign-implementation-plan-v1.1.md`.
+  `docs/sovereign-implementation-plan-v1.1.md`.
