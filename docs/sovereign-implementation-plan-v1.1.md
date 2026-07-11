@@ -138,7 +138,7 @@ class ServiceManager(Protocol):
 
     # Resource cooperation
     def prepare_environment(self) -> None: ...
-    def adjust_resources(self, memory_limit_mb: int) -> None: ...
+    def adjust_resources(self, memory_limit_bytes: int) -> None: ...
 ```
 
 `@runtime_checkable` lets the Orchestrator do `isinstance(manager, ServiceManager)` before ever calling `.start()`, so a malformed integration fails loudly at registration time instead of mid-boot.
@@ -338,7 +338,7 @@ Unified memory can't be hard-partitioned the way VRAM can, so Sovereign manages 
 | Metal cache limit | mlx_lm | `mx.metal.set_cache_limit(n)` |
 | `priority` | all | Mapped to `os.nice()` / `taskpolicy` QoS class |
 
-**Admission control:** before `start()`, `ResourceBudgeter.can_fit(estimated_gb)` checks `(total - reserved - safety_margin)`. On failure the Orchestrator refuses the boot with a specific error ("Cannot start `llama_heavy_v1`: needs ~40GB, only 22GB available — stop `comfyui` to free memory") instead of letting macOS swap.
+**Admission control:** before `start()`, `ResourceBudgeter.can_fit(estimated_bytes)` checks `(total - reserved - safety_margin)`. On failure the Orchestrator refuses the boot with a specific error ("Cannot start `llama_heavy_v1`: needs ~40.0 GB, only 22.0 GB available — stop `comfyui` to free memory") instead of letting macOS swap.
 
 **Teams make `-np` load-bearing.** An agent team issues concurrent model calls, and llama-server divides total context across slots — a 4-agent team on `-c 32768` quietly runs ~8k tokens per agent. The Budgeter and the bench spec must treat **slots × context jointly**, not as independent knobs.
 
@@ -366,7 +366,7 @@ def get_metrics(self) -> dict[str, Any]:
     p = psutil.Process(self.process.pid)
     with p.oneshot():
         return {
-            "memory_mb": round(p.memory_info().rss / (1024**2), 2),
+            "memory_bytes": p.memory_info().rss,
             "cpu_percent": p.cpu_percent(interval=None),
             "status": "running",
         }
@@ -380,10 +380,10 @@ $ sovereign monitor
   Sovereign Control Plane v1.1.0
   ──────────────────────────────
 
-  SERVICE          STATUS      CPU %    MEM (MB)    DEPENDENCIES
+  SERVICE          STATUS      CPU %    MEM         DEPENDENCIES
   ──────────────────────────────────────────────────────────────
-  llama_heavy_v1   [RUNNING]    12.4%    14500 MB    -
-  open_webui       [STARTING]    0.5%      850 MB    docker, llama_heavy_v1
+  llama_heavy_v1   [RUNNING]    12.4%    15.2 GB     -
+  open_webui       [STARTING]    0.5%    891.3 MB    docker, llama_heavy_v1
   ──────────────────────────────────────────────────────────────
   [Press Ctrl+C to exit]
 ```
