@@ -17,8 +17,8 @@ imports it as ``hf_models``), so tests patch
 
 from __future__ import annotations
 
-import contextlib
 import io
+import json
 import logging
 import os
 import re
@@ -550,14 +550,34 @@ def download_model(
 
 
 class RoutingCache:
-    """JSON-backed routing cache at ``<state_dir>/models.json``."""
+    """JSON-backed routing cache at ``<state_dir>/models.json``.
+
+    Cache IO failures are non-fatal (routing falls back to metadata/network),
+    but not silent: a permanently unwritable or corrupt cache logs one warning
+    per instance instead of degrading every restart invisibly.
+    """
 
     def __init__(self, path: Path) -> None:
         self._path = path
         self._data: dict[str, dict] = {}
+        self._warned = False
         if path.exists():
-            with contextlib.suppress(Exception):
+            try:
                 self._data = read_json(path)
+            except (OSError, json.JSONDecodeError) as exc:
+                self._warn_io("read", exc)
+
+    def _warn_io(self, action: str, exc: Exception) -> None:
+        """One warning per instance — put() retries every call and must not spam."""
+        if not self._warned:
+            self._warned = True
+            log.warning(
+                "routing cache %s could not be %s (%s); "
+                "engine routing will fall back to HF metadata/network",
+                self._path,
+                action,
+                exc,
+            )
 
     def get(self, raw_ref: str) -> dict | None:
         return self._data.get(raw_ref)
@@ -568,5 +588,7 @@ class RoutingCache:
             "weight_bytes": weight_bytes,
             "resolved_at": datetime.now(UTC).isoformat(),
         }
-        with contextlib.suppress(Exception):
+        try:
             write_json(self._path, self._data)
+        except OSError as exc:
+            self._warn_io("written", exc)
