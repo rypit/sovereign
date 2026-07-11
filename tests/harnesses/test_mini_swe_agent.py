@@ -56,7 +56,7 @@ class FakeResult:
 
 
 class FakeAgent:
-    last_instance = None
+    last_instance: FakeAgent | None = None
 
     def __init__(self, model, env, **kwargs):
         self.model = model
@@ -121,9 +121,9 @@ def _install_fake_minisweagent(monkeypatch, agent_cls=FakeAgent) -> None:
             "minisweagent.models.litellm_model"
         ),
     }
-    modules["minisweagent.agents.default"].DefaultAgent = agent_cls
-    modules["minisweagent.environments.local"].LocalEnvironment = FakeEnv
-    modules["minisweagent.models.litellm_model"].LitellmModel = FakeModel
+    modules["minisweagent.agents.default"].DefaultAgent = agent_cls  # type: ignore[attr-defined]
+    modules["minisweagent.environments.local"].LocalEnvironment = FakeEnv  # type: ignore[attr-defined]
+    modules["minisweagent.models.litellm_model"].LitellmModel = FakeModel  # type: ignore[attr-defined]
     for name, mod in modules.items():
         monkeypatch.setitem(sys.modules, name, mod)
 
@@ -221,6 +221,7 @@ def test_invoke_success_maps_run_result(monkeypatch) -> None:
     assert result.success is True
     assert result.metadata["exit_status"] == "Submitted"
     assert result.metadata["cost"] == 0.01
+    assert FakeAgent.last_instance is not None
     assert FakeAgent.last_instance.run_calls == ["do the thing"]
 
 
@@ -228,6 +229,7 @@ def test_invoke_passes_model_and_endpoint(monkeypatch) -> None:
     _install_fake_minisweagent(monkeypatch, FakeAgent)
     h = _harness()
     h.invoke(Task(id="t1", prompt="x"))
+    assert FakeAgent.last_instance is not None
     model_kwargs = FakeAgent.last_instance.model.kwargs
     assert model_kwargs["model_name"] == "openai/llama3-70b"
     assert model_kwargs["model_kwargs"]["api_base"] == "http://127.0.0.1:11435/v1"

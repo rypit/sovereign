@@ -69,7 +69,7 @@ select = ["E", "F", "I", "UP", "B"]
 # The sources are densely annotated; mypy keeps them honest. Non-strict to start —
 # tighten (disallow_untyped_defs, tests/) as the baseline stays clean.
 python_version = "3.12"
-files = ["src/sovereign"]
+files = ["src/sovereign", "tests"]
 plugins = ["pydantic.mypy"]
 check_untyped_defs = true
 no_implicit_optional = true

@@ -23,6 +23,7 @@ def test_sample_fixture_loads() -> None:
     webui = next(s for s in cfg.services if s.name == "open_webui")
     assert webui.dependencies == ["llama_heavy_v1"]
     # Templates are carried through unresolved at this layer.
+    assert webui.env_overrides is not None
     assert webui.env_overrides["OLLAMA_API_BASE_URL"] == "{{ llama_heavy_v1.endpoint }}"
 
     assert [h.name for h in cfg.harnesses] == ["cline_local"]

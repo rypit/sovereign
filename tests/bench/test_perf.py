@@ -71,7 +71,7 @@ class FakeAsyncClient:
 
 def _install_fake_httpx(monkeypatch, lines: list[str]) -> None:
     fake = types.ModuleType("httpx")
-    fake.AsyncClient = FakeAsyncClient
+    fake.AsyncClient = FakeAsyncClient  # type: ignore[attr-defined]
     FakeAsyncClient.next_lines = lines
     monkeypatch.setitem(sys.modules, "httpx", fake)
 
@@ -171,6 +171,7 @@ def test_primary_engine_picks_first_with_model() -> None:
         ]
     }
     engine = _primary_engine(manifest)
+    assert engine is not None
     assert engine["name"] == "engine"
 
 
@@ -187,7 +188,7 @@ def _job() -> Job:
 
 
 def _write_manifest(state_dir, *, with_engine=True) -> None:
-    services = [{"name": "docker"}]
+    services: list[dict[str, object]] = [{"name": "docker"}]
     if with_engine:
         services.append(
             {

@@ -45,7 +45,7 @@ def test_manifest_start_args_redacted(tmp_path) -> None:
         def __init__(self, entry: ServiceEntry) -> None:
             self.name = entry.name
             self.dependencies = entry.dependencies
-            self.activity = ()
+            self.activity: tuple[str, ...] = ()
 
         def prepare_environment(self) -> None: ...
 

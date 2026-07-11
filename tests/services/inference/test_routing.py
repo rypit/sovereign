@@ -11,6 +11,7 @@ from __future__ import annotations
 import pytest
 
 from sovereign.config import ServiceEntry
+from sovereign.core.base_manager import ServiceManager
 from sovereign.core.errors import RoutingError
 from sovereign.core.registry import route_entry
 from sovereign.services.inference import hf as models_mod
@@ -20,7 +21,7 @@ from sovereign.services.inference.mlx_lm.manager import MlxLmManager
 from sovereign.services.inference.routing import _claim_engine
 
 # The two native engines, swept exactly as ``route_entry`` sweeps the registry.
-_ENGINES = [LlamaCppManager, MlxLmManager]
+_ENGINES: list[type[ServiceManager]] = [LlamaCppManager, MlxLmManager]
 
 
 def _repo(

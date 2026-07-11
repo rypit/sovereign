@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import contextlib
 import subprocess
+from typing import cast
 
 import pytest
 
@@ -287,14 +288,15 @@ def test_prepare_environment_provisions_first(monkeypatch) -> None:
     from sovereign.core.provisioning import Provisioner
 
     order: list[str] = []
+
+    def _record_which(_b: str) -> str:
+        order.append("which")
+        return "/opt/homebrew/bin/llama-server"
+
     monkeypatch.setattr(
         Provisioner, "provision", classmethod(lambda cls: order.append("provision"))
     )
-    monkeypatch.setattr(
-        native_mod.shutil,
-        "which",
-        lambda _b: order.append("which") or "/opt/homebrew/bin/llama-server",
-    )
+    monkeypatch.setattr(native_mod.shutil, "which", _record_which)
     m = _manager({"model": "org/some-hf-repo"})  # repo id: no local file check
     m.prepare_environment()
     assert order[0] == "provision"  # install the toolchain before validating it
@@ -354,13 +356,13 @@ def test_is_healthy_false_when_no_process() -> None:
 
 def test_is_healthy_false_when_process_exited() -> None:
     m = _manager()
-    m.process = FakeProc(poll_value=0)
+    m.process = cast("subprocess.Popen[bytes]", FakeProc(poll_value=0))
     assert m.is_healthy() is False
 
 
 def test_is_healthy_true_on_http_200(monkeypatch) -> None:
     m = _manager()
-    m.process = FakeProc(poll_value=None)
+    m.process = cast("subprocess.Popen[bytes]", FakeProc(poll_value=None))
 
     class FakeResp:
         status = 200
@@ -377,7 +379,7 @@ def test_is_healthy_true_on_http_200(monkeypatch) -> None:
 
 def test_is_healthy_false_on_connection_error(monkeypatch) -> None:
     m = _manager()
-    m.process = FakeProc(poll_value=None)
+    m.process = cast("subprocess.Popen[bytes]", FakeProc(poll_value=None))
 
     def boom(url, timeout=None):
         raise native_mod.urllib.error.URLError("refused")
@@ -437,8 +439,11 @@ def test_runtime_handle_records_pid_and_create_time() -> None:
     import psutil
 
     m = _manager()
-    m.process = FakeProc(pid=os.getpid(), poll_value=None)  # a real, live PID
+    m.process = cast(
+        "subprocess.Popen[bytes]", FakeProc(pid=os.getpid(), poll_value=None)
+    )  # a real, live PID
     handle = m.runtime_handle()
+    assert handle is not None
     assert handle["kind"] == "native"
     assert handle["pid"] == os.getpid()
     assert handle["create_time"] == psutil.Process(os.getpid()).create_time()
@@ -448,7 +453,7 @@ def test_runtime_handle_omits_create_time_when_process_vanished(monkeypatch) -> 
     import psutil
 
     m = _manager()
-    m.process = FakeProc(pid=4242, poll_value=None)
+    m.process = cast("subprocess.Popen[bytes]", FakeProc(pid=4242, poll_value=None))
 
     def raise_no_such(pid):
         raise psutil.NoSuchProcess(pid)
@@ -469,7 +474,7 @@ def test_get_metrics_stopped_when_no_process() -> None:
 
 def test_get_metrics_running(monkeypatch) -> None:
     m = _manager()
-    m.process = FakeProc(pid=4242, poll_value=None)
+    m.process = cast("subprocess.Popen[bytes]", FakeProc(pid=4242, poll_value=None))
 
     class FakeMem:
         rss = 14500 * 1024**2
@@ -493,7 +498,7 @@ def test_get_metrics_running(monkeypatch) -> None:
 
 def test_get_metrics_uses_phys_footprint_when_available(monkeypatch) -> None:
     m = _manager()
-    m.process = FakeProc(pid=4242, poll_value=None)
+    m.process = cast("subprocess.Popen[bytes]", FakeProc(pid=4242, poll_value=None))
 
     class FakeMem:
         rss = 14500 * 1024**2
@@ -520,7 +525,7 @@ def test_get_metrics_uses_phys_footprint_when_available(monkeypatch) -> None:
 
 def test_get_metrics_falls_back_to_rss_when_footprint_unavailable(monkeypatch) -> None:
     m = _manager()
-    m.process = FakeProc(pid=4242, poll_value=None)
+    m.process = cast("subprocess.Popen[bytes]", FakeProc(pid=4242, poll_value=None))
 
     class FakeMem:
         rss = 14500 * 1024**2

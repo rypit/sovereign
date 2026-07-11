@@ -147,7 +147,7 @@ def test_invoke_timeout_returns_failure(monkeypatch) -> None:
 
 def test_invoke_max_turns_flag(monkeypatch) -> None:
     monkeypatch.setattr(cline_mod.shutil, "which", lambda _b: "/usr/local/bin/cline")
-    captured = {}
+    captured: dict = {}
     monkeypatch.setattr(
         cline_mod.subprocess,
         "run",

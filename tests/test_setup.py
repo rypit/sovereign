@@ -12,6 +12,7 @@ _SCRIPT = Path(__file__).resolve().parent.parent / "scripts" / "setup.py"
 
 def _load():
     spec = importlib.util.spec_from_file_location("sovereign_setup", _SCRIPT)
+    assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -36,9 +37,11 @@ def test_brewfile_declares_bootstrap_only() -> None:
 def test_main_runs_bootstrap_then_provision(monkeypatch) -> None:
     calls: list[list[str]] = []
     monkeypatch.setattr(setup.shutil, "which", lambda _name: "/opt/homebrew/bin/brew")
-    monkeypatch.setattr(
-        setup.subprocess, "run", lambda cmd, **kw: calls.append(cmd) or _Result(0)
-    )
+    def record(cmd, **kw):
+        calls.append(cmd)
+        return _Result(0)
+
+    monkeypatch.setattr(setup.subprocess, "run", record)
     assert setup.main() == 0
     assert calls[0][:2] == ["brew", "bundle"]
     assert calls[1] == ["uv", "sync"]
