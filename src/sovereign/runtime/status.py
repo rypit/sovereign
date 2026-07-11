@@ -29,6 +29,28 @@ class ActivityStatus(TypedDict):
     lines: list[str]
 
 
+class PrefillStatus(TypedDict):
+    """One in-flight prefill request tracked by the telemetry cache."""
+
+    request_id: str
+    processed: int
+    total: int | None
+
+
+class TelemetryStatus(TypedDict):
+    """A service's telemetry block — shaped exactly like
+    :meth:`~sovereign.runtime.telemetry.TelemetryStateCache.snapshot`'s output
+    (the producer of record; this TypedDict follows its field names).
+    """
+
+    worker_state: str | None
+    last_heartbeat: float | None
+    prefill: list[PrefillStatus]
+    generation_tps: float | None
+    prompt_tps: float | None
+    tps_history: list[tuple[float, float]]
+
+
 class ServiceStatus(TypedDict):
     """One service's row in the dashboard."""
 
@@ -40,6 +62,7 @@ class ServiceStatus(TypedDict):
     estimated_bytes: int | None
     metrics: dict[str, float | str]
     activity: ActivityStatus
+    telemetry: TelemetryStatus
 
 
 class StatusSnapshot(TypedDict):

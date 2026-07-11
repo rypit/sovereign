@@ -826,3 +826,105 @@ def test_manifest_includes_harnesses(tmp_path) -> None:
     assert manifest["harnesses"] == [
         {"name": "h", "base_type": "y", "dependencies": ["engine"]}
     ]
+
+
+# --- telemetry integration (§5) ---
+def test_status_snapshot_includes_telemetry_block() -> None:
+    orch = _orch(_config([{"name": "a", "base_type": "x"}]))
+    orch.build()
+    snap = orch.status_snapshot()
+    assert snap["services"]["a"]["telemetry"] == {
+        "worker_state": None,
+        "last_heartbeat": None,
+        "prefill": [],
+        "generation_tps": None,
+        "prompt_tps": None,
+        "tps_history": [],
+    }
+
+
+def test_status_snapshot_telemetry_reflects_cache_state() -> None:
+    from sovereign.workers.protocol import EventType
+
+    orch = _orch(_config([{"name": "a", "base_type": "x"}]))
+    orch.build()
+    orch.telemetry.apply_local("a", EventType.STATE_CHANGE, {"state": "serving"})
+    orch.telemetry.apply_local(
+        "a", EventType.GENERATION_STATS, {"generation_tps": 12.5, "prompt_tps": 400.0}
+    )
+    snap = orch.status_snapshot()
+    telemetry = snap["services"]["a"]["telemetry"]
+    assert telemetry["worker_state"] == "serving"
+    assert telemetry["generation_tps"] == 12.5
+    assert telemetry["prompt_tps"] == 400.0
+
+
+def test_effective_metrics_prefers_fresh_cache_over_manager() -> None:
+    from sovereign.workers.protocol import EventType
+
+    cfg = _config([{"name": "a", "base_type": "x"}])
+    orch = _orch(cfg, mems={"a": 0})
+    orch.build()
+    orch.telemetry.apply_local("a", EventType.MEMORY, {"memory_bytes": 555})
+    metrics = orch._effective_metrics("a", orch.managers["a"])
+    assert metrics["memory_bytes"] == 555
+    assert metrics["status"] == "running"
+
+
+def test_effective_metrics_falls_back_when_stale() -> None:
+    from sovereign.workers.protocol import EventType
+
+    cfg = _config([{"name": "a", "base_type": "x"}])
+    orch = _orch(cfg)
+    orch.build()
+    # A stale event (older than the freshness window) must not win over the
+    # manager's own get_metrics() fallback.
+    orch.telemetry.apply_local("a", EventType.MEMORY, {"memory_bytes": 555}, ts=0.0)
+    metrics = orch._effective_metrics("a", orch.managers["a"])
+    assert metrics.get("memory_bytes") != 555
+    assert metrics["status"] == "running"
+    assert metrics["name"] == "a"  # from FakeManager.get_metrics()
+
+
+def test_effective_metrics_merges_generation_stats() -> None:
+    from sovereign.workers.protocol import EventType
+
+    cfg = _config([{"name": "a", "base_type": "x"}])
+    orch = _orch(cfg)
+    orch.build()
+    orch.telemetry.apply_local("a", EventType.GENERATION_STATS, {"generation_tps": 9.0})
+    metrics = orch._effective_metrics("a", orch.managers["a"])
+    assert metrics["tokens_per_second"] == 9.0
+
+
+def test_telemetry_hub_lifecycle_via_serve_forever(tmp_path) -> None:
+    """The hub binds .sovereign/telemetry.sock during serve_forever and unlinks
+    it in the finally block, exercised via the real FakeManager factory."""
+    log: list = []
+    cfg = _config([{"name": "a", "base_type": "x"}])
+    socket_seen = asyncio.Event()
+
+    async def watcher(orch: Orchestrator, stop: asyncio.Event) -> None:
+        deadline = asyncio.get_running_loop().time() + 2.0
+        while not (tmp_path / "telemetry.sock").exists():
+            if asyncio.get_running_loop().time() > deadline:
+                break
+            await asyncio.sleep(0.01)
+        socket_seen.set()
+        stop.set()
+
+    def factory(entry: ServiceEntry) -> FakeManager:
+        return FakeManager(entry, log)
+
+    from sovereign.runtime.orchestrator import serve_forever
+
+    asyncio.run(
+        serve_forever(
+            cfg,
+            state_dir=tmp_path,
+            manager_factory=factory,
+            extra_tasks=[watcher],
+        )
+    )
+    assert socket_seen.is_set()
+    assert not (tmp_path / "telemetry.sock").exists()
