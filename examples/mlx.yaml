@@ -1,8 +1,8 @@
 # A minimal MLX stack — a tiny model you can boot on Apple Silicon to see the
 # HF-native pipeline end to end:
 #
-#   uv run sovereign plan -f mlx.yaml   # dry-run: routes + estimates, no download
-#   uv run sovereign up   -f mlx.yaml   # DOWNLOADING (byte progress) -> STARTING -> READY
+#   uv run sovereign plan -f examples/mlx.yaml   # dry-run: routes + estimates, no download
+#   uv run sovereign up   -f examples/mlx.yaml   # DOWNLOADING (byte progress) -> STARTING -> READY
 #
 # `base_type` is omitted, so it defaults to `auto`: Sovereign reads the repo's
 # HuggingFace metadata (mlx-community / safetensors) and routes it to `mlx_lm`.

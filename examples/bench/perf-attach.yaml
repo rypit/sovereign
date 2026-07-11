@@ -1,11 +1,11 @@
 version: "1"
 
 # Attach-mode perf sweep: measures whatever stack is already up under
-# `sovereign up -f sovereign.yaml` (or the variant file listed below) without
-# booting or stopping anything. Run it, then run it again — completed cells
-# are skipped (content-addressed by stack + seed + trial count).
+# `sovereign up -f examples/sovereign.yaml` (or the variant file listed below)
+# without booting or stopping anything. Run it, then run it again — completed
+# cells are skipped (content-addressed by stack + seed + trial count).
 stacks:
-  - sovereign.yaml
+  - examples/sovereign.yaml
 
 trials: 3
 seed: 0
