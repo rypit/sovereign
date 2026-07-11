@@ -5,6 +5,10 @@ from __future__ import annotations
 import pytest
 
 from sovereign.config import Priority, ServiceEntry
+from sovereign.core.base_manager import (
+    ActivityMixin,
+    SupportsMemoryEstimate,
+)
 from sovereign.core.resources import (
     ResourceBudgeter,
     ResourceExhaustedError,
@@ -59,13 +63,25 @@ def test_denial_message_when_nothing_reserved() -> None:
 
 
 # --- estimation ---
-class _FakeManager:
+class _FakeManager(ActivityMixin, SupportsMemoryEstimate):
     def __init__(self, gb: float | None):
+        self.name = "fake"
+        self.dependencies: list[str] = []
+        self.activity = ()
         if gb is not None:
             self._gb = gb
 
     def estimated_memory_gb(self) -> float:  # only defined when _gb set
         return self._gb
+
+    def start(self) -> None: ...
+    def stop(self) -> None: ...
+    def is_healthy(self) -> bool:
+        return True
+    def get_metrics(self) -> dict:
+        return {"status": "running"}
+    def prepare_environment(self) -> None: ...
+    def adjust_resources(self, memory_limit_mb: int) -> None: ...
 
 
 def _entry(memory_gb: float | None = None) -> ServiceEntry:
@@ -77,15 +93,39 @@ def test_estimate_prefers_manager_method() -> None:
 
 
 def test_estimate_falls_back_to_entry_hint() -> None:
-    class NoEstimate:
-        pass
+    class NoEstimate(ActivityMixin):
+        def __init__(self) -> None:
+            self.name = "noestimate"
+            self.dependencies: list[str] = []
+            self.activity = ()
+
+        def start(self) -> None: ...
+        def stop(self) -> None: ...
+        def is_healthy(self) -> bool:
+            return True
+        def get_metrics(self) -> dict:
+            return {"status": "running"}
+        def prepare_environment(self) -> None: ...
+        def adjust_resources(self, memory_limit_mb: int) -> None: ...
 
     assert estimate_service_memory(NoEstimate(), _entry(memory_gb=7)) == 7.0
 
 
 def test_estimate_defaults_to_zero_when_unknown() -> None:
-    class NoEstimate:
-        pass
+    class NoEstimate(ActivityMixin):
+        def __init__(self) -> None:
+            self.name = "noestimate"
+            self.dependencies: list[str] = []
+            self.activity = ()
+
+        def start(self) -> None: ...
+        def stop(self) -> None: ...
+        def is_healthy(self) -> bool:
+            return True
+        def get_metrics(self) -> dict:
+            return {"status": "running"}
+        def prepare_environment(self) -> None: ...
+        def adjust_resources(self, memory_limit_mb: int) -> None: ...
 
     assert estimate_service_memory(NoEstimate(), _entry()) == 0.0
 

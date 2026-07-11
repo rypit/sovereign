@@ -158,7 +158,7 @@ def _orch(
 
     kwargs.setdefault("health_interval", 0.01)
     kwargs.setdefault("metrics_interval", 0.01)
-    return Orchestrator(config, manager_factory=factory, **kwargs)
+    return Orchestrator(config, manager_factory=factory, **kwargs)  # type: ignore[arg-type]
 
 
 # --- topological sort ---
@@ -231,7 +231,7 @@ def test_resolve_called_during_boot() -> None:
     cfg = _config([{"name": "engine", "base_type": "x"}])
     orch = _orch(cfg)
     asyncio.run(orch.boot())
-    assert orch.managers["engine"].resolved_with is orch.resolver
+    assert orch.managers["engine"].resolved_with is orch.resolver  # type: ignore[attr-defined]
 
 
 def test_unhealthy_service_fails_boot() -> None:
@@ -341,7 +341,7 @@ def test_reconcile_detects_health_loss() -> None:
     async def scenario() -> None:
         await orch.boot()
         assert orch.states["engine"] is ServiceState.READY
-        orch.managers["engine"]._healthy = False  # simulate a crash
+        orch.managers["engine"]._healthy = False  # type: ignore[attr-defined]  # simulate a crash
         stop = asyncio.Event()
         task = asyncio.create_task(orch.reconcile(stop))
         await asyncio.sleep(0.1)
@@ -380,7 +380,7 @@ def test_health_loop_survives_probe_exception() -> None:
         def boom() -> bool:
             raise RuntimeError("probe blew up")
 
-        orch.managers["flaky"].is_healthy = boom
+        orch.managers["flaky"].is_healthy = boom  # type: ignore[method-assign]
         stop = asyncio.Event()
         task = asyncio.create_task(orch.reconcile(stop))
         await asyncio.sleep(0.1)
@@ -402,7 +402,7 @@ def test_metrics_loop_survives_metrics_exception() -> None:
         def boom() -> dict:
             raise RuntimeError("docker stats went weird")
 
-        orch.managers["flaky"].get_metrics = boom
+        orch.managers["flaky"].get_metrics = boom  # type: ignore[method-assign]
         stop = asyncio.Event()
         task = asyncio.create_task(orch.reconcile(stop))
         await asyncio.sleep(0.1)
@@ -501,7 +501,7 @@ def test_status_snapshot_shape() -> None:
 
     from datetime import datetime
 
-    assert datetime.fromisoformat(engine["since"])
+    assert datetime.fromisoformat(engine["since"])  # type: ignore[arg-type]
 
 
 def test_status_snapshot_descriptor_by_base_type() -> None:
@@ -546,7 +546,7 @@ def test_status_snapshot_since_present_immediately_after_build() -> None:
     orch = _orch(_config([{"name": "a", "base_type": "x"}]))
     orch.build()
     snap = orch.status_snapshot()
-    assert datetime.fromisoformat(snap["services"]["a"]["since"])
+    assert datetime.fromisoformat(snap["services"]["a"]["since"])  # type: ignore[arg-type]
 
 
 def test_set_state_updates_since_only_on_real_transition() -> None:
@@ -657,7 +657,7 @@ def test_boot_no_unknown_warning_when_source_known(caplog) -> None:
     cfg = _config([{"name": "engine", "base_type": "x"}])
     orch = _orch(cfg, mems={"engine": 8.0})
     orch.build()
-    orch.managers["engine"].estimated_memory_source = lambda: "local"
+    orch.managers["engine"].estimated_memory_source = lambda: "local"  # type: ignore[attr-defined]
     with caplog.at_level(logging.WARNING, logger="sovereign.runtime.orchestrator"):
         asyncio.run(orch.boot())
     assert not any("UNKNOWN memory footprint" in r.message for r in caplog.records)
@@ -673,8 +673,8 @@ def test_harness_materialized_after_deps_ready() -> None:
     orch = _orch(cfg, log, harness_log=log)
     asyncio.run(orch.boot())
     assert ("h", "materialize") in log
-    assert orch.harnesses["h"].resolved_with is orch.resolver
-    assert orch.harnesses["h"].materialize_count == 1
+    assert orch.harnesses["h"].resolved_with is orch.resolver  # type: ignore[attr-defined]
+    assert orch.harnesses["h"].materialize_count == 1  # type: ignore[attr-defined]
 
 
 def test_harness_provisioned_before_materialize() -> None:
@@ -686,7 +686,7 @@ def test_harness_provisioned_before_materialize() -> None:
     orch = _orch(cfg, log, harness_log=log)
     asyncio.run(orch.boot())
     assert log.index(("h", "prepare_environment")) < log.index(("h", "materialize"))
-    assert orch.harnesses["h"].prepare_count == 1
+    assert orch.harnesses["h"].prepare_count == 1  # type: ignore[attr-defined]
 
 
 def test_harness_reprovisioned_on_endpoint_change() -> None:
@@ -699,11 +699,11 @@ def test_harness_reprovisioned_on_endpoint_change() -> None:
 
     async def scenario() -> None:
         await orch.boot()
-        orch.managers["engine"]._port = 11999
+        orch.managers["engine"]._port = 11999  # type: ignore[attr-defined]
         await orch._restart("engine")
         # Re-materialization re-runs the (idempotent) provisioning hook too.
-        assert orch.harnesses["h"].prepare_count == 2
-        assert orch.harnesses["h"].materialize_count == 2
+        assert orch.harnesses["h"].prepare_count == 2  # type: ignore[attr-defined]
+        assert orch.harnesses["h"].materialize_count == 2  # type: ignore[attr-defined]
 
     asyncio.run(scenario())
 
@@ -719,7 +719,7 @@ def test_harness_not_materialized_when_deps_not_ready() -> None:
     orch._health_timeout = lambda name: 0.05  # type: ignore[method-assign]
     with pytest.raises(BootError):
         asyncio.run(orch.boot())
-    assert orch.harnesses["h"].materialize_count == 0
+    assert orch.harnesses["h"].materialize_count == 0  # type: ignore[attr-defined]
 
 
 def test_harness_remateralized_when_endpoint_changes() -> None:
@@ -732,12 +732,12 @@ def test_harness_remateralized_when_endpoint_changes() -> None:
 
     async def scenario() -> None:
         await orch.boot()
-        assert orch.harnesses["h"].materialize_count == 1
+        assert orch.harnesses["h"].materialize_count == 1  # type: ignore[attr-defined]
         # Simulate a restart landing on a new port.
-        orch.managers["engine"]._port = 11999
+        orch.managers["engine"]._port = 11999  # type: ignore[attr-defined]
         await orch._restart("engine")
         assert orch.registry.get("engine").port == 11999
-        assert orch.harnesses["h"].materialize_count == 2
+        assert orch.harnesses["h"].materialize_count == 2  # type: ignore[attr-defined]
 
     asyncio.run(scenario())
 
@@ -752,9 +752,9 @@ def test_harness_not_remateralized_when_endpoint_unchanged() -> None:
 
     async def scenario() -> None:
         await orch.boot()
-        assert orch.harnesses["h"].materialize_count == 1
+        assert orch.harnesses["h"].materialize_count == 1  # type: ignore[attr-defined]
         await orch._restart("engine")  # same port
-        assert orch.harnesses["h"].materialize_count == 1
+        assert orch.harnesses["h"].materialize_count == 1  # type: ignore[attr-defined]
 
     asyncio.run(scenario())
 

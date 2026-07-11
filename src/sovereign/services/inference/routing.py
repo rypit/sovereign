@@ -14,6 +14,7 @@ Metadata is read through the ``hf`` module (one patchable seam).
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
 from sovereign.core.base_manager import RoutesModelRef
@@ -32,7 +33,7 @@ log = logging.getLogger(__name__)
 
 
 def _claim_engine(
-    engines: list[type[ServiceManager]], ref: ModelRef, info: RepoInfo | None
+    engines: Sequence[type[ServiceManager]], ref: ModelRef, info: RepoInfo | None
 ) -> RoutesModelRef | None:
     """The engine with the highest ``claim_route`` confidence, or None if none claim."""
     best: RoutesModelRef | None = None
@@ -49,7 +50,7 @@ def _claim_engine(
 
 
 def resolve_entry_base_type(
-    entry: ServiceEntry, state_dir: Path, engines: list[type[ServiceManager]]
+    entry: ServiceEntry, state_dir: Path, engines: Sequence[type[ServiceManager]]
 ) -> str:
     """Resolve ``base_type`` for a ServiceEntry, routing ``"auto"`` entries.
 

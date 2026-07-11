@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from typing import Any
 
 from sovereign.config import SovereignConfig
 from sovereign.core.resolver import ConsumerKind, ResolvedEndpoint
@@ -12,10 +13,10 @@ from sovereign.runtime.orchestrator import Orchestrator
 class FakeEngineManager:
     consumer_kind = ConsumerKind.NATIVE
 
-    def __init__(self, entry) -> None:
+    def __init__(self, entry: Any) -> None:
         self.name = entry.name
         self.dependencies = entry.dependencies
-        self.activity = ()
+        self.activity: tuple[str, ...] = ()
 
     def prepare_environment(self) -> None: ...
     def start(self) -> None: ...
@@ -23,13 +24,25 @@ class FakeEngineManager:
     def is_healthy(self) -> bool:
         return True
 
-    def get_metrics(self) -> dict:
+    def get_metrics(self) -> dict[str, Any]:
         return {"status": "running"}
 
     def adjust_resources(self, memory_limit_mb: int) -> None: ...
-    def resolve(self, resolver) -> None: ...
-    def endpoint(self):
+    def resolve(self, resolver: Any) -> None: ...
+    def endpoint(self) -> ResolvedEndpoint | None:
         return ResolvedEndpoint("http", "127.0.0.1", 11435, model="llama3-70b")
+    def runtime_handle(self) -> dict[str, Any] | None:
+        return None
+    def get_start_args(self) -> list[str]:
+        return []
+    def run_args(self) -> list[str]:
+        return []
+    def per_slot_context(self) -> int | None:
+        return None
+    def estimated_memory_gb(self) -> float:
+        return 0.0
+    def estimated_memory_source(self) -> str:
+        return "unknown"
 
 
 def _config() -> SovereignConfig:

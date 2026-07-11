@@ -326,6 +326,7 @@ def test_load_dashboard_status_tolerates_garbage_status_json(tmp_path) -> None:
     # With a valid state.json present, the fallback still works.
     write_json(tmp_path / "state.json", {"services": {"engine": "ready"}})
     status = load_dashboard_status(tmp_path)
+    assert status is not None
     assert status["services"]["engine"]["state"] == "ready"
 
 
@@ -342,6 +343,7 @@ def test_monitor_falls_back_to_state_json(tmp_path) -> None:
         {"services": {"docker": "ready"}, "variant_file": None, "variant_hash": None},
     )
     status = load_dashboard_status(tmp_path)
+    assert status is not None
     assert status["services"]["docker"]["state"] == "ready"
     result = runner.invoke(
         app, ["monitor", "--once", "--state-dir", str(tmp_path)], env={"COLUMNS": "200"}

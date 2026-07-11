@@ -129,7 +129,7 @@ def _install_fake_httpx(monkeypatch) -> None:
             return FakeResponse()
 
     fake = types.ModuleType("httpx")
-    fake.AsyncClient = FakeAsyncClient
+    fake.AsyncClient = FakeAsyncClient  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, "httpx", fake)
 
 

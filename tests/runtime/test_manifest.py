@@ -73,7 +73,7 @@ def test_manifest_start_args_redacted(tmp_path) -> None:
     )
     orch = Orchestrator(
         config,
-        manager_factory=KeyedManager,
+        manager_factory=KeyedManager,  # type: ignore[arg-type]
         state_dir=tmp_path,
         health_interval=0.01,
     )

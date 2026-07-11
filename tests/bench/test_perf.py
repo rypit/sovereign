@@ -71,7 +71,7 @@ class FakeAsyncClient:
 
 def _install_fake_httpx(monkeypatch, lines: list[str]) -> None:
     fake = types.ModuleType("httpx")
-    fake.AsyncClient = FakeAsyncClient
+    fake.AsyncClient = FakeAsyncClient  # type: ignore[attr-defined]
     FakeAsyncClient.next_lines = lines
     monkeypatch.setitem(sys.modules, "httpx", fake)
 
@@ -171,7 +171,7 @@ def test_primary_engine_picks_first_with_model() -> None:
         ]
     }
     engine = _primary_engine(manifest)
-    assert engine["name"] == "engine"
+    assert engine["name"] == "engine"  # type: ignore[index]
 
 
 def test_primary_engine_none_when_no_model_endpoint() -> None:
@@ -197,8 +197,8 @@ def _write_manifest(state_dir, *, with_engine=True) -> None:
                     "host": "127.0.0.1",
                     "port": 11435,
                     "model": "llama3-70b",
-                },
-                "co_resident": ["docker"],
+                },  # type: ignore[dict-item]
+                "co_resident": ["docker"],  # type: ignore[dict-item]
             }
         )
     write_json(

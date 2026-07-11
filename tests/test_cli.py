@@ -138,7 +138,7 @@ def test_down_stops_handles_and_updates_state(tmp_path, monkeypatch) -> None:
 
     stopped: list = []
     monkeypatch.setattr(
-        main, "stop_service_handle", lambda handle, **kw: stopped.append(handle) or "stopped"
+        main, "stop_service_handle", lambda handle, **kw: stopped.append(handle) or "stopped"  # type: ignore[func-returns-value]
     )
     result = runner.invoke(app, ["down", "--state-dir", str(tmp_path)])
     assert result.exit_code == 0
@@ -322,7 +322,7 @@ def test_harness_invoke_prints_result(tmp_path, monkeypatch) -> None:
     assert result.exit_code == 0, result.stdout
     assert "success=True" in result.stdout
     assert "did the thing" in result.stdout
-    assert _FakeTestHarness.invoked_with.prompt == "do the thing"
+    assert _FakeTestHarness.invoked_with.prompt == "do the thing"  # type: ignore[union-attr]
     assert _FakeTestHarness.prepared_count == 1  # CLI provisions like the Orchestrator
 
 
@@ -447,7 +447,7 @@ def test_bench_run_attach_mode_success(tmp_path, monkeypatch) -> None:
         def stream(self, *a, **kw):
             return FakeResponse()
 
-    fake_httpx.AsyncClient = FakeAsyncClient
+    fake_httpx.AsyncClient = FakeAsyncClient  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, "httpx", fake_httpx)
 
     write_json(
@@ -766,7 +766,7 @@ def test_models_prune_confirms_and_deletes(monkeypatch) -> None:
     cache = types.SimpleNamespace(
         repos=[_fake_repo("org/big", 20 * 1024**3)],
         size_on_disk=20 * 1024**3,
-        delete_revisions=lambda *hashes: deleted.append(hashes) or strategy,
+        delete_revisions=lambda *hashes: deleted.append(hashes) or strategy,  # type: ignore[func-returns-value]
     )
     monkeypatch.setattr(huggingface_hub, "scan_cache_dir", lambda: cache)
     result = runner.invoke(app, ["models", "prune", "org/big"], input="y\n")

@@ -293,7 +293,7 @@ def test_prepare_environment_provisions_first(monkeypatch) -> None:
     monkeypatch.setattr(
         native_mod.shutil,
         "which",
-        lambda _b: order.append("which") or "/opt/homebrew/bin/llama-server",
+        lambda _b: order.append("which") or "/opt/homebrew/bin/llama-server",  # type: ignore[func-returns-value]
     )
     m = _manager({"model": "org/some-hf-repo"})  # repo id: no local file check
     m.prepare_environment()
@@ -354,13 +354,13 @@ def test_is_healthy_false_when_no_process() -> None:
 
 def test_is_healthy_false_when_process_exited() -> None:
     m = _manager()
-    m.process = FakeProc(poll_value=0)
+    m.process = FakeProc(poll_value=0)  # type: ignore[assignment]
     assert m.is_healthy() is False
 
 
 def test_is_healthy_true_on_http_200(monkeypatch) -> None:
     m = _manager()
-    m.process = FakeProc(poll_value=None)
+    m.process = FakeProc(poll_value=None)  # type: ignore[assignment]
 
     class FakeResp:
         status = 200
@@ -377,7 +377,7 @@ def test_is_healthy_true_on_http_200(monkeypatch) -> None:
 
 def test_is_healthy_false_on_connection_error(monkeypatch) -> None:
     m = _manager()
-    m.process = FakeProc(poll_value=None)
+    m.process = FakeProc(poll_value=None)  # type: ignore[assignment]
 
     def boom(url, timeout=None):
         raise native_mod.urllib.error.URLError("refused")
@@ -437,18 +437,18 @@ def test_runtime_handle_records_pid_and_create_time() -> None:
     import psutil
 
     m = _manager()
-    m.process = FakeProc(pid=os.getpid(), poll_value=None)  # a real, live PID
+    m.process = FakeProc(pid=os.getpid(), poll_value=None)  # type: ignore[assignment]  # a real, live PID
     handle = m.runtime_handle()
-    assert handle["kind"] == "native"
-    assert handle["pid"] == os.getpid()
-    assert handle["create_time"] == psutil.Process(os.getpid()).create_time()
+    assert handle["kind"] == "native"  # type: ignore[index]
+    assert handle["pid"] == os.getpid()  # type: ignore[index]
+    assert handle["create_time"] == psutil.Process(os.getpid()).create_time()  # type: ignore[index]
 
 
 def test_runtime_handle_omits_create_time_when_process_vanished(monkeypatch) -> None:
     import psutil
 
     m = _manager()
-    m.process = FakeProc(pid=4242, poll_value=None)
+    m.process = FakeProc(pid=4242, poll_value=None)  # type: ignore[assignment]
 
     def raise_no_such(pid):
         raise psutil.NoSuchProcess(pid)
@@ -469,7 +469,7 @@ def test_get_metrics_stopped_when_no_process() -> None:
 
 def test_get_metrics_running(monkeypatch) -> None:
     m = _manager()
-    m.process = FakeProc(pid=4242, poll_value=None)
+    m.process = FakeProc(pid=4242, poll_value=None)  # type: ignore[assignment]
 
     class FakeMem:
         rss = 14500 * 1024**2
@@ -493,7 +493,7 @@ def test_get_metrics_running(monkeypatch) -> None:
 
 def test_get_metrics_uses_phys_footprint_when_available(monkeypatch) -> None:
     m = _manager()
-    m.process = FakeProc(pid=4242, poll_value=None)
+    m.process = FakeProc(pid=4242, poll_value=None)  # type: ignore[assignment]
 
     class FakeMem:
         rss = 14500 * 1024**2
@@ -520,7 +520,7 @@ def test_get_metrics_uses_phys_footprint_when_available(monkeypatch) -> None:
 
 def test_get_metrics_falls_back_to_rss_when_footprint_unavailable(monkeypatch) -> None:
     m = _manager()
-    m.process = FakeProc(pid=4242, poll_value=None)
+    m.process = FakeProc(pid=4242, poll_value=None)  # type: ignore[assignment]
 
     class FakeMem:
         rss = 14500 * 1024**2

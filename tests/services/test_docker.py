@@ -215,10 +215,10 @@ def test_prepare_environment_provisions_first(monkeypatch) -> None:
 
     order: list[str] = []
     monkeypatch.setattr(
-        Provisioner, "provision", classmethod(lambda cls: order.append("provision"))
+        Provisioner, "provision", classmethod(lambda cls: (order.append("provision"), None)[1])  # type: ignore[func-returns-value]
     )
     monkeypatch.setattr(
-        mgr_mod.shutil, "which", lambda _b: order.append("which") or "/usr/local/bin/docker"
+        mgr_mod.shutil, "which", lambda _b: (order.append("which"), "/usr/local/bin/docker")[1]  # type: ignore[func-returns-value]
     )
     monkeypatch.setattr(mgr_mod.subprocess, "run", _fake_run(returncode=0, stdout="29.6.1"))
     m = _manager({"image": "img:latest", "port": 3000, "auto_pull": False})
