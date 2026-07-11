@@ -148,6 +148,19 @@ class NativeEngineManager(ActivityMixin, Provisioner):
         ref = parse_model_ref(model)
         return hf_models.estimate_model_bytes(ref, self.model_artifact_kind) or 0
 
+    def estimated_memory_gb(self) -> float:
+        """Estimate resident memory from model weights and engine-specific overhead.
+
+        The base implementation sums model + draft model bytes; engines override
+        to add their specific overhead (KV cache, prompt cache, etc.).
+        """
+        if self.memory_override_gb is not None:
+            return round(self.memory_override_gb, 2)
+        total = self._model_bytes(self.config.model)
+        if self.config.draft_model is not None:
+            total += self._model_bytes(self.config.draft_model)
+        return round(total / (1024**3), 2)
+
     def estimated_memory_source(self) -> str:
         """Where admission's weight estimate came from (local|cached|hub|unknown).
 
