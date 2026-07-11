@@ -118,7 +118,7 @@ def _service_entry(orch: Orchestrator, name: str) -> dict[str, Any]:
 
     reserved = orch.budgeter.reservations().get(name)
     if reserved is not None:
-        item["estimated_memory_gb"] = round(reserved, 2)
+        item["estimated_memory_bytes"] = reserved
     if isinstance(manager, SupportsPerSlotContext):
         per_slot = manager.per_slot_context()
         if per_slot is not None:
@@ -148,10 +148,10 @@ def build_manifest(orch: Orchestrator) -> dict[str, Any]:
         "variant_hash": orch.variant_hash,
         "resources": orch.config.resources.model_dump(mode="json"),
         "memory_budget": {
-            "total_gb": orch.budgeter.total_gb,
-            "safety_margin_gb": orch.budgeter.safety_margin_gb,
-            "reserved_gb": round(orch.budgeter.reserved_gb, 2),
-            "available_gb": round(orch.budgeter.available_gb, 2),
+            "total_bytes": orch.budgeter.total_bytes,
+            "safety_margin_bytes": orch.budgeter.safety_margin_bytes,
+            "reserved_bytes": orch.budgeter.reserved_bytes,
+            "available_bytes": orch.budgeter.available_bytes,
         },
         "services": [_service_entry(orch, name) for name in orch.boot_order],
         "harnesses": [_harness_entry(orch, entry) for entry in orch.config.harnesses],

@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING, Any
 
 from sovereign.bench.spec import BenchSpec, Thresholds
 from sovereign.core.state import read_json
+from sovereign.core.units import fmt_size
 
 if TYPE_CHECKING:
     from sovereign.bench.runner import CellExecutor, Job
@@ -139,7 +140,7 @@ def summarize(samples: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def _passes_thresholds(
-    result: dict[str, Any], thresholds: Thresholds, available_gb: float | None
+    result: dict[str, Any], thresholds: Thresholds, available_bytes: int | None
 ) -> tuple[bool, list[str]]:
     reasons: list[str] = []
     tok_s_mean = result["tok_s"]["mean"]
@@ -150,10 +151,14 @@ def _passes_thresholds(
     if thresholds.max_ttft_ms is not None:
         if ttft_mean is None or ttft_mean > thresholds.max_ttft_ms:
             reasons.append(f"ttft_ms {ttft_mean} > max_ttft_ms {thresholds.max_ttft_ms}")
-    if thresholds.min_headroom_gb is not None:
-        if available_gb is None or available_gb < thresholds.min_headroom_gb:
+    if thresholds.min_headroom_bytes is not None:
+        if available_bytes is None or available_bytes < thresholds.min_headroom_bytes:
+            available_display = (
+                fmt_size(available_bytes) if available_bytes is not None else None
+            )
             reasons.append(
-                f"available_gb {available_gb} < min_headroom_gb {thresholds.min_headroom_gb}"
+                f"available {available_display} < "
+                f"min_headroom {fmt_size(thresholds.min_headroom_bytes)}"
             )
     return (not reasons, reasons)
 
@@ -201,8 +206,8 @@ async def run_perf_attach_cell(job: Job, spec: BenchSpec, state_dir: str | Path)
     result["co_resident"] = engine.get("co_resident", [])
     result["variant_hash"] = manifest.get("variant_hash")
 
-    available_gb = manifest.get("memory_budget", {}).get("available_gb")
-    passed, reasons = _passes_thresholds(result, spec.thresholds, available_gb)
+    available_bytes = manifest.get("memory_budget", {}).get("available_bytes")
+    passed, reasons = _passes_thresholds(result, spec.thresholds, available_bytes)
     result["gate_passed"] = passed
     result["gate_reasons"] = reasons
     return result

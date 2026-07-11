@@ -20,6 +20,7 @@ from sovereign.bench.quality import run_quality_cell
 from sovereign.bench.runner import is_perf_only_cell
 from sovereign.config import SovereignConfig, load_config
 from sovereign.core.resources import ResourceBudgeter, estimate_service_memory
+from sovereign.core.units import fmt_size
 from sovereign.runtime.orchestrator import Orchestrator
 
 if TYPE_CHECKING:
@@ -31,7 +32,7 @@ class CleanroomError(Exception):
     """Raised when a clean-room cell can't boot (or is gated before trying)."""
 
 
-def _would_fit(config: SovereignConfig) -> tuple[bool, float, float]:
+def _would_fit(config: SovereignConfig) -> tuple[bool, int, int]:
     """Pre-prune: would this stack's own services fit its own declared budget?
 
     Cheap and boot-free — builds managers (no subprocesses spawned) and reuses
@@ -42,13 +43,14 @@ def _would_fit(config: SovereignConfig) -> tuple[bool, float, float]:
     orch = Orchestrator(config)
     orch.build()
     budgeter = ResourceBudgeter(
-        config.resources.max_unified_memory_gb, config.resources.safety_margin_gb
+        total_bytes=config.resources.max_unified_memory_bytes,
+        safety_margin_bytes=config.resources.safety_margin_bytes,
     )
-    total = sum(
+    needed_bytes = sum(
         estimate_service_memory(manager, orch.entry(name))
         for name, manager in orch.managers.items()
     )
-    return budgeter.can_fit(total), total, budgeter.available_gb
+    return budgeter.can_fit(needed_bytes), needed_bytes, budgeter.available_bytes
 
 
 async def run_cell_cleanroom(
@@ -62,11 +64,11 @@ async def run_cell_cleanroom(
     """
     config = load_config(job.stack)
 
-    fits, needed_gb, available_gb = _would_fit(config)
+    fits, needed_bytes, available_bytes = _would_fit(config)
     if not fits:
         raise CleanroomError(
-            f"gated: stack '{job.stack}' needs ~{needed_gb:.1f}GB, only "
-            f"{available_gb:.1f}GB available under its own declared budget"
+            f"gated: stack '{job.stack}' needs ~{fmt_size(needed_bytes)}, only "
+            f"{fmt_size(available_bytes)} available under its own declared budget"
         )
 
     orch = Orchestrator(config, variant_file=job.stack, state_dir=cell_state_dir)

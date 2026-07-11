@@ -41,6 +41,7 @@ from sovereign.core.resources import (
     estimate_source,
 )
 from sovereign.core.state import file_hash, write_json
+from sovereign.core.units import fmt_size
 from sovereign.runtime.manifest import write_manifest
 from sovereign.runtime.status import StatusSnapshot
 
@@ -292,10 +293,10 @@ class Orchestrator:
         try:
             self.budgeter.admit(name, estimated)
             log.debug(
-                "admitted %s at %.1f GB (%.1f GB still available)",
+                "admitted %s at %s (%s still available)",
                 name,
-                estimated,
-                self.budgeter.available_gb,
+                fmt_size(estimated),
+                fmt_size(self.budgeter.available_bytes),
             )
         except ResourceExhaustedError:
             self._set_state(name, ServiceState.FAILED)
@@ -478,9 +479,9 @@ class Orchestrator:
         return {
             "updated_at": datetime.now(UTC).isoformat(),
             "budget": {
-                "usable_gb": self.budgeter.usable_gb,
-                "reserved_gb": round(self.budgeter.reserved_gb, 2),
-                "available_gb": round(self.budgeter.available_gb, 2),
+                "usable_bytes": self.budgeter.usable_bytes,
+                "reserved_bytes": self.budgeter.reserved_bytes,
+                "available_bytes": self.budgeter.available_bytes,
             },
             "services": {
                 name: {
@@ -493,7 +494,7 @@ class Orchestrator:
                         else None
                     ),
                     "descriptor": _service_descriptor(self._entries[name]),
-                    "estimated_gb": reservations.get(name),
+                    "estimated_bytes": reservations.get(name),
                     "metrics": self.metrics.get(name, {}),
                     "activity": {"lines": self._activity_lines(name)},
                 }

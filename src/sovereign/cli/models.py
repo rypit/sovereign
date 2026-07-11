@@ -7,16 +7,9 @@ from datetime import UTC, datetime
 import typer
 
 from sovereign.cli._common import console
+from sovereign.core.units import fmt_size
 
 models_app = typer.Typer(help="Inspect and prune the shared HuggingFace model cache.")
-
-
-def _fmt_bytes(n: float) -> str:
-    """Human-readable byte size (GB for anything model-sized)."""
-    gb = n / (1024**3)
-    if gb >= 1:
-        return f"{gb:.1f} GB"
-    return f"{n / (1024**2):.0f} MB"
 
 
 @models_app.callback(invoke_without_command=True)
@@ -49,9 +42,9 @@ def models_list() -> None:
     table.add_column("LAST_ACCESSED")
     for repo in repos:
         last = datetime.fromtimestamp(repo.last_accessed, tz=UTC).strftime("%Y-%m-%d")
-        table.add_row(repo.repo_id, _fmt_bytes(repo.size_on_disk), str(repo.nb_files), last)
+        table.add_row(repo.repo_id, fmt_size(repo.size_on_disk), str(repo.nb_files), last)
     console.print(table)
-    console.print(f"[bold]Total: {_fmt_bytes(cache.size_on_disk)}[/bold]")
+    console.print(f"[bold]Total: {fmt_size(cache.size_on_disk)}[/bold]")
 
 
 @models_app.command("prune")
@@ -67,9 +60,9 @@ def models_prune(
         console.print(f"[red]No cached repo '{repo}'. Run `sovereign models list`.[/red]")
         raise typer.Exit(1)
 
-    console.print(f"{repo}: {_fmt_bytes(match.size_on_disk)} across {match.nb_files} files")
+    console.print(f"{repo}: {fmt_size(match.size_on_disk)} across {match.nb_files} files")
     if not typer.confirm("Delete all cached revisions?"):
         raise typer.Exit(0)
     strategy = cache.delete_revisions(*[rev.commit_hash for rev in match.revisions])
     strategy.execute()
-    console.print(f"[green]Freed {_fmt_bytes(strategy.expected_freed_size)}.[/green]")
+    console.print(f"[green]Freed {fmt_size(strategy.expected_freed_size)}.[/green]")

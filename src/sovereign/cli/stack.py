@@ -30,6 +30,7 @@ from sovereign.cli._common import (
     console,
 )
 from sovereign.core.state import file_hash, mark_stack_stopped, read_json
+from sovereign.core.units import fmt_size
 from sovereign.runtime.dashboard import (
     MetricHistory,
     budget_footer,
@@ -276,13 +277,13 @@ def plan(
     stack_plan = plan_stack(config, state_dir)
 
     table = Table(title=f"Plan for {file}")
-    for col in ("SERVICE", "BASE_TYPE", "MODEL", "SOURCE", "EST GB", "VERDICT"):
+    for col in ("SERVICE", "BASE_TYPE", "MODEL", "SOURCE", "EST", "VERDICT"):
         table.add_column(col)
     for svc in stack_plan.services:
         routed = svc.requested_auto and svc.base_type != "auto"
         base_type = f"{svc.base_type} (auto)" if routed else svc.base_type
         color = _VERDICT_COLORS.get(svc.verdict, "white")
-        est = f"{svc.estimated_gb:.1f}" if svc.estimated_gb is not None else "-"
+        est = fmt_size(svc.estimated_bytes) if svc.estimated_bytes is not None else "-"
         # Fail-open admission is deliberate but must be visible: an unknown
         # estimate is admitted at 0 GB, i.e. outside the budget's protection.
         source = f"[yellow]{svc.source}[/yellow]" if svc.source == "unknown" else svc.source
@@ -305,9 +306,9 @@ def plan(
     budget = stack_plan.budget
     footer = budget_footer(
         {
-            "usable_gb": budget.usable_gb,
-            "reserved_gb": round(budget.reserved_gb, 2),
-            "available_gb": round(budget.available_gb, 2),
+            "usable_bytes": budget.usable_bytes,
+            "reserved_bytes": budget.reserved_bytes,
+            "available_bytes": budget.available_bytes,
         }
     )
     if footer is not None:
