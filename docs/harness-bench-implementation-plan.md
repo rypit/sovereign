@@ -98,7 +98,7 @@ New package `src/sovereign/bench/`:
 
 - Bench owns the stack: for each stack axis value, boot the variant via the Orchestrator as a library (`serve_forever` is interactive — add/reuse a bounded `boot() … shutdown()` context path in `orchestrator.py`), run all cells for that stack, tear down before the next. Model-load cost is why cells are grouped per stack.
 - **Lockfile** `.sovereign/bench.lock` (pid + run_id): `bench run` refuses if `state.json` shows a live daemon-managed stack (and documents that `sovereign up` should refuse while the lock exists — small guard in `_boot_and_serve`). Never fight the daemon.
-- **Budgeter pre-prune:** before booting a cell's stack, use `ResourceBudgeter.can_fit` with the entries' `estimated_memory_gb` to mark impossible cells `gated(memory)` for free.
+- **Budgeter pre-prune:** before booting a cell's stack, use `ResourceBudgeter.can_fit` with the entries' `estimated_bytes` to mark impossible cells `gated(memory)` for free.
 - **Tests:** orchestrator-as-library boot/teardown with `FakeManager` factories; lock contention cases.
 
 *Exit: a spec listing two variant files sweeps both, booting/tearing down each in turn, refusing to run while a daemon stack is up.*
