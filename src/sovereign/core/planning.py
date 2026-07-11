@@ -41,7 +41,7 @@ class ServicePlan:
     requested_auto: bool  #: whether the YAML declared ``auto`` (or omitted base_type)
     model: str
     source: str  #: where the estimate came from: declared|local|cached|hub|unknown|-
-    estimated_gb: float | None  #: the admitted number; None when nothing is known
+    estimated_bytes: int | None  #: the admitted number (bytes); None when nothing is known
     verdict: str
     error: str | None = None  #: the underlying message for non-OK verdicts
 
@@ -62,7 +62,7 @@ def plan_stack(config: SovereignConfig, state_dir: Path) -> StackPlan:
     """Route, estimate, and admit every service exactly as boot would. No downloads."""
     populate_registries()
     budgeter = ResourceBudgeter(
-        config.resources.max_unified_memory_gb, config.resources.safety_margin_gb
+        config.resources.max_unified_memory_bytes, config.resources.safety_margin_bytes
     )
     services = [_plan_service(entry, state_dir, budgeter) for entry in config.services]
     return StackPlan(services=services, budget=budgeter)
@@ -85,7 +85,7 @@ def _plan_service(
             requested_auto=requested_auto,
             model=model,
             source="-",
-            estimated_gb=None,
+            estimated_bytes=None,
             verdict=VERDICT_ROUTING_ERROR,
             error=str(exc),
         )
@@ -102,14 +102,14 @@ def _plan_service(
             requested_auto=requested_auto,
             model=model,
             source="-",
-            estimated_gb=None,
+            estimated_bytes=None,
             verdict=VERDICT_CONFIG_ERROR,
             error=str(exc),
         )
 
     estimated = estimate_service_memory(manager, entry)
     source = estimate_source(manager, entry)
-    display_gb: float | None = estimated if (estimated or source != "unknown") else None
+    display_bytes: int | None = estimated if (estimated or source != "unknown") else None
 
     # Admit against the running budget — same refuse-to-boot rule as boot.
     try:
@@ -121,7 +121,7 @@ def _plan_service(
             requested_auto=requested_auto,
             model=model,
             source=source,
-            estimated_gb=display_gb,
+            estimated_bytes=display_bytes,
             verdict=VERDICT_REFUSED,
             error=str(exc),
         )
@@ -132,7 +132,7 @@ def _plan_service(
         requested_auto=requested_auto,
         model=model,
         source=source,
-        estimated_gb=display_gb,
+        estimated_bytes=display_bytes,
         verdict=VERDICT_OK,
     )
 

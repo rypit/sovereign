@@ -89,7 +89,7 @@ class ServiceManager(Protocol):
         """
         ...
 
-    def adjust_resources(self, memory_limit_mb: int) -> None:
+    def adjust_resources(self, memory_limit_bytes: int) -> None:
         """Shrink resource use in response to pressure (e.g. reduce cache size)."""
         ...
 
@@ -127,8 +127,8 @@ class SupportsModelPreparation(Protocol):
 class SupportsMemoryEstimate(Protocol):
     """Estimates resident memory for admission control (§7 refuse-to-boot)."""
 
-    def estimated_memory_gb(self) -> float:
-        """Expected unified-memory footprint in GB (0.0 when unknown)."""
+    def estimated_memory_bytes(self) -> int:
+        """Expected unified-memory footprint in bytes (0 when unknown)."""
         ...
 
 

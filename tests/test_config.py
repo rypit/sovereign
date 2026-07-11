@@ -14,7 +14,7 @@ FIXTURE = Path(__file__).parent / "fixtures" / "sample.yaml"
 def test_sample_fixture_loads() -> None:
     cfg = load_config(FIXTURE)
     assert cfg.version == "1.1"
-    assert cfg.resources.max_unified_memory_gb == 128
+    assert cfg.resources.max_unified_memory_bytes == 128 * 10**9
     assert cfg.resources.default_priority is Priority.MEDIUM
 
     names = {s.name for s in cfg.services}
@@ -120,3 +120,24 @@ def test_explicit_base_type_needs_no_model() -> None:
     data = _base_stack(services=[{"name": "a", "base_type": "llama_cpp"}])
     cfg = SovereignConfig.model_validate(data)  # must not raise
     assert cfg.services[0].base_type == "llama_cpp"
+
+
+# --- bytes-everywhere: GB-in-YAML, bytes-internally (validation_alias) ---
+def test_internal_bytes_field_name_rejected_as_input_key() -> None:
+    data = _base_stack(
+        resources={"max_unified_memory_bytes": 64, "safety_margin_gb": 4}
+    )
+    with pytest.raises(ValueError):
+        SovereignConfig.model_validate(data)
+
+
+def test_fractional_gb_converts_to_bytes() -> None:
+    data = _base_stack(
+        services=[
+            {"name": "a", "base_type": "llama_cpp"},
+            {"name": "b", "base_type": "docker", "dependencies": ["a"], "memory_gb": 1.5},
+        ]
+    )
+    cfg = SovereignConfig.model_validate(data)
+    b = next(s for s in cfg.services if s.name == "b")
+    assert b.memory_bytes == 1_500_000_000

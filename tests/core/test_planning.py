@@ -63,7 +63,7 @@ def test_plan_declared_memory_admits_and_labels_source(tmp_path) -> None:
     )
     plan = plan_stack(cfg, tmp_path)
     svc = plan.services[0]
-    assert (svc.verdict, svc.source, svc.estimated_gb) == (VERDICT_OK, "declared", 4.0)
+    assert (svc.verdict, svc.source, svc.estimated_bytes) == (VERDICT_OK, "declared", 4 * 10**9)
     assert plan.ok
 
 
