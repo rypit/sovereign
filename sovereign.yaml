@@ -26,57 +26,57 @@ resources:
   default_priority: medium
 
 services:
-  - name: searxng
-    base_type: docker
-    priority: medium
-    health_check:
-      type: http
-      endpoint: /
-      port: 8888
-      timeout_seconds: 120
-    config:
-      image: searxng/searxng:latest
-      port: 8888
-      container_port: 8080
-      volumes:
-        - ~/.sovereign/searxng:/etc/searxng
-      files:
-        - path: ~/.sovereign/searxng/settings.yml
-          content: |
-            use_default_settings: true
-            server:
-              secret_key: "${RANDOM_HEX:64}"
-              limiter: false
-            search:
-              formats: [html, json]
-    env_overrides:
-      SEARXNG_BASE_URL: "http://localhost:8888/"
-    dependencies: []
+  # - name: searxng
+  #   base_type: docker
+  #   priority: medium
+  #   health_check:
+  #     type: http
+  #     endpoint: /
+  #     port: 8888
+  #     timeout_seconds: 120
+  #   config:
+  #     image: searxng/searxng:latest
+  #     port: 8888
+  #     container_port: 8080
+  #     volumes:
+  #       - ~/.sovereign/searxng:/etc/searxng
+  #     files:
+  #       - path: ~/.sovereign/searxng/settings.yml
+  #         content: |
+  #           use_default_settings: true
+  #           server:
+  #             secret_key: "${RANDOM_HEX:64}"
+  #             limiter: false
+  #           search:
+  #             formats: [html, json]
+  #   env_overrides:
+  #     SEARXNG_BASE_URL: "http://localhost:8888/"
+  #   dependencies: []
 
-  - name: open_webui
-    base_type: docker
-    priority: medium
-    health_check:
-      type: http
-      endpoint: /health
-      port: 3000
-      timeout_seconds: 180         # first container start can be slow
-    config:
-      image: ghcr.io/open-webui/open-webui:main
-      port: 3000                   # host port -> open it at http://localhost:3000
-      container_port: 8080         # Open WebUI listens on 8080 inside the container
-      volumes:
-        - sovereign_open_webui:/app/backend/data   # persist across restarts
-    env_overrides:
-      WEBUI_AUTH: "False"          # skip login for a quick local test
-      # Web search via SearXNG (set both legacy + current keys; unknown ones ignored):
-      ENABLE_WEB_SEARCH: "true"
-      ENABLE_RAG_WEB_SEARCH: "True"
-      WEB_SEARCH_ENGINE: "searxng"
-      RAG_WEB_SEARCH_ENGINE: "searxng"
-      SEARXNG_QUERY_URL: "{{ searxng.endpoint }}/search?q=<query>&format=json"
-      OPENAI_API_BASE_URL: "{{ mlx_heavy.endpoint }}/v1"
-    dependencies: [searxng, mlx_heavy]
+  # - name: open_webui
+  #   base_type: docker
+  #   priority: medium
+  #   health_check:
+  #     type: http
+  #     endpoint: /health
+  #     port: 3000
+  #     timeout_seconds: 180         # first container start can be slow
+  #   config:
+  #     image: ghcr.io/open-webui/open-webui:main
+  #     port: 3000                   # host port -> open it at http://localhost:3000
+  #     container_port: 8080         # Open WebUI listens on 8080 inside the container
+  #     volumes:
+  #       - sovereign_open_webui:/app/backend/data   # persist across restarts
+  #   env_overrides:
+  #     WEBUI_AUTH: "False"          # skip login for a quick local test
+  #     # Web search via SearXNG (set both legacy + current keys; unknown ones ignored):
+  #     ENABLE_WEB_SEARCH: "true"
+  #     ENABLE_RAG_WEB_SEARCH: "True"
+  #     WEB_SEARCH_ENGINE: "searxng"
+  #     RAG_WEB_SEARCH_ENGINE: "searxng"
+  #     SEARXNG_QUERY_URL: "{{ searxng.endpoint }}/search?q=<query>&format=json"
+  #     OPENAI_API_BASE_URL: "{{ mlx_heavy.endpoint }}/v1"
+  #   dependencies: [searxng, mlx_heavy]
 
 # ---------------------------------------------------------------------------
 # Add a native inference engine once you have a GGUF model on disk.
@@ -114,13 +114,13 @@ services:
       type: http
       endpoint: /health
       port: 8080
-      # Only covers model *load* now — Sovereign pre-downloads the model in the
-      # DOWNLOADING state before this timer starts (progress shows in the dashboard).
       timeout_seconds: 120
     config:
-      model: "mlx-community/Qwen3.6-27B-8bit"
-      num_draft_tokens: 2
+      model: "mlx-community/Qwen3-Coder-Next-8bit"
+      prompt_cache_size: 32768
+      prompt_cache_bytes: 17179869184
+      max_tokens: 8192
       trust_remote_code: true
       host: 127.0.0.1
-      temp: 0.6
+      temp: 0
     dependencies: []

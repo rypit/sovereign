@@ -1,0 +1,29 @@
+# Minimal MLX engine stack for testing `sovereign up` with a real model.
+#
+#   uv sync                       # installs mlx-lm (provides mlx_lm.server)
+#   uv run sovereign up -f mlx.yaml
+#
+# On first boot it downloads a tiny (~80MB) model from HuggingFace, so the service
+# sits in STARTING while it downloads + loads, then flips to RUNNING once
+# mlx_lm.server answers GET /health. Ctrl+C to stop.
+
+version: "1.1"
+
+resources:
+  max_unified_memory_gb: 128     # adjust to your machine
+  safety_margin_gb: 8
+
+services:
+  - name: mlx_smol
+    base_type: mlx_lm
+    priority: critical
+    health_check:
+      type: http
+      endpoint: /health
+      port: 8080
+      timeout_seconds: 300         # generous: first run downloads the model
+    config:
+      model: "mlx-community/SmolLM-135M-Instruct-4bit"   # ~80MB; swap for a bigger one
+      host: 127.0.0.1
+      max_tokens: 512
+    dependencies: []
