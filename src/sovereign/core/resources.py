@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING
 
 from sovereign.config import Priority
 from sovereign.core.base_manager import SupportsEstimateSource, SupportsMemoryEstimate
+from sovereign.core.units import fmt_size
 
 if TYPE_CHECKING:
     from sovereign.config import ServiceEntry
@@ -34,44 +35,44 @@ class ResourceExhaustedError(Exception):
 
 
 class ResourceBudgeter:
-    """Admission control over a declared unified-memory budget."""
+    """Admission control over a declared unified-memory budget (int bytes)."""
 
-    def __init__(self, total_gb: float, safety_margin_gb: float = 0.0) -> None:
-        self.total_gb = float(total_gb)
-        self.safety_margin_gb = float(safety_margin_gb)
-        self._reserved: dict[str, float] = {}
+    def __init__(self, total_bytes: int, safety_margin_bytes: int = 0) -> None:
+        self.total_bytes = total_bytes
+        self.safety_margin_bytes = safety_margin_bytes
+        self._reserved: dict[str, int] = {}
 
     @property
-    def reserved_gb(self) -> float:
+    def reserved_bytes(self) -> int:
         return sum(self._reserved.values())
 
     @property
-    def usable_gb(self) -> float:
-        return self.total_gb - self.safety_margin_gb
+    def usable_bytes(self) -> int:
+        return self.total_bytes - self.safety_margin_bytes
 
     @property
-    def available_gb(self) -> float:
-        return self.usable_gb - self.reserved_gb
+    def available_bytes(self) -> int:
+        return self.usable_bytes - self.reserved_bytes
 
-    def can_fit(self, estimated_gb: float) -> bool:
-        return estimated_gb <= self.available_gb + 1e-9
+    def can_fit(self, estimated_bytes: int) -> bool:
+        return estimated_bytes <= self.available_bytes
 
-    def admit(self, name: str, estimated_gb: float) -> None:
+    def admit(self, name: str, estimated_bytes: int) -> None:
         """Reserve budget for ``name`` or raise a specific, actionable error."""
-        if not self.can_fit(estimated_gb):
-            raise ResourceExhaustedError(self._denial_message(name, estimated_gb))
-        self._reserved[name] = estimated_gb
+        if not self.can_fit(estimated_bytes):
+            raise ResourceExhaustedError(self._denial_message(name, estimated_bytes))
+        self._reserved[name] = estimated_bytes
 
     def release(self, name: str) -> None:
         self._reserved.pop(name, None)
 
-    def reservations(self) -> dict[str, float]:
+    def reservations(self) -> dict[str, int]:
         return dict(self._reserved)
 
-    def _denial_message(self, name: str, needed: float) -> str:
+    def _denial_message(self, name: str, needed: int) -> str:
         if self._reserved:
             biggest = sorted(self._reserved.items(), key=lambda kv: kv[1], reverse=True)
-            suggestions = ", ".join(f"{n} (~{gb:.1f}GB)" for n, gb in biggest)
+            suggestions = ", ".join(f"{n} (~{fmt_size(b)})" for n, b in biggest)
             free_hint = f"Free memory by stopping: {suggestions}"
         else:
             free_hint = (
@@ -79,24 +80,27 @@ class ResourceBudgeter:
                 "max_unified_memory_gb"
             )
         return (
-            f"Cannot start '{name}': needs ~{needed:.1f}GB, only {self.available_gb:.1f}GB "
-            f"available (budget {self.total_gb:.0f}GB - {self.safety_margin_gb:.0f}GB safety "
-            f"- {self.reserved_gb:.1f}GB in use). {free_hint}."
+            f"Cannot start '{name}': needs ~{fmt_size(needed)}, "
+            f"only {fmt_size(self.available_bytes)} "
+            f"available (budget {fmt_size(self.total_bytes)} "
+            f"- {fmt_size(self.safety_margin_bytes)} safety "
+            f"- {fmt_size(self.reserved_bytes)} in use). {free_hint}."
         )
 
 
-def estimate_service_memory(manager: ServiceManager, entry: ServiceEntry) -> float:
-    """Best-effort memory estimate (GB) for admission control.
+def estimate_service_memory(manager: ServiceManager, entry: ServiceEntry) -> int:
+    """Best-effort memory estimate (int bytes) for admission control.
 
-    Prefers the manager's own ``estimated_memory_gb()`` (e.g. llama_cpp sizes from
-    the model file + KV cache); falls back to a declared ``config.memory_gb`` hint;
-    otherwise 0.0 (unknown → admitted, so we only ever refuse on real estimates).
+    Prefers the manager's own ``estimated_memory_bytes()`` (e.g. llama_cpp sizes
+    from the model file + KV cache); falls back to a declared ``config.memory_gb``
+    hint (parsed as ``entry.memory_bytes``); otherwise 0 (unknown → admitted, so
+    we only ever refuse on real estimates).
     """
     if isinstance(manager, SupportsMemoryEstimate):
-        return float(manager.estimated_memory_gb())
-    if entry.memory_gb is not None:
-        return float(entry.memory_gb)
-    return 0.0
+        return manager.estimated_memory_bytes()
+    if entry.memory_bytes is not None:
+        return entry.memory_bytes
+    return 0
 
 
 def estimate_source(manager: ServiceManager, entry: ServiceEntry) -> str:
@@ -106,7 +110,7 @@ def estimate_source(manager: ServiceManager, entry: ServiceEntry) -> str:
     fail-open warning) share — "unknown" means the deliberate unknown->admit
     policy applied: the service was admitted without counting against the budget.
     """
-    if entry.memory_gb is not None:
+    if entry.memory_bytes is not None:
         return "declared"
     if isinstance(manager, SupportsEstimateSource):
         return manager.estimated_memory_source()
