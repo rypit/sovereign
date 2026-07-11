@@ -20,8 +20,8 @@ Fixes the findings from a full project audit ("roast"): the headline guarantees 
 
 ## Outstanding (in progress on this branch)
 
-- [ ] P2.3 — add `tests/` to mypy so the test fakes are checked against the Protocols they impersonate (WIP, landing next)
-- [ ] P2.4 — coverage visibility (`pytest-cov` + `make coverage` + CI report)
+- `648c6a3` P2.3 complete — add `tests/` to mypy; test fakes checked against Protocols; integration smoke test (`test_llama_stack_boots_serves_and_tears_down`) added and deselected by default (marked `integration`, excluded via `-m 'not integration'`)
+- `P2.4` complete — coverage visibility (`pytest-cov` + `make coverage` + HTML report in `htmlcov/`)
 - [ ] P3.2 — hoist duplicated `estimated_memory_gb`/draft-model handling from the two engines into `NativeEngineManager`
 - [ ] P3.3 — replace remaining `getattr`-probing with Protocol `isinstance` checks (orchestrator activity, CLI provision hooks)
 - [ ] P3.4 — repo-root cleanup (`sovereign.yaml`/`mlx.yaml` → `examples/`, plan docs → `docs/`)
