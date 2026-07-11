@@ -51,7 +51,7 @@ class FakeCleanroomManager:
     def get_metrics(self) -> dict:
         return {"status": "running"}
 
-    def adjust_resources(self, memory_limit_mb: int) -> None:
+    def adjust_resources(self, memory_limit_bytes: int) -> None:
         pass
 
     def resolve(self, resolver) -> None:
@@ -138,7 +138,7 @@ def test_would_fit_true_when_within_budget(tmp_path) -> None:
     config = load_config(_write_stack(tmp_path, max_gb=64))
     fits, needed, available = _would_fit(config)
     assert fits is True
-    assert needed == 1.0
+    assert needed == 1 * 10**9
 
 
 def test_would_fit_false_when_over_budget(tmp_path) -> None:

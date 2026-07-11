@@ -59,7 +59,7 @@ def test_manifest_start_args_redacted(tmp_path) -> None:
         def get_metrics(self) -> dict:
             return {"status": "running"}
 
-        def adjust_resources(self, memory_limit_mb: int) -> None: ...
+        def adjust_resources(self, memory_limit_bytes: int) -> None: ...
 
         def get_start_args(self) -> list[str]:
             return ["llama-server", "--api-key", "hunter2", "--port", "11435"]

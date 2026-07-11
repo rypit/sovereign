@@ -31,7 +31,7 @@ class FakeManager:
         *,
         healthy: bool = True,
         port: int = 0,
-        mem_gb: float = 0.0,
+        mem_bytes: int = 0,
         prepare_delay: float = 0.0,
         has_prepare_model: bool = True,
         prepare_model_raises: bool = False,
@@ -42,7 +42,7 @@ class FakeManager:
         self._log = log
         self._healthy = healthy
         self._port = port
-        self._mem_gb = mem_gb
+        self._mem_bytes = mem_bytes
         self._prepare_delay = prepare_delay
         self._prepare_model_raises = prepare_model_raises
         self.resolved_with: object | None = None
@@ -57,8 +57,8 @@ class FakeManager:
         if estimate_source is not None:
             self.estimated_memory_source = lambda: estimate_source
 
-    def estimated_memory_gb(self) -> float:
-        return self._mem_gb
+    def estimated_memory_bytes(self) -> int:
+        return self._mem_bytes
 
     def prepare_environment(self) -> None:
         self._log.append((self.name, "prepare"))
@@ -85,7 +85,7 @@ class FakeManager:
     def prepare(self) -> None:  # unused
         ...
 
-    def adjust_resources(self, memory_limit_mb: int) -> None: ...
+    def adjust_resources(self, memory_limit_bytes: int) -> None: ...
 
     def resolve(self, resolver) -> None:
         self.resolved_with = resolver
@@ -164,7 +164,7 @@ def _orch(
             log,
             healthy=healthy,
             port=ports.get(entry.name, 0),
-            mem_gb=mems.get(entry.name, 0.0),
+            mem_bytes=mems.get(entry.name, 0),
             prepare_delay=prepare_delays.get(entry.name, 0.0),
             has_prepare_model=entry.name not in no_prepare_model,
             prepare_model_raises=entry.name in prepare_model_raises,
@@ -613,35 +613,35 @@ def test_over_budget_boot_refused_with_actionable_error() -> None:
         ],
         resources={"max_unified_memory_gb": 64, "safety_margin_gb": 8},
     )
-    orch = _orch(cfg, mems={"comfyui": 25, "llama_heavy": 40})
+    orch = _orch(cfg, mems={"comfyui": 25 * 10**9, "llama_heavy": 40 * 10**9})
     with pytest.raises(BootError) as exc:
         asyncio.run(orch.boot())
     msg = str(exc.value)
     assert "Cannot start 'llama_heavy'" in msg
-    assert "comfyui (~25.0GB)" in msg  # tells you what to stop
+    assert "comfyui (~25.0 GB)" in msg  # tells you what to stop
     assert orch.states["llama_heavy"] is ServiceState.FAILED
     assert orch.states["comfyui"] is ServiceState.READY  # it fit and booted
 
 
 def test_fitting_services_reserve_budget() -> None:
     cfg = _config([{"name": "a", "base_type": "x"}, {"name": "b", "base_type": "x"}])
-    orch = _orch(cfg, mems={"a": 20, "b": 10})
+    orch = _orch(cfg, mems={"a": 20 * 10**9, "b": 10 * 10**9})
     asyncio.run(orch.boot())
-    assert orch.budgeter.reserved_gb == 30
-    assert orch.budgeter.reservations() == {"a": 20.0, "b": 10.0}
+    assert orch.budgeter.reserved_bytes == 30 * 10**9
+    assert orch.budgeter.reservations() == {"a": 20 * 10**9, "b": 10 * 10**9}
 
 
 def test_shutdown_releases_budget() -> None:
     cfg = _config([{"name": "a", "base_type": "x"}])
-    orch = _orch(cfg, mems={"a": 20})
+    orch = _orch(cfg, mems={"a": 20 * 10**9})
 
     async def scenario() -> None:
         await orch.boot()
-        assert orch.budgeter.reserved_gb == 20
+        assert orch.budgeter.reserved_bytes == 20 * 10**9
         await orch.shutdown()
 
     asyncio.run(scenario())
-    assert orch.budgeter.reserved_gb == 0
+    assert orch.budgeter.reserved_bytes == 0
 
 
 def test_manifest_records_memory_budget(tmp_path) -> None:
@@ -649,16 +649,16 @@ def test_manifest_records_memory_budget(tmp_path) -> None:
         [{"name": "a", "base_type": "x"}],
         resources={"max_unified_memory_gb": 64, "safety_margin_gb": 8},
     )
-    orch = _orch(cfg, state_dir=tmp_path, mems={"a": 20})
+    orch = _orch(cfg, state_dir=tmp_path, mems={"a": 20 * 10**9})
     asyncio.run(orch.boot())
     manifest = json.loads((tmp_path / "manifest.json").read_text())
     assert manifest["memory_budget"] == {
-        "total_gb": 64.0,
-        "safety_margin_gb": 8.0,
-        "reserved_gb": 20.0,
-        "available_gb": 36.0,
+        "total_bytes": 64 * 10**9,
+        "safety_margin_bytes": 8 * 10**9,
+        "reserved_bytes": 20 * 10**9,
+        "available_bytes": 36 * 10**9,
     }
-    assert manifest["services"][0]["estimated_memory_gb"] == 20.0
+    assert manifest["services"][0]["estimated_memory_bytes"] == 20 * 10**9
 
 
 def test_boot_warns_on_unknown_memory_footprint(caplog) -> None:
@@ -676,7 +676,7 @@ def test_boot_no_unknown_warning_when_source_known(caplog) -> None:
     import logging
 
     cfg = _config([{"name": "engine", "base_type": "x"}])
-    orch = _orch(cfg, mems={"engine": 8.0}, estimate_sources={"engine": "local"})
+    orch = _orch(cfg, mems={"engine": 8 * 10**9}, estimate_sources={"engine": "local"})
     orch.build()
     with caplog.at_level(logging.WARNING, logger="sovereign.runtime.orchestrator"):
         asyncio.run(orch.boot())
