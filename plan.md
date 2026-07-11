@@ -22,7 +22,7 @@ Fixes the findings from a full project audit ("roast"): the headline guarantees 
 
 - `648c6a3` P2.3 complete — add `tests/` to mypy; test fakes checked against Protocols; integration smoke test (`test_llama_stack_boots_serves_and_tears_down`) added and deselected by default (marked `integration`, excluded via `-m 'not integration'`)
 - `P2.4` complete — coverage visibility (`pytest-cov` + `make coverage` + HTML report in `htmlcov/`)
-- `P3.2` complete — hoisted common `estimated_memory_gb`/draft-model handling into `NativeEngineManager`; engines override for specific overhead (KV cache, prompt cache)
+- `01857d0` P3.2 complete — template method pattern: `NativeEngineManager.estimated_memory_gb()` calls `_engine_overhead_gb()` for engine-specific overhead (KV cache in llama_cpp, prompt cache in mlx_lm)
 - [ ] P3.3 — replace remaining `getattr`-probing with Protocol `isinstance` checks (orchestrator activity, CLI provision hooks)
 - [ ] P3.4 — repo-root cleanup (`sovereign.yaml`/`mlx.yaml` → `examples/`, plan docs → `docs/`)
 - [ ] P3.5 — RoutingCache IO errors logged instead of `contextlib.suppress(Exception)`
