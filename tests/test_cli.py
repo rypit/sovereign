@@ -10,6 +10,7 @@ from typer.testing import CliRunner
 from sovereign.cli import app
 from sovereign.cli import stack as main
 from sovereign.cli._common import _load_dotenv
+from sovereign.core.provisioning import Provisioner
 from sovereign.core.state import file_hash, write_json
 
 runner = CliRunner()
@@ -490,8 +491,11 @@ def test_up_refuses_while_cleanroom_bench_lock_held(tmp_path, monkeypatch) -> No
 
 
 # --- provision ---
-class _FakeProvisionable:
-    """Stands in for a registered integration class in provision tests."""
+class _FakeProvisionable(Provisioner):
+    """Stands in for a registered integration class in provision tests.
+
+    Subclasses the real mixin because `sovereign provision` discovers
+    provisionable integrations via ``issubclass(cls, Provisioner)``."""
 
     satisfied = False
     provisioned: list[str] = []

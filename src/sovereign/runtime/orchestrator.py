@@ -465,6 +465,13 @@ class Orchestrator:
         )
         self.write_status()
 
+    def _activity_lines(self, name: str) -> list[str]:
+        """Current-activity lines for the snapshot. ``activity`` is part of the
+        ``ServiceManager`` contract, so no capability probe is needed — only the
+        not-yet-built case (snapshot taken before ``build()``) guards on None."""
+        manager = self.managers.get(name)
+        return list(manager.activity) if manager is not None else []
+
     def status_snapshot(self) -> StatusSnapshot:
         """Live dashboard snapshot (§8) — the schema `sovereign.runtime.dashboard` renders."""
         reservations = self.budgeter.reservations()
@@ -488,9 +495,7 @@ class Orchestrator:
                     "descriptor": _service_descriptor(self._entries[name]),
                     "estimated_gb": reservations.get(name),
                     "metrics": self.metrics.get(name, {}),
-                    "activity": {
-                        "lines": list(getattr(self.managers.get(name), "activity", ()) or ())
-                    },
+                    "activity": {"lines": self._activity_lines(name)},
                 }
                 for name in self._service_names
             },
