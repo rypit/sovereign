@@ -375,12 +375,13 @@ def provision(
     ),
 ) -> None:
     """Install every declared integration's dependencies (Brewfiles + install commands)."""
-    from sovereign.core.provisioning import Provisioner, ProvisioningError
+    from sovereign.core.base_manager import SupportsProvisioning
+    from sovereign.core.provisioning import ProvisioningError
 
     failed = False
     for base_type, cls in sorted(_provision_targets(file).items()):
-        if not issubclass(cls, Provisioner):
-            continue  # integration doesn't use the Provisioner mixin — nothing declared
+        if not isinstance(cls, type) or not issubclass(cls, SupportsProvisioning):
+            continue  # integration predates the Provisioner mixin — nothing declared
         if cls.provisioning_satisfied():
             console.print(f"  [green]✓[/green] {base_type} — satisfied")
             continue
