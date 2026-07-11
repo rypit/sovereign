@@ -10,7 +10,7 @@ before launch (DOWNLOADING state) and starts the server from the resolved path.
 from __future__ import annotations
 
 import os
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from sovereign.core.registry import register_service
 from sovereign.services.inference.base import (
@@ -25,13 +25,16 @@ if TYPE_CHECKING:
 
 @register_service("mlx_lm")
 class MlxLmManager(NativeEngineManager):
-    """Supervises one native ``mlx_lm.server`` process."""
+    """Supervises one embedded ``mlx_lm.server`` engine worker."""
 
     base_type = "mlx_lm"
     config_cls = MlxLmConfig
     config: MlxLmConfig
     model_artifact_kind = "snapshot"
-    binary_hint = "It ships with the `mlx-lm` dependency — run `uv sync`."
+    #: Probed (out-of-process) rather than checked via a binary-on-PATH: the
+    #: engine now runs in-process inside the Python worker.
+    import_probe_modules = ("mlx_lm.server",)
+    binary_hint = "It ships with the mlx-lm dependency — run `uv sync`."
 
     # --- routing (auto base_type) ---
     @classmethod
@@ -64,40 +67,33 @@ class MlxLmManager(NativeEngineManager):
         in unified memory."""
         return self.config.prompt_cache_bytes or 0
 
-    # --- flag generation ---
-    def get_start_args(self) -> list[str]:
-        """Translate the validated config into an ``mlx_lm.server`` argv."""
-        args = [
-            self.config.binary,
-            "--model",
-            self.resolved_model_path(),
-            "--host",
-            self.host,
-            "--port",
-            str(self.port),
-        ]
+    # --- engine_kwargs mapping (consumed by workers.mlx_lm_adapter) ---
+    def engine_kwargs(self) -> dict[str, Any]:
+        """Sovereign-side settings the worker's adapter overlays onto
+        ``mlx_lm.server``'s own argparse namespace (see
+        ``workers/mlx_lm_adapter.build_server_namespace``)."""
+        kwargs: dict[str, Any] = {}
         if self.config.max_tokens is not None:
-            args += ["--max-tokens", str(self.config.max_tokens)]
+            kwargs["max_tokens"] = self.config.max_tokens
         if self.config.temp is not None:
-            args += ["--temp", str(self.config.temp)]
+            kwargs["temp"] = self.config.temp
         if self.config.top_p is not None:
-            args += ["--top-p", str(self.config.top_p)]
+            kwargs["top_p"] = self.config.top_p
         if self.config.decode_concurrency is not None:
-            args += ["--decode-concurrency", str(self.config.decode_concurrency)]
+            kwargs["decode_concurrency"] = self.config.decode_concurrency
         if self.config.prompt_cache_size is not None:
-            args += ["--prompt-cache-size", str(self.config.prompt_cache_size)]
+            kwargs["prompt_cache_size"] = self.config.prompt_cache_size
         if self.config.prompt_cache_bytes is not None:
-            args += ["--prompt-cache-bytes", str(self.config.prompt_cache_bytes)]
+            kwargs["prompt_cache_bytes"] = self.config.prompt_cache_bytes
         if self.config.adapter_path is not None:
-            args += ["--adapter-path", os.path.expanduser(self.config.adapter_path)]
-        if self.config.draft_model is not None:
-            args += ["--draft-model", self.resolved_draft_model_path()]
+            kwargs["adapter_path"] = os.path.expanduser(self.config.adapter_path)
         if self.config.num_draft_tokens is not None:
-            args += ["--num-draft-tokens", str(self.config.num_draft_tokens)]
+            kwargs["num_draft_tokens"] = self.config.num_draft_tokens
         if self.config.trust_remote_code:
-            args += ["--trust-remote-code"]
-        args += self.config.extra_args
-        return args
+            kwargs["trust_remote_code"] = True
+
+        kwargs.update(self.config.engine_kwargs)
+        return kwargs
 
     # --- Resource cooperation ---
     def prepare_environment(self) -> None:

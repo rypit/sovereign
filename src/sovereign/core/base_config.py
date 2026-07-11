@@ -6,9 +6,9 @@ Per the golden rule (§2.3), config depends on Pydantic **only** — never on
 
 from __future__ import annotations
 
-from typing import Annotated
+from typing import Annotated, Any
 
-from pydantic import BaseModel, BeforeValidator, ConfigDict, Field
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, field_validator
 
 from sovereign.core.units import gb_to_bytes
 
@@ -34,8 +34,12 @@ class NativeEngineConfig(SovereignBaseModel):
 
     #: Model reference — a local path (``~`` expanded) or a HuggingFace repo id.
     model: str
-    #: Server executable; a bare name is resolved on ``PATH``. No shared default —
-    #: each engine sets its own.
+    #: DEPRECATED — ignored. Engines are embedded Python workers now (loaded via
+    #: their binding's API in-process), not external CLIs launched by executable
+    #: name, so there is no argv to put a binary name on. Kept (rather than
+    #: removed) only because ``extra="forbid"`` would otherwise turn existing
+    #: ``binary:`` YAML into a hard validation error; use ``engine_kwargs`` for
+    #: settings the engine doesn't model yet.
     binary: str
     #: Address the server binds to.
     host: str = "127.0.0.1"
@@ -46,10 +50,30 @@ class NativeEngineConfig(SovereignBaseModel):
     #: Client-facing model name — the string an OpenAI-compatible client sends as
     #: ``"model"``. Defaults to ``model`` when unset.
     served_model_name: str | None = None
-    #: Escape hatch for flags Sovereign doesn't model yet.
+    #: DEPRECATED — no longer consumed. Engines ran as external CLIs and this was
+    #: raw argv appended to the command line; embedded workers have no argv to
+    #: extend. Non-empty is now a validation error pointing at ``engine_kwargs``,
+    #: the escape hatch for settings the engine-specific ``config:`` block and
+    #: ``engine_kwargs`` mapping don't model yet.
     extra_args: list[str] = Field(default_factory=list)
+    #: Escape hatch for engine-specific worker settings Sovereign's config schema
+    #: doesn't model yet — merged (last, so it can override) into what each
+    #: engine's ``engine_kwargs()`` derives from its typed fields, then mapped
+    #: onto the real binding's API by the worker's adapter.
+    engine_kwargs: dict[str, Any] = Field(default_factory=dict)
     #: Directory for the captured stdout/stderr log (created on start).
     log_dir: str = ".sovereign/logs"
+
+    @field_validator("extra_args")
+    @classmethod
+    def _extra_args_removed(cls, value: list[str]) -> list[str]:
+        if value:
+            raise ValueError(
+                "extra_args is no longer supported — engines are embedded Python "
+                "workers with no argv to extend. Use engine_kwargs instead (a "
+                "dict merged into the engine's worker settings)."
+            )
+        return value
 
 
 def _gb_input_to_bytes(value: object) -> object:

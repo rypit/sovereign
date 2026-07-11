@@ -11,6 +11,8 @@
 # declared in sovereign.yaml, or by hand (`sovereign provision -f stack.yaml`).
 
 brew "uv"               # Python environment + dependency manager
+brew "cmake"             # llama-cpp-python source-build fallback (Metal wheel index is
+                         # tried first — see services/inference/llama_cpp/manager.py)
 
 # Alternatives / future (uncomment as needed):
 # cask "orbstack"       # lighter Docker Desktop replacement (swap for docker-desktop)
