@@ -141,7 +141,27 @@ class NativeEngineManager(ActivityMixin, Provisioner):
         """
         return {}
 
-    # --- resource estimation helpers ---
+    # --- resource estimation (§7) ---
+    def estimated_memory_gb(self) -> float:
+        """Model (+ draft) weights plus the engine's extra term, or a declared override.
+
+        Speculative decoding keeps both models in unified memory simultaneously,
+        so the draft model's weights always count. For HuggingFace repo ids the
+        weight estimate comes from repo metadata; unknown (offline + uncached)
+        contributes 0.0.
+        """
+        if self.memory_override_gb is not None:
+            return round(self.memory_override_gb, 2)
+        total = self._model_bytes(self.config.model)
+        if self.config.draft_model is not None:
+            total += self._model_bytes(self.config.draft_model)
+        return round(total / (1024**3) + self.extra_memory_gb(), 2)
+
+    def extra_memory_gb(self) -> float:
+        """Engine-specific footprint beyond the weights (GB) — e.g. llama_cpp's
+        KV cache, mlx_lm's hard prompt-cache reservation. Default: nothing."""
+        return 0.0
+
     def _model_bytes(self, model: str) -> int:
         """Weight-byte estimate for one model ref (local disk, HF cache, or repo
         metadata), for admission control. Unknown (offline+uncached) → 0."""
