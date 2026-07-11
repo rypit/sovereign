@@ -23,6 +23,7 @@ from sovereign.runtime.dashboard import (
     duration_cell,
     format_duration,
     load_dashboard_status,
+    prefill_bar,
     sparkline,
     status_cell,
 )
@@ -298,6 +299,117 @@ def test_dashboard_no_activity_area_when_idle() -> None:
     }
     text = _render(dashboard(status))
     assert "Provisioning:" not in text
+
+
+# --- TOK/S column + prefill bars (§5/§8) ---
+def test_dashboard_renders_tokens_per_second_column() -> None:
+    status = {
+        "services": {
+            "engine": {
+                "state": "ready",
+                "metrics": {"memory_bytes": 1_000_000, "tokens_per_second": 42.5},
+            }
+        }
+    }
+    text = _render(dashboard(status))
+    assert "TOK/S" in text
+    assert "42.5" in text
+
+
+def test_dashboard_tok_s_dash_when_no_generation_stats() -> None:
+    text = _render(dashboard(_STATUS))
+    assert "TOK/S" in text
+
+
+def test_prefill_bar_determinate() -> None:
+    bar = prefill_bar(1234, 4096)
+    assert bar.startswith("prefill ▕")
+    assert "1234/4096 tok" in bar
+
+
+def test_prefill_bar_pulse_when_total_none() -> None:
+    bar = prefill_bar(0, None, elapsed=12.0)
+    assert bar.startswith("prefill ▕")
+    assert "12s" in bar
+    assert "tok" not in bar
+
+
+def test_dashboard_renders_prefill_bar_determinate() -> None:
+    status = {
+        "services": {
+            "engine": {
+                "state": "ready",
+                "metrics": {},
+                "telemetry": {
+                    "prefill": [{"request_id": "r1", "processed": 1234, "total": 4096}]
+                },
+            }
+        }
+    }
+    text = _render(dashboard(status))
+    assert "prefill" in text
+    assert "1234/4096 tok" in text
+
+
+def test_dashboard_renders_prefill_bar_pulse() -> None:
+    status = {
+        "services": {
+            "engine": {
+                "state": "ready",
+                "metrics": {},
+                "telemetry": {
+                    "prefill": [{"request_id": "r1", "processed": 0, "total": None}]
+                },
+            }
+        }
+    }
+    history = MetricHistory()
+    history.record(status)
+    text = _render(dashboard(status, history=history))
+    assert "prefill" in text
+
+
+def test_metric_history_tracks_tokens_per_second() -> None:
+    history = MetricHistory()
+    history.record({"services": {"a": {"metrics": {"tokens_per_second": 10.0}}}})
+    history.record({"services": {"a": {"metrics": {"tokens_per_second": 20.0}}}})
+    assert history.values("a", "tokens_per_second") == [10.0, 20.0]
+
+
+def test_metric_history_prefill_elapsed_grows_across_records() -> None:
+    history = MetricHistory()
+    status = {
+        "services": {
+            "a": {
+                "metrics": {},
+                "telemetry": {"prefill": [{"request_id": "r1", "processed": 1, "total": None}]},
+            }
+        }
+    }
+    history.record(status)
+    first = history.prefill_elapsed("a", "r1")
+    time.sleep(0.02)
+    history.record(status)
+    second = history.prefill_elapsed("a", "r1")
+    assert second >= first
+
+
+def test_metric_history_prefill_elapsed_resets_when_request_disappears() -> None:
+    history = MetricHistory()
+    status_with = {
+        "services": {
+            "a": {
+                "metrics": {},
+                "telemetry": {"prefill": [{"request_id": "r1", "processed": 1, "total": None}]},
+            }
+        }
+    }
+    history.record(status_with)
+    time.sleep(0.02)
+    status_without: dict = {"services": {"a": {"metrics": {}, "telemetry": {"prefill": []}}}}
+    history.record(status_without)
+    history.record(status_with)
+    assert history.prefill_elapsed("a", "r1") < 0.02
 
 
 def test_monitor_once_from_status_file(tmp_path) -> None:

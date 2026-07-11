@@ -79,9 +79,10 @@ services:
     dependencies: [searxng, mlx_heavy]
 
 # ---------------------------------------------------------------------------
-# Add a native inference engine once you have a GGUF model on disk.
-# `llama-server` is already installed (brew llama.cpp). Set model, uncomment,
-# add `llama_heavy_v1` to open_webui's dependencies, and uncomment the
+# Add a native inference engine once you have a GGUF model on disk. llama_cpp
+# runs embedded (llama-cpp-python's built-in server, in-process — no external
+# `llama-server` binary); `uv sync` installs it. Set model, uncomment, add
+# `llama_heavy_v1` to open_webui's dependencies, and uncomment the
 # OPENAI_API_BASE_URL line above to auto-wire the UI to it.
 # ---------------------------------------------------------------------------
 #   - name: llama_heavy_v1
@@ -91,7 +92,8 @@ services:
 #       type: http
 #       endpoint: /health
 #       port: 11435
-#       timeout_seconds: 120
+#       # Generous: covers interpreter start + llama-cpp-python import + model load.
+#       timeout_seconds: 300
 #     config:
 #       model: "~/models/your-model.gguf"   # <-- point at a real GGUF ...
 #       # ... or a HuggingFace repo id, e.g. "ggml-org/gemma-3-1b-it-GGUF[:Q4_K_M]" —
@@ -114,9 +116,10 @@ services:
       type: http
       endpoint: /health
       port: 8080
-      # Only covers model *load* now — Sovereign pre-downloads the model in the
-      # DOWNLOADING state before this timer starts (progress shows in the dashboard).
-      timeout_seconds: 120
+      # Sovereign pre-downloads the model in the DOWNLOADING state before this
+      # timer starts; it still needs to cover interpreter start + mlx_lm import
+      # + model load, so keep it generous.
+      timeout_seconds: 300
     config:
       model: "mlx-community/Qwen3.6-27B-8bit"
       num_draft_tokens: 2

@@ -43,21 +43,42 @@ core/
   provisioning.py  per-integration dependency install (Brewfile + commands)
 runtime/
   orchestrator.py  async DAG boot, reconcile loops, persistence; drives sync
-                   managers via asyncio.to_thread — managers stay synchronous
+                   managers via asyncio.to_thread — managers stay synchronous;
+                   owns the TelemetryStateCache, starts/stops the TelemetryHub
+                   (UDS) + DockerMonitorWorker around boot/reconcile
+  telemetry.py     parent-side telemetry: TelemetryStateCache (bounded, thread-safe
+                   per-service state), TelemetryHub (accepts worker UDS connections,
+                   ingests uncapped into the cache), DockerMonitorWorker (polls
+                   `docker stats` on its own thread, feeds the same cache)
   dashboard.py     Rich live dashboard; renders runtime/status.StatusSnapshot
+                   (MEM + TOK/S sparklines, prefill progress bars); 1 Hz snapshot
+                   poll decoupled from the 12fps spinner/pulse animation refresh
   status.py        StatusSnapshot TypedDicts (the schema orchestrator produces
-                   and dashboard consumes)
+                   and dashboard consumes), incl. TelemetryStatus/PrefillStatus
+                   mirroring TelemetryStateCache.snapshot()'s field names
   manifest.py      resolved stack manifest written at boot (§7b)
   teardown.py      cross-process stop from persisted runtime handles (`sovereign down`)
 services/
   docker/         auxiliary services in Docker
-  inference/     native engines + their shared base
-    base.py              shared subprocess/health/metrics lifecycle (NativeEngineManager)
+  inference/     embedded Python-binding engine workers + their shared base
+    base.py              shared worker-lifecycle base (NativeEngineManager): dumps
+                         a WorkerConfig, launches `sovereign.workers.engine_worker`,
+                         HTTP health, psutil/procmem metrics fallback
     hf.py                the HuggingFace pipeline: ref parsing, metadata, GGUF
                          selection, memory estimation, download, RoutingCache
     routing.py           engine-routing sweep (each engine's claim_route); registers
                          the router core calls via registry.route_entry()
-    llama_cpp/  mlx_lm/   the two native engines (auto-discovered)
+    llama_cpp/  mlx_lm/   the two native engines (auto-discovered); each supplies
+                         engine_kwargs() (mapped by its workers/*_adapter.py)
+workers/           embedded engine worker processes (spawned via
+                   `python -m sovereign.workers.engine_worker --config <path>`)
+  protocol.py      typed telemetry event schema (NDJSON) + encode/decode
+  telemetry.py     worker-side TelemetryClient: non-blocking UDS sender, reconnect+drop
+  worker_config.py WorkerConfig dataclass + JSON load/dump (the manager->worker handoff)
+  engine_worker.py generic entrypoint: loads WorkerConfig, dispatches to
+                   `sovereign.workers.<engine>_adapter` by `engine` key
+  llama_cpp_adapter.py / mlx_lm_adapter.py   pure kwarg-mapping + run() (bindings
+                   imported lazily, inside run(), never at module scope)
 harnesses/         cline_cli, mini_swe_agent          (auto-discovered)
 bench/             content-addressed bench cells; only cleanroom.py may
                    import the Orchestrator; bench sub-app CLI lives in bench/cli.py
@@ -89,9 +110,16 @@ code stays a leaf. `runtime/orchestrator` imports `core/*`; nothing in
 - **Test seams**: tests patch `sovereign.services.inference.hf.<fn>`
   (engines and the router call through the `hf_models`/`hf` module alias),
   `run_docker()` for Docker, and
-  `urllib.request.urlopen` for health checks. `tests/conftest.py` autouse
-  fixtures disable real provisioning and stub the HF API to look offline —
-  opt back in with `@pytest.mark.allow_provisioning`.
+  `urllib.request.urlopen` for health checks. Engine-binding availability is
+  probed via `sovereign.services.inference.base.probe_import` (patchable,
+  cached per module) rather than a binary-on-PATH check. Telemetry runs over
+  a unix domain socket (`<state_dir>/telemetry.sock`) — tests exercise the
+  real `TelemetryHub`/`TelemetryClient` over a real socket rather than
+  mocking the transport; `SOVEREIGN_WORKER_ADAPTER_PACKAGE` overrides which
+  adapter package `engine_worker` dispatches to, so its entrypoint can be
+  exercised against a fake adapter. `tests/conftest.py` autouse fixtures
+  disable real provisioning and stub the HF API to look offline — opt back
+  in with `@pytest.mark.allow_provisioning`.
 - **State is per-directory**: everything lives under `.sovereign/` relative
   to the CWD (`state.json`, `status.json`, `manifest.json`, `logs/`,
   `benchmarks/`). Separate CLI processes coordinate through these files —

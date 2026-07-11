@@ -104,7 +104,8 @@ services and harnesses) runs them idempotently in three places:
 ### MLX engine
 
 The `mlx_lm` engine ships with the project: `mlx-lm` is a dependency (Apple Silicon
-only), so `uv sync` provides the `mlx_lm.server` binary. Try it with a tiny model —
+only), so `uv sync` makes it importable — Sovereign runs it embedded in-process
+(via `mlx_lm.server`'s Python API), not as a separate binary. Try it with a tiny model —
 `examples/mlx.yaml` omits `base_type`, so it's routed to `mlx_lm` automatically:
 
 ```bash
