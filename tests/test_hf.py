@@ -364,6 +364,37 @@ def test_routing_cache_missing_file_ok(tmp_path):
     assert cache.get("anything") is None
 
 
+def test_routing_cache_corrupt_file_warns_and_starts_empty(tmp_path, caplog):
+    import logging
+
+    path = tmp_path / "models.json"
+    path.write_text("{not json")
+    with caplog.at_level(logging.WARNING, logger="sovereign.services.inference.hf"):
+        cache = RoutingCache(path)
+    assert cache.get("anything") is None  # degraded, not crashed
+    assert any("routing cache" in r.message for r in caplog.records)
+
+
+def test_routing_cache_unwritable_warns_once(tmp_path, caplog, monkeypatch):
+    """A permanently unwritable cache must be visible — one warning, no spam."""
+    import logging
+
+    cache = RoutingCache(tmp_path / "models.json")
+
+    def boom(path, data):
+        raise OSError("read-only filesystem")
+
+    monkeypatch.setattr(models_mod, "write_json", boom)
+    with caplog.at_level(logging.WARNING, logger="sovereign.services.inference.hf"):
+        cache.put("org/a", base_type="mlx_lm", weight_bytes=None)
+        cache.put("org/b", base_type="mlx_lm", weight_bytes=None)
+    warnings = [r for r in caplog.records if "routing cache" in r.message]
+    assert len(warnings) == 1
+    assert "read-only filesystem" in warnings[0].message
+    # The in-memory cache still serves this process.
+    assert cache.get("org/a") is not None
+
+
 # ---------------------------------------------------------------------------
 # fetch_repo_info error mapping
 # ---------------------------------------------------------------------------
