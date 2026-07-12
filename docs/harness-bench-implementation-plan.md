@@ -1,3 +1,10 @@
+> **Superseded.** This plan predates the `src/sovereign/runtime/` and
+> `src/sovereign/workers/` split — several paths below (`orchestrator.py`,
+> `main.py`, `utils/manifest.py`) reflect the pre-move layout and are stale.
+> For current layering, contracts, and dependency rules, see
+> `docs/architecture.md` and `docs/decisions/`. This document is kept for
+> its phased build history, not as a live source of truth.
+
 # Harnesses as a First-Class Concept + Native-Engine Benchmarking — Phased Plan
 
 *Companion to [`sovereign-implementation-plan-v1.1.md`](./sovereign-implementation-plan-v1.1.md): this document turns the two post-MVP tracks it sketches (§4b Harness contract, §6b Benchmarking subsystem, §12 parallel tracks) into a concrete, phase-by-phase build order with exit criteria, sized so each phase is independently implementable and testable.*
@@ -11,10 +18,10 @@ Sovereign's MVP orchestration spine is done (Phases 0–8 + 10; the suite is gre
 - `src/sovereign/core/base_harness.py` — `Task`, `RunResult` dataclasses + `Harness` Protocol (`name`, `dependencies`, `materialize()`, `invoke(task)`), `@runtime_checkable`.
 - `src/sovereign/core/registry.py` — separate harness registry: `register_harness(base_type)` / `get_harness(base_type)`, symmetric to services.
 - `src/sovereign/config.py` — `HarnessEntry` (name, base_type, dependencies, config dict) + `harnesses:` YAML section, cross-section name/dep validation.
-- `src/sovereign/orchestrator.py` — `harness_factory` ctor arg, `_build()` instantiates harnesses, `boot()` ends by calling `_materialize_harnesses()`, which duck-types `resolve(self.resolver)` then `materialize()` once all deps are READY.
+- `src/sovereign/runtime/orchestrator.py` — `harness_factory` ctor arg, `_build()` instantiates harnesses, `boot()` ends by calling `_materialize_harnesses()`, which duck-types `resolve(self.resolver)` then `materialize()` once all deps are READY.
 - `src/sovereign/core/resolver.py` — `{{ svc.attr }}` templates, `ConsumerKind.NATIVE/DOCKER` with `host.docker.internal` rewrite, `ResolvedEndpoint(scheme, host, port)` with `attribute()`.
-- `src/sovereign/utils/manifest.py` — resolved stack manifest (`build_manifest`), explicitly documented as the bench runner's input; per-service `start_args`, `model_fingerprint {path,size,mtime}`, `co_resident`, `per_slot_context`.
-- `src/sovereign/main.py` — `bench` command stub; `serve_forever()` is the Orchestrator-as-library entry.
+- `src/sovereign/runtime/manifest.py` — resolved stack manifest (`build_manifest`), explicitly documented as the bench runner's input; per-service `start_args`, `model_fingerprint {path,size,mtime}`, `co_resident`, `per_slot_context`.
+- `src/sovereign/cli/` — the Typer CLI (`bench` sub-app lives in `bench/cli.py`); `runtime/orchestrator.py`'s `serve_forever()` is the Orchestrator-as-library entry.
 - `core/resources.py` — `ResourceBudgeter.can_fit/admit/release`.
 
 **Gaps this plan fills:** no concrete harness packages; `harnesses/__init__.py` imports nothing; no re-materialize on endpoint change; harnesses absent from the manifest; no OpenAI "served model name" on engines; empty `bench` command; no `Job` type, bench spec, cell content-addressing, perf prober, task suites, or reports.
@@ -41,9 +48,9 @@ Make the existing hooks production-grade before any concrete harness lands.
    - Both managers get `api_model_name() -> str`: alias if set, else the `model` string (path/repo-id) — the string an OpenAI-compatible client sends as `"model"`.
    - Extend `ResolvedEndpoint` with `model: str | None = None`; populate it in `NativeEngineManager.endpoint()` (`core/base_native.py`); support `attribute("model")` in `core/resolver.py`. Now harness YAML can say `model: "{{ mlx_heavy.model }}"` and `base_url: "{{ mlx_heavy.endpoint }}/v1"`.
 2. **`BaseHarness` shared base** — new `src/sovereign/core/base_harness_impl.py` (or extend `base_harness.py`; keep Protocol + dataclasses as-is). Concrete class holding `HarnessEntry`, class attr `consumer_kind = ConsumerKind.NATIVE`, `resolve(resolver)` storing the resolver and computing `self.resolved_config = resolver.resolve_mapping(entry.config, self.consumer_kind)`, plus `fingerprint() -> dict` (base_type, tool version if obtainable, resolved config hash) — consumed by the manifest and bench cell keys.
-3. **Re-materialize on endpoint change.** In `orchestrator.py` `_register_endpoint`: if a service's endpoint differs from the previously registered one *after initial boot completed*, re-run `_materialize_harnesses()` for harnesses whose (transitive) deps include that service. Covers the `_restart` path. Guard: materialize only when all deps READY (existing check).
-4. **Harnesses in the manifest.** Extend `utils/manifest.py::build_manifest` with `harnesses: [{name, base_type, dependencies, fingerprint}]` from `orch.harnesses`.
-5. **CLI:** new `sovereign harness` Typer sub-app in `main.py`: `harness list` (from config + state), `harness materialize <name>` (one-shot against a running stack: read manifest/state for endpoints — or require the stack up and use a fresh Orchestrator in read-only resolve mode), `harness invoke <name> --prompt "..." [--workdir PATH]` printing the `RunResult`.
+3. **Re-materialize on endpoint change.** In `runtime/orchestrator.py` `_register_endpoint`: if a service's endpoint differs from the previously registered one *after initial boot completed*, re-run `_materialize_harnesses()` for harnesses whose (transitive) deps include that service. Covers the `_restart` path. Guard: materialize only when all deps READY (existing check).
+4. **Harnesses in the manifest.** Extend `runtime/manifest.py::build_manifest` with `harnesses: [{name, base_type, dependencies, fingerprint}]` from `orch.harnesses`.
+5. **CLI:** new `sovereign harness` Typer sub-app (`cli/harness.py`): `harness list` (from config + state), `harness materialize <name>` (one-shot against a running stack: read manifest/state for endpoints — or require the stack up and use a fresh Orchestrator in read-only resolve mode), `harness invoke <name> --prompt "..." [--workdir PATH]` printing the `RunResult`.
 6. **Tests** (`tests/test_orchestrator.py` patterns — `FakeManager` + factories): fake harness via `harness_factory` asserting materialize-after-READY, re-materialize on endpoint change, manifest includes harnesses, resolver `attribute("model")`, llama_cpp `--alias` flag generation.
 
 *Exit: a fake harness in a test stack is materialized at boot, re-materialized when its engine restarts on a new port, and appears in `manifest.json`; `sovereign harness list` works.*
@@ -96,7 +103,7 @@ New package `src/sovereign/bench/`:
 
 ## Phase B3 — Clean-room sweeps
 
-- Bench owns the stack: for each stack axis value, boot the variant via the Orchestrator as a library (`serve_forever` is interactive — add/reuse a bounded `boot() … shutdown()` context path in `orchestrator.py`), run all cells for that stack, tear down before the next. Model-load cost is why cells are grouped per stack.
+- Bench owns the stack: for each stack axis value, boot the variant via the Orchestrator as a library (`serve_forever` is interactive — add/reuse a bounded `boot() … shutdown()` context path in `runtime/orchestrator.py`), run all cells for that stack, tear down before the next. Model-load cost is why cells are grouped per stack.
 - **Lockfile** `.sovereign/bench.lock` (pid + run_id): `bench run` refuses if `state.json` shows a live daemon-managed stack (and documents that `sovereign up` should refuse while the lock exists — small guard in `_boot_and_serve`). Never fight the daemon.
 - **Budgeter pre-prune:** before booting a cell's stack, use `ResourceBudgeter.can_fit` with the entries' `estimated_bytes` to mark impossible cells `gated(memory)` for free.
 - **Tests:** orchestrator-as-library boot/teardown with `FakeManager` factories; lock contention cases.
