@@ -897,16 +897,21 @@ def test_effective_metrics_merges_generation_stats() -> None:
     assert metrics["tokens_per_second"] == 9.0
 
 
-def test_telemetry_hub_lifecycle_via_serve_forever(tmp_path) -> None:
+def test_telemetry_hub_lifecycle_via_serve_forever(socket_path) -> None:
     """The hub binds .sovereign/telemetry.sock during serve_forever and unlinks
-    it in the finally block, exercised via the real FakeManager factory."""
+    it in the finally block, exercised via the real FakeManager factory.
+
+    The state dir comes from the short-path socket_path fixture (not tmp_path)
+    so the hub's AF_UNIX bind stays under macOS's ~104-byte sun_path cap.
+    """
+    state_dir = socket_path.parent
     log: list = []
     cfg = _config([{"name": "a", "base_type": "x"}])
     socket_seen = asyncio.Event()
 
     async def watcher(orch: Orchestrator, stop: asyncio.Event) -> None:
         deadline = asyncio.get_running_loop().time() + 2.0
-        while not (tmp_path / "telemetry.sock").exists():
+        while not (state_dir / "telemetry.sock").exists():
             if asyncio.get_running_loop().time() > deadline:
                 break
             await asyncio.sleep(0.01)
@@ -921,10 +926,10 @@ def test_telemetry_hub_lifecycle_via_serve_forever(tmp_path) -> None:
     asyncio.run(
         serve_forever(
             cfg,
-            state_dir=tmp_path,
+            state_dir=state_dir,
             manager_factory=factory,
             extra_tasks=[watcher],
         )
     )
     assert socket_seen.is_set()
-    assert not (tmp_path / "telemetry.sock").exists()
+    assert not (state_dir / "telemetry.sock").exists()

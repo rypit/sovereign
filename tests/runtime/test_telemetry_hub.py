@@ -37,8 +37,8 @@ def _wait_until(predicate, timeout: float = 3.0) -> None:
     raise AssertionError("condition not met in time")
 
 
-def test_hub_ingests_events_into_cache(tmp_path: Path) -> None:
-    sock_path = tmp_path / "telemetry.sock"
+def test_hub_ingests_events_into_cache(socket_path: Path) -> None:
+    sock_path = socket_path
     cache = TelemetryStateCache()
     hub = TelemetryHub(sock_path, cache)
     hub.start()
@@ -101,8 +101,8 @@ def test_cache_prefill_max_entries_bounded() -> None:
     assert len(snap["prefill"]) <= 32
 
 
-def test_hub_stale_socket_is_reclaimed(tmp_path: Path) -> None:
-    sock_path = tmp_path / "telemetry.sock"
+def test_hub_stale_socket_is_reclaimed(socket_path: Path) -> None:
+    sock_path = socket_path
     # Simulate a stale file left by a dead process: bind+close without unlinking.
     dead = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     dead.bind(str(sock_path))
@@ -118,8 +118,8 @@ def test_hub_stale_socket_is_reclaimed(tmp_path: Path) -> None:
         hub.stop()
 
 
-def test_hub_refuses_to_steal_live_socket(tmp_path: Path) -> None:
-    sock_path = tmp_path / "telemetry.sock"
+def test_hub_refuses_to_steal_live_socket(socket_path: Path) -> None:
+    sock_path = socket_path
     cache1 = TelemetryStateCache()
     hub1 = TelemetryHub(sock_path, cache1)
     hub1.start()

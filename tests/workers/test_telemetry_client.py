@@ -55,8 +55,8 @@ class _Listener:
         self._thread.join(timeout=2.0)
 
 
-def test_emit_delivers_to_listener(tmp_path: Path) -> None:
-    sock_path = tmp_path / "telemetry.sock"
+def test_emit_delivers_to_listener(socket_path: Path) -> None:
+    sock_path = socket_path
     listener = _Listener(sock_path)
     client = TelemetryClient(sock_path, "svc", reconnect_backoff=0.05, max_backoff=0.1)
     try:
@@ -73,8 +73,8 @@ def test_emit_delivers_to_listener(tmp_path: Path) -> None:
         listener.close()
 
 
-def test_emit_with_no_listener_is_fast_and_never_raises(tmp_path: Path) -> None:
-    sock_path = tmp_path / "nonexistent.sock"
+def test_emit_with_no_listener_is_fast_and_never_raises(socket_path: Path) -> None:
+    sock_path = socket_path
     client = TelemetryClient(sock_path, "svc", reconnect_backoff=1.0, max_backoff=5.0)
     try:
         start = time.time()
@@ -86,8 +86,8 @@ def test_emit_with_no_listener_is_fast_and_never_raises(tmp_path: Path) -> None:
         client.close()
 
 
-def test_late_listener_gets_reconnect_delivery(tmp_path: Path) -> None:
-    sock_path = tmp_path / "telemetry.sock"
+def test_late_listener_gets_reconnect_delivery(socket_path: Path) -> None:
+    sock_path = socket_path
     client = TelemetryClient(sock_path, "svc", reconnect_backoff=0.05, max_backoff=0.1)
     try:
         # No listener yet — these get dropped, which is expected/fine.
@@ -108,8 +108,8 @@ def test_late_listener_gets_reconnect_delivery(tmp_path: Path) -> None:
         client.close()
 
 
-def test_close_joins_promptly(tmp_path: Path) -> None:
-    sock_path = tmp_path / "nope.sock"
+def test_close_joins_promptly(socket_path: Path) -> None:
+    sock_path = socket_path
     client = TelemetryClient(sock_path, "svc", reconnect_backoff=0.05, max_backoff=0.1)
     client.emit(EventType.HEARTBEAT, {})
     start = time.time()
