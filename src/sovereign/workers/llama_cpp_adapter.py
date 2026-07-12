@@ -45,8 +45,16 @@ _KWARG_RENAMES: dict[str, str] = {
     "context_size": "n_ctx",
 }
 
+#: engine_kwargs keys that belong to the server process, not the model —
+#: llama-cpp-python splits configuration into ModelSettings and
+#: ServerSettings (uvicorn/app-level: TLS, request interruption, SSE pings,
+#: proxy root path). Routed to ServerSettings by build_server_settings().
+_SERVER_SETTINGS_KEYS = frozenset(
+    {"ssl_keyfile", "ssl_certfile", "interrupt_requests", "disable_ping_events", "root_path"}
+)
+
 #: engine_kwargs keys consumed here rather than passed through verbatim.
-_CONSUMED_KEYS = frozenset({*_KWARG_RENAMES, "kv_cache_type"})
+_CONSUMED_KEYS = frozenset({*_KWARG_RENAMES, "kv_cache_type", *_SERVER_SETTINGS_KEYS})
 
 
 def build_model_settings(
@@ -95,6 +103,26 @@ def build_model_settings(
         if key not in _CONSUMED_KEYS:
             settings[key] = value
 
+    return settings
+
+
+def build_server_settings(
+    engine_kwargs: dict[str, Any],
+    host: str,
+    port: int,
+    api_key: str | None,
+) -> dict[str, Any]:
+    """Extract the server-level (ServerSettings) portion of ``engine_kwargs``.
+
+    Pure sibling of :func:`build_model_settings`: the two split one
+    ``engine_kwargs`` dict between llama-cpp-python's ModelSettings and
+    ServerSettings, so TLS/interruption/ping/root-path knobs are reachable
+    from ``sovereign.yaml`` without a second config field.
+    """
+    settings: dict[str, Any] = {"host": host, "port": port, "api_key": api_key}
+    for key in _SERVER_SETTINGS_KEYS:
+        if key in engine_kwargs:
+            settings[key] = engine_kwargs[key]
     return settings
 
 
@@ -260,7 +288,9 @@ def run(cfg: WorkerConfig, telemetry: TelemetryClient, controller: Any) -> None:
     model_settings = ModelSettings(**model_settings_dict)
 
     api_key = os.environ.get("SOVEREIGN_API_KEY")
-    server_settings = ServerSettings(host=cfg.host, port=cfg.port, api_key=api_key)
+    server_settings = ServerSettings(
+        **build_server_settings(cfg.engine_kwargs, cfg.host, cfg.port, api_key)
+    )
 
     app = llama_app.create_app(server_settings=server_settings, model_settings=[model_settings])
 
