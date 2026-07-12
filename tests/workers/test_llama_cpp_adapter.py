@@ -154,3 +154,39 @@ def test_instrument_completions_is_noop_for_missing_attrs():
     # Must not raise even though _Bare has neither completion method.
     instrument_completions(_Bare(), telemetry.as_client())
     assert telemetry.events == []
+
+
+def test_instrument_completions_non_streaming_dict_emits_stats():
+    telemetry = _FakeTelemetry()
+
+    class _DictLlama:
+        def create_completion(self, prompt=None, **kwargs):
+            return {
+                "choices": [{"text": "hi"}],
+                "usage": {"prompt_tokens": 7, "completion_tokens": 3, "total_tokens": 10},
+            }
+
+    llama = _DictLlama()
+    instrument_completions(llama, telemetry.as_client())
+    result = llama.create_completion(prompt="hello")
+    assert result["choices"][0]["text"] == "hi"
+
+    gen_stats = [p for e, p in telemetry.events if e == EventType.GENERATION_STATS]
+    assert len(gen_stats) == 1
+    assert gen_stats[0]["prompt_tokens"] == 7
+    assert gen_stats[0]["completion_tokens"] == 3
+    assert gen_stats[0]["generation_tps"] > 0
+
+
+def test_instrument_completions_stream_abandoned_early_still_emits_stats():
+    telemetry = _FakeTelemetry()
+    fake_llama = _FakeLlama([{"choices": [{"text": "a"}]}, {"choices": [{"text": "b"}]}])
+    instrument_completions(fake_llama, telemetry.as_client())
+
+    stream = fake_llama.create_completion(prompt="hello")
+    next(stream)
+    stream.close()  # consumer disconnects mid-stream
+
+    gen_stats = [p for e, p in telemetry.events if e == EventType.GENERATION_STATS]
+    assert len(gen_stats) == 1
+    assert gen_stats[0]["completion_tokens"] == 1

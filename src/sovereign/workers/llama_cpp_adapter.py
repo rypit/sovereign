@@ -123,57 +123,88 @@ def instrument_completions(llama_like: Any, telemetry: TelemetryClient) -> None:
 def _wrap_one(original: Any, telemetry: TelemetryClient) -> Any:
     def wrapped(*args: Any, **kwargs: Any) -> Any:
         request_id = f"{id(kwargs) ^ int(time.time() * 1000)}"
-        prompt = kwargs.get("prompt") or (args[0] if args else None)
+        # Prompt token count isn't cheaply known up front; None (indeterminate)
+        # is a valid signal per the wire protocol. Non-streaming responses
+        # carry the real counts in "usage" after the fact.
         total: int | None = None
-        if isinstance(prompt, str):
-            # Cheap proxy: llama_cpp isn't asked to tokenize just for a
-            # progress estimate. None (indeterminate) is a perfectly valid
-            # signal per the wire protocol.
-            total = None
         telemetry.emit(
             EventType.PREFILL_PROGRESS,
             {"request_id": request_id, "processed": 0, "total": total},
         )
+        start = time.monotonic()
         result = original(*args, **kwargs)
-        if not hasattr(result, "__next__") and not hasattr(result, "__iter__"):
-            # Non-streaming: nothing to wrap, but still report basic stats.
-            return result
         if isinstance(result, dict):
+            # Non-streaming: the whole request (prefill + generation) is done;
+            # report stats from the response's usage block.
+            _emit_dict_stats(result, telemetry, request_id, time.monotonic() - start)
+            return result
+        if not hasattr(result, "__next__") and not hasattr(result, "__iter__"):
             return result
         return _wrap_stream(result, telemetry, request_id, total)
 
     return wrapped
 
 
+def _emit_dict_stats(
+    result: dict, telemetry: TelemetryClient, request_id: str, elapsed: float
+) -> None:
+    usage = result.get("usage") or {}
+    prompt_tokens = usage.get("prompt_tokens")
+    completion_tokens = usage.get("completion_tokens")
+    telemetry.emit(
+        EventType.PREFILL_PROGRESS,
+        {"request_id": request_id, "processed": prompt_tokens or 0, "total": prompt_tokens},
+    )
+    if completion_tokens:
+        # Elapsed covers prefill + generation; a slight underestimate of the
+        # true generation tps, but honest and better than no signal for
+        # non-streaming traffic.
+        telemetry.emit(
+            EventType.GENERATION_STATS,
+            {
+                "request_id": request_id,
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "prompt_tps": None,
+                "generation_tps": completion_tokens / max(elapsed, 1e-6),
+            },
+        )
+
+
 def _wrap_stream(stream: Any, telemetry: TelemetryClient, request_id: str, total: int | None):
     start = time.monotonic()
     first_chunk_seen = False
     completion_tokens = 0
-    for chunk in stream:
-        completion_tokens += 1
-        if not first_chunk_seen:
-            first_chunk_seen = True
+    # Stats emit lives in a finally so consumers that abandon the stream early
+    # (client disconnect, server-side break) still produce them via
+    # GeneratorExit.
+    try:
+        for chunk in stream:
+            completion_tokens += 1
+            if not first_chunk_seen:
+                first_chunk_seen = True
+                elapsed = max(time.monotonic() - start, 1e-6)
+                prompt_tps = (total / elapsed) if total else None
+                telemetry.emit(
+                    EventType.PREFILL_PROGRESS,
+                    {"request_id": request_id, "processed": total or 0, "total": total},
+                )
+                if prompt_tps is not None:
+                    _first_chunk_prompt_tps[request_id] = prompt_tps
+            yield chunk
+    finally:
+        if completion_tokens:
             elapsed = max(time.monotonic() - start, 1e-6)
-            prompt_tps = (total / elapsed) if total else None
             telemetry.emit(
-                EventType.PREFILL_PROGRESS,
-                {"request_id": request_id, "processed": total or 0, "total": total},
+                EventType.GENERATION_STATS,
+                {
+                    "request_id": request_id,
+                    "prompt_tokens": total,
+                    "completion_tokens": completion_tokens,
+                    "prompt_tps": _first_chunk_prompt_tps.pop(request_id, None),
+                    "generation_tps": completion_tokens / elapsed,
+                },
             )
-            if prompt_tps is not None:
-                _first_chunk_prompt_tps[request_id] = prompt_tps
-        yield chunk
-    elapsed = max(time.monotonic() - start, 1e-6)
-    generation_tps = completion_tokens / elapsed
-    telemetry.emit(
-        EventType.GENERATION_STATS,
-        {
-            "request_id": request_id,
-            "prompt_tokens": total,
-            "completion_tokens": completion_tokens,
-            "prompt_tps": _first_chunk_prompt_tps.pop(request_id, None),
-            "generation_tps": generation_tps,
-        },
-    )
 
 
 #: Small side-table for prompt_tps recorded at first-chunk time, consumed

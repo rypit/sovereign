@@ -133,3 +133,22 @@ def test_wrap_stream_generate_chains_existing_progress_callback():
     assert seen == [(2, 4)]
     prefill = [p for e, p in telemetry.events if e == EventType.PREFILL_PROGRESS]
     assert prefill and prefill[0]["processed"] == 2 and prefill[0]["total"] == 4
+
+
+def test_wrap_stream_generate_emits_stats_when_consumer_breaks_early():
+    # mlx_lm.server's handler breaks out of its loop on finish_reason rather
+    # than exhausting the generator — stats must still be emitted.
+    telemetry = _FakeTelemetry()
+
+    def fake_stream_generate(*args, **kwargs):
+        yield _FakeGenerationResponse(5, 50.0, 1, 10.0)
+        yield _FakeGenerationResponse(5, 50.0, 2, 20.0)
+
+    wrapped = wrap_stream_generate(fake_stream_generate, telemetry.as_client())
+    gen = wrapped("m", "t", "p")
+    next(gen)
+    gen.close()  # simulates the handler's break (GeneratorExit)
+
+    gen_stats = [p for e, p in telemetry.events if e == EventType.GENERATION_STATS]
+    assert len(gen_stats) == 1
+    assert gen_stats[0]["generation_tps"] == 10.0

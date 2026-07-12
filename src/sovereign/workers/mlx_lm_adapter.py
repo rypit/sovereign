@@ -118,13 +118,19 @@ def wrap_stream_generate(orig: Any, telemetry: TelemetryClient) -> Any:
                 kwargs.pop("prompt_progress_callback", None)
             generator = orig(*args, **kwargs)
 
+        # mlx_lm.server's handler BREAKS out of its consumption loop on the
+        # final token (finish_reason) instead of exhausting the generator, so
+        # code after the yield loop never runs for real traffic — the stats
+        # emit lives in a finally, which fires via GeneratorExit when the
+        # consumer abandons the generator.
         last_response = None
-        for response in generator:
-            last_response = response
-            yield response
-
-        if last_response is not None:
-            _emit_generation_stats(last_response, telemetry, request_id)
+        try:
+            for response in generator:
+                last_response = response
+                yield response
+        finally:
+            if last_response is not None:
+                _emit_generation_stats(last_response, telemetry, request_id)
 
     return wrapped
 
