@@ -15,6 +15,11 @@ for the full design.
 
 The default stack also runs **SearXNG**, wired into Open WebUI for web search.
 
+Contributing? See [`CONTRIBUTING.md`](./CONTRIBUTING.md),
+[`docs/architecture.md`](./docs/architecture.md) for the current layering
+and contracts, and [`docs/decisions/`](./docs/decisions/) for the ADRs
+behind them.
+
 ## Status
 
 The MVP orchestration spine is implemented and tested (Phases 0–8 and 10 of the
