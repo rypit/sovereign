@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from typing import Any, cast
 
-from sovereign.workers.mlx_lm_adapter import build_server_argv, wrap_stream_generate
+from sovereign.workers.mlx_lm_adapter import build_server_argv, wrap_response_generate
 from sovereign.workers.protocol import EventType
 from sovereign.workers.telemetry import TelemetryClient
 
@@ -62,93 +62,69 @@ class _FakeTelemetry:
         return cast(TelemetryClient, self)
 
 
-class _FakeGenerationResponse:
-    def __init__(self, prompt_tokens, prompt_tps, generation_tokens, generation_tps):
-        self.prompt_tokens = prompt_tokens
-        self.prompt_tps = prompt_tps
-        self.generation_tokens = generation_tokens
-        self.generation_tps = generation_tps
+def _fake_generate_factory(responses, prefill=(4, 4)):
+    """A fake ResponseGenerator.generate: reports prefill via the callback,
+    then returns (ctx, iterator) like mlx_lm.server 0.31.x."""
+
+    def fake_generate(self, request, generation_args, progress_callback=None):
+        if progress_callback is not None:
+            progress_callback(prefill[0] // 2, prefill[1])
+            progress_callback(*prefill)
+        return "ctx", iter(responses)
+
+    return fake_generate
 
 
-def test_wrap_stream_generate_injects_progress_callback_and_emits_stats():
+def test_wrap_response_generate_passes_ctx_and_responses_through():
     telemetry = _FakeTelemetry()
-    responses = [
-        _FakeGenerationResponse(10, 100.0, 1, 0.0),
-        _FakeGenerationResponse(10, 100.0, 2, 25.0),
-    ]
-
-    def fake_stream_generate(*args, prompt_progress_callback=None, **kwargs):
-        if prompt_progress_callback is not None:
-            prompt_progress_callback(5, 10)
-            prompt_progress_callback(10, 10)
-        yield from responses
-
-    wrapped = wrap_stream_generate(fake_stream_generate, telemetry.as_client())
-    results = list(wrapped("model", "tokenizer", "prompt"))
-    assert results == responses
-
-    event_types = [e for e, _ in telemetry.events]
-    assert event_types.count(EventType.PREFILL_PROGRESS) == 2
-    assert EventType.GENERATION_STATS in event_types
-    gen_stats = next(p for e, p in telemetry.events if e == EventType.GENERATION_STATS)
-    assert gen_stats["completion_tokens"] == 2
-    assert gen_stats["generation_tps"] == 25.0
+    wrapped = wrap_response_generate(_fake_generate_factory(["r1", "r2"]), telemetry.as_client())
+    ctx, stream = wrapped(object(), "request", "args")
+    assert ctx == "ctx"
+    assert list(stream) == ["r1", "r2"]
 
 
-def test_wrap_stream_generate_falls_back_when_callback_kwarg_unsupported():
+def test_wrap_response_generate_emits_prefill_and_generation_stats():
     telemetry = _FakeTelemetry()
+    wrapped = wrap_response_generate(_fake_generate_factory(["r1", "r2"]), telemetry.as_client())
+    _, stream = wrapped(object(), "request", "args")
+    list(stream)
 
-    def fake_stream_generate_no_callback(*args, **kwargs):
-        assert "prompt_progress_callback" not in kwargs
-        yield _FakeGenerationResponse(5, 50.0, 1, 10.0)
-
-    def strict_stream_generate(*args, **kwargs):
-        if "prompt_progress_callback" in kwargs:
-            raise TypeError("unexpected keyword argument 'prompt_progress_callback'")
-        return fake_stream_generate_no_callback(*args, **kwargs)
-
-    wrapped = wrap_stream_generate(strict_stream_generate, telemetry.as_client())
-    results = list(wrapped("model", "tokenizer", "prompt"))
-    assert len(results) == 1
-
-    event_types = [e for e, _ in telemetry.events]
-    assert EventType.PREFILL_PROGRESS not in event_types
-    assert EventType.GENERATION_STATS in event_types
+    prefill = [p for e, p in telemetry.events if e == EventType.PREFILL_PROGRESS]
+    assert prefill[-1] == {"request_id": prefill[-1]["request_id"], "processed": 4, "total": 4}
+    gen_stats = [p for e, p in telemetry.events if e == EventType.GENERATION_STATS]
+    assert len(gen_stats) == 1
+    assert gen_stats[0]["completion_tokens"] == 2
+    assert gen_stats[0]["prompt_tokens"] == 4
+    assert gen_stats[0]["generation_tps"] > 0
+    assert gen_stats[0]["prompt_tps"] > 0
 
 
-def test_wrap_stream_generate_chains_existing_progress_callback():
-    # mlx_lm.server's handler always passes its own prompt_progress_callback;
-    # the wrapper must emit telemetry AND still invoke the handler's callback.
+def test_wrap_response_generate_chains_existing_progress_callback():
     telemetry = _FakeTelemetry()
     seen: list[tuple[int, int]] = []
-
-    def fake_stream_generate(*args, **kwargs):
-        callback = kwargs["prompt_progress_callback"]
-        callback(2, 4)
-        yield _FakeGenerationResponse(4, 40.0, 1, 10.0)
-
-    wrapped = wrap_stream_generate(fake_stream_generate, telemetry.as_client())
-    list(wrapped("m", "t", "p", prompt_progress_callback=lambda p, t: seen.append((p, t))))
-
-    assert seen == [(2, 4)]
-    prefill = [p for e, p in telemetry.events if e == EventType.PREFILL_PROGRESS]
-    assert prefill and prefill[0]["processed"] == 2 and prefill[0]["total"] == 4
+    wrapped = wrap_response_generate(_fake_generate_factory(["r"]), telemetry.as_client())
+    _, stream = wrapped(object(), "request", "args", lambda p, t: seen.append((p, t)))
+    list(stream)
+    assert seen == [(2, 4), (4, 4)]
 
 
-def test_wrap_stream_generate_emits_stats_when_consumer_breaks_early():
-    # mlx_lm.server's handler breaks out of its loop on finish_reason rather
-    # than exhausting the generator — stats must still be emitted.
+def test_wrap_response_generate_emits_stats_when_consumer_breaks_early():
+    # mlx_lm.server's HTTP handler abandons the iterator on finish_reason
+    # rather than exhausting it — stats must still be emitted via finally.
     telemetry = _FakeTelemetry()
-
-    def fake_stream_generate(*args, **kwargs):
-        yield _FakeGenerationResponse(5, 50.0, 1, 10.0)
-        yield _FakeGenerationResponse(5, 50.0, 2, 20.0)
-
-    wrapped = wrap_stream_generate(fake_stream_generate, telemetry.as_client())
-    gen = wrapped("m", "t", "p")
-    next(gen)
-    gen.close()  # simulates the handler's break (GeneratorExit)
+    wrapped = wrap_response_generate(_fake_generate_factory(["r1", "r2"]), telemetry.as_client())
+    _, stream = wrapped(object(), "request", "args")
+    next(stream)
+    stream.close()
 
     gen_stats = [p for e, p in telemetry.events if e == EventType.GENERATION_STATS]
     assert len(gen_stats) == 1
-    assert gen_stats[0]["generation_tps"] == 10.0
+    assert gen_stats[0]["completion_tokens"] == 1
+
+
+def test_wrap_response_generate_no_stats_for_empty_stream():
+    telemetry = _FakeTelemetry()
+    wrapped = wrap_response_generate(_fake_generate_factory([]), telemetry.as_client())
+    _, stream = wrapped(object(), "request", "args")
+    assert list(stream) == []
+    assert EventType.GENERATION_STATS not in [e for e, _ in telemetry.events]
