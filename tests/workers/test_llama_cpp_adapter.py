@@ -190,3 +190,21 @@ def test_instrument_completions_stream_abandoned_early_still_emits_stats():
     gen_stats = [p for e, p in telemetry.events if e == EventType.GENERATION_STATS]
     assert len(gen_stats) == 1
     assert gen_stats[0]["completion_tokens"] == 1
+
+
+def test_server_settings_keys_route_to_server_not_model():
+    from sovereign.workers.llama_cpp_adapter import build_server_settings
+
+    kwargs = {"ssl_keyfile": "/k.pem", "interrupt_requests": False, "context_size": 4096}
+    model = build_model_settings(kwargs, model_path="/m.gguf", draft_model_path=None, alias=None)
+    server = build_server_settings(kwargs, host="127.0.0.1", port=9000, api_key="s3cr3t")
+
+    assert "ssl_keyfile" not in model and "interrupt_requests" not in model
+    assert model["n_ctx"] == 4096
+    assert server == {
+        "host": "127.0.0.1",
+        "port": 9000,
+        "api_key": "s3cr3t",
+        "ssl_keyfile": "/k.pem",
+        "interrupt_requests": False,
+    }
