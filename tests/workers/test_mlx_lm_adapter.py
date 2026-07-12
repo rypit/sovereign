@@ -1,5 +1,5 @@
 """Pure/near-pure tests for the mlx_lm worker adapter — no ``mlx_lm`` binding
-required, since ``build_server_namespace`` and ``wrap_stream_generate`` never
+required, since ``build_server_argv`` and ``wrap_stream_generate`` never
 import it at module scope.
 """
 
@@ -7,38 +7,48 @@ from __future__ import annotations
 
 from typing import Any, cast
 
-from sovereign.workers.mlx_lm_adapter import build_server_namespace, wrap_stream_generate
+from sovereign.workers.mlx_lm_adapter import build_server_argv, wrap_stream_generate
 from sovereign.workers.protocol import EventType
 from sovereign.workers.telemetry import TelemetryClient
 
 
-def test_build_server_namespace_merges_defaults_and_overrides():
-    defaults = {"max_tokens": 512, "temp": 0.0, "top_p": 1.0, "host": "0.0.0.0", "port": 8080}
-    namespace = build_server_namespace(
-        {"max_tokens": 1024, "temp": 0.7},
+def test_build_server_argv_maps_kwargs_to_kebab_flags():
+    argv = build_server_argv(
+        {"max_tokens": 1024, "temp": 0.7, "num_draft_tokens": 4},
         model_path="/models/foo",
         draft_model_path=None,
-        defaults=defaults,
+        host="127.0.0.1",
+        port=9000,
     )
-    assert namespace["model"] == "/models/foo"
-    assert namespace["max_tokens"] == 1024
-    assert namespace["temp"] == 0.7
-    assert namespace["top_p"] == 1.0  # untouched default
-    assert "draft_model" not in namespace
+    assert argv[:6] == ["--model", "/models/foo", "--host", "127.0.0.1", "--port", "9000"]
+    assert argv[argv.index("--max-tokens") + 1] == "1024"
+    assert argv[argv.index("--temp") + 1] == "0.7"
+    assert argv[argv.index("--num-draft-tokens") + 1] == "4"
+    assert "--draft-model" not in argv
 
 
-def test_build_server_namespace_sets_draft_model_path():
-    namespace = build_server_namespace(
-        {}, model_path="/m", draft_model_path="/draft", defaults={}
+def test_build_server_argv_sets_draft_model_path():
+    argv = build_server_argv({}, model_path="/m", draft_model_path="/draft", host="h", port=1)
+    assert argv[argv.index("--draft-model") + 1] == "/draft"
+
+
+def test_build_server_argv_bools_become_bare_flags():
+    argv = build_server_argv(
+        {"trust_remote_code": True, "use_default_chat_template": False},
+        model_path="/m",
+        draft_model_path=None,
+        host="h",
+        port=1,
     )
-    assert namespace["draft_model"] == "/draft"
+    assert "--trust-remote-code" in argv
+    assert "--use-default-chat-template" not in argv
 
 
-def test_build_server_namespace_passthrough_escape_hatch():
-    namespace = build_server_namespace(
-        {"some_future_flag": 42}, model_path="/m", draft_model_path=None, defaults={}
+def test_build_server_argv_passthrough_escape_hatch():
+    argv = build_server_argv(
+        {"some_future_flag": 42}, model_path="/m", draft_model_path=None, host="h", port=1
     )
-    assert namespace["some_future_flag"] == 42
+    assert argv[argv.index("--some-future-flag") + 1] == "42"
 
 
 class _FakeTelemetry:
@@ -104,3 +114,22 @@ def test_wrap_stream_generate_falls_back_when_callback_kwarg_unsupported():
     event_types = [e for e, _ in telemetry.events]
     assert EventType.PREFILL_PROGRESS not in event_types
     assert EventType.GENERATION_STATS in event_types
+
+
+def test_wrap_stream_generate_chains_existing_progress_callback():
+    # mlx_lm.server's handler always passes its own prompt_progress_callback;
+    # the wrapper must emit telemetry AND still invoke the handler's callback.
+    telemetry = _FakeTelemetry()
+    seen: list[tuple[int, int]] = []
+
+    def fake_stream_generate(*args, **kwargs):
+        callback = kwargs["prompt_progress_callback"]
+        callback(2, 4)
+        yield _FakeGenerationResponse(4, 40.0, 1, 10.0)
+
+    wrapped = wrap_stream_generate(fake_stream_generate, telemetry.as_client())
+    list(wrapped("m", "t", "p", prompt_progress_callback=lambda p, t: seen.append((p, t))))
+
+    assert seen == [(2, 4)]
+    prefill = [p for e, p in telemetry.events if e == EventType.PREFILL_PROGRESS]
+    assert prefill and prefill[0]["processed"] == 2 and prefill[0]["total"] == 4

@@ -20,7 +20,10 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger("sovereign")
 
-#: engine_kwargs keys that map 1:1 onto mlx_lm.server argparse namespace attrs.
+#: engine_kwargs keys that map 1:1 onto mlx_lm.server CLI flags (0.31.x:
+#: --max-tokens, --temp, --top-p, --adapter-path, --trust-remote-code,
+#: --num-draft-tokens, --prompt-cache-size, --prompt-cache-bytes,
+#: --decode-concurrency — all verified against the pinned parser in main()).
 _PASSTHROUGH_KEYS = (
     "max_tokens",
     "temp",
@@ -34,36 +37,35 @@ _PASSTHROUGH_KEYS = (
 )
 
 
-def build_server_namespace(
+def build_server_argv(
     engine_kwargs: dict[str, Any],
     model_path: str,
     draft_model_path: str | None,
-    defaults: dict[str, Any],
-) -> dict[str, Any]:
-    """Merge Sovereign's engine-agnostic kwargs onto mlx_lm.server's real
-    argparse defaults (passed in as ``defaults`` — the caller gets these from
-    ``mlx_lm.server``'s own parser via ``parser.parse_args([])`` — so this
-    function itself never needs to import ``mlx_lm``, and stays testable with
-    a fake ``defaults`` dict).
+    host: str,
+    port: int,
+) -> list[str]:
+    """Translate Sovereign's engine-agnostic kwargs into an ``mlx_lm.server``
+    CLI argv (sans program name). The adapter's ``run()`` hands this to
+    ``mlx_lm.server.main()`` so the *pinned dependency's own argparse
+    defaults* apply — the previous approach of reconstructing its namespace
+    from a parser helper broke because mlx-lm 0.31.x exposes no such helper.
 
-    Returns a plain dict (namespace-shaped); the adapter's ``run()`` turns it
-    into whatever object ``mlx_lm.server`` actually expects.
+    Boolean kwargs become bare flags when true; everything else becomes
+    ``--kebab-case value``. Unknown engine_kwargs pass through the same way
+    (escape hatch) — a flag the pinned parser doesn't know is a loud
+    argparse error at worker boot, not silent misconfiguration.
     """
-    namespace = dict(defaults)
-    namespace["model"] = model_path
+    argv = ["--model", model_path, "--host", host, "--port", str(port)]
     if draft_model_path is not None:
-        namespace["draft_model"] = draft_model_path
-
-    for key in _PASSTHROUGH_KEYS:
-        if key in engine_kwargs:
-            namespace[key] = engine_kwargs[key]
-
-    # Escape hatch: pass through anything else verbatim too.
+        argv += ["--draft-model", draft_model_path]
     for key, value in engine_kwargs.items():
-        if key not in _PASSTHROUGH_KEYS:
-            namespace[key] = value
-
-    return namespace
+        flag = "--" + key.replace("_", "-")
+        if isinstance(value, bool):
+            if value:
+                argv.append(flag)
+        else:
+            argv += [flag, str(value)]
+    return argv
 
 
 def wrap_stream_generate(orig: Any, telemetry: TelemetryClient) -> Any:
@@ -89,8 +91,18 @@ def wrap_stream_generate(orig: Any, telemetry: TelemetryClient) -> Any:
                 {"request_id": request_id, "processed": processed, "total": total},
             )
 
+        existing_callback = kwargs.get("prompt_progress_callback")
+
+        def _chained(processed: int, total: int) -> None:
+            _progress_callback(processed, total)
+            if callable(existing_callback):
+                existing_callback(processed, total)
+
         try:
-            kwargs.setdefault("prompt_progress_callback", _progress_callback)
+            # mlx_lm.server's handler passes its own prompt_progress_callback;
+            # chain ours in front rather than deferring to it, or telemetry
+            # would never see prefill progress.
+            kwargs["prompt_progress_callback"] = _chained
             generator = orig(*args, **kwargs)
         except TypeError:
             # orig doesn't accept prompt_progress_callback (API mismatch) —
@@ -100,7 +112,10 @@ def wrap_stream_generate(orig: Any, telemetry: TelemetryClient) -> Any:
                 "serving without prefill progress",
                 exc_info=True,
             )
-            kwargs.pop("prompt_progress_callback", None)
+            if callable(existing_callback):
+                kwargs["prompt_progress_callback"] = existing_callback
+            else:
+                kwargs.pop("prompt_progress_callback", None)
             generator = orig(*args, **kwargs)
 
         last_response = None
@@ -136,19 +151,10 @@ def run(cfg: WorkerConfig, telemetry: TelemetryClient, controller: Any) -> None:
     so a moved attribute degrades to "serves without stats" rather than
     crashing boot.
     """
-    import argparse
+    import _thread
+    import sys
 
     import mlx_lm.server as mlx_server
-
-    parser = mlx_server.setup_arg_parser()  # verify against pinned mlx-lm version
-    defaults = vars(parser.parse_args([]))
-
-    namespace_dict = build_server_namespace(
-        cfg.engine_kwargs, cfg.model_path, cfg.draft_model_path, defaults
-    )
-    namespace_dict["host"] = cfg.host
-    namespace_dict["port"] = cfg.port
-    namespace = argparse.Namespace(**namespace_dict)
 
     try:
         original_stream_generate = mlx_server.stream_generate
@@ -159,19 +165,24 @@ def run(cfg: WorkerConfig, telemetry: TelemetryClient, controller: Any) -> None:
             exc_info=True,
         )
 
-    model_provider = mlx_server.ModelProvider(namespace)
+    argv = build_server_argv(
+        cfg.engine_kwargs, cfg.model_path, cfg.draft_model_path, cfg.host, cfg.port
+    )
+
+    # SIGTERM cooperation: mlx's serve loop catches KeyboardInterrupt and
+    # shuts the httpd + response generator down cleanly, so interrupting the
+    # main thread IS the graceful-stop path.
+    controller.shutdown_callback = _thread.interrupt_main
 
     telemetry.emit(EventType.STATE_CHANGE, {"state": "serving"})
 
-    httpd = mlx_server.run(
-        namespace.host,
-        namespace.port,
-        model_provider,
-    )
-    # mlx_lm.server.run() is a blocking serve_forever() under the hood in
-    # published versions; if it instead returns a server object, cooperate
-    # with the shutdown controller so SIGTERM stops it gracefully.
-    if httpd is not None and hasattr(httpd, "shutdown"):
-        controller.shutdown_callback = httpd.shutdown
-        controller.stop_event.wait()
-        httpd.shutdown()
+    # Drive the pinned dependency's own entrypoint (its argparse defaults and
+    # ModelProvider/ResponseGenerator wiring apply verbatim) rather than
+    # reconstructing its internals — mlx-lm 0.31.x has no stable programmatic
+    # construction surface.
+    saved_argv = sys.argv
+    sys.argv = ["mlx_lm.server", *argv]
+    try:
+        mlx_server.main()
+    finally:
+        sys.argv = saved_argv
