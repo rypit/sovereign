@@ -66,6 +66,9 @@ jobs:
       - name: make lint
         run: make lint
 
+      - name: make arch
+        run: make arch
+
   typecheck:
     name: typecheck
     runs-on: ubuntu-latest

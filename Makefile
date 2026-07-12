@@ -1,5 +1,5 @@
 # Canonical developer verbs — the same commands CI runs.
-.PHONY: setup test coverage lint typecheck check graph
+.PHONY: setup test coverage lint typecheck arch check graph
 
 setup:            ## Bootstrap toolchain + env + integration deps (macOS)
 	python3 scripts/setup.py
@@ -16,7 +16,11 @@ lint:             ## Ruff lint
 typecheck:        ## Mypy over src/sovereign + tests
 	uv run mypy
 
-check: lint typecheck test  ## Everything CI checks, locally
+arch:             ## Architecture guardrails: dep-graph rules + doc consistency
+	uv run python scripts/depgraph.py --check
+	uv run python scripts/check_docs.py
+
+check: lint typecheck arch test  ## Everything CI checks, locally
 
 graph:            ## Regenerate the internal dependency graph
 	uv run python scripts/depgraph.py
