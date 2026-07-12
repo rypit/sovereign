@@ -68,85 +68,76 @@ def build_server_argv(
     return argv
 
 
-def wrap_stream_generate(orig: Any, telemetry: TelemetryClient) -> Any:
-    """Wrap ``mlx_lm.server``'s module-global ``stream_generate`` so prefill
-    progress and final generation stats get emitted as telemetry.
+def wrap_response_generate(orig: Any, telemetry: TelemetryClient) -> Any:
+    """Wrap ``mlx_lm.server``'s ``ResponseGenerator.generate`` — the one seam
+    both its sequential (``stream_generate``) and batched (``BatchGenerator``)
+    paths flow through (batchable models never touch ``stream_generate``, so
+    wrapping that alone misses most real traffic).
 
-    ``orig`` only needs to be a callable that accepts a ``prompt_progress_callback``
-    keyword (mlx_lm's real signature) and returns/yields ``GenerationResponse``-like
-    objects with ``prompt_tokens``/``prompt_tps``/``generation_tokens``/
-    ``generation_tps`` attributes — this makes the wrapper testable against a
-    bare fake generator function, no ``mlx_lm`` import required. Any mismatch in
-    the real API (attributes moved, callback kwarg renamed) is caught and logged;
-    the wrapper then falls back to calling ``orig`` unmodified so serving
-    continues without stats.
+    ``orig(self, request, generation_args, progress_callback)`` returns
+    ``(ctx, response-iterator)``; prefill progress arrives as
+    ``(processed, total)`` calls on ``progress_callback``. Since mlx's
+    ``Response`` objects carry no throughput fields, the wrapper measures
+    timing itself: prefill window = call → first yielded token, generation
+    window = first token → stream end. Stats emit from a ``finally`` because
+    the HTTP handler abandons the iterator on finish_reason rather than
+    exhausting it. Testable with a fake ``orig``; any API mismatch is the
+    caller's job to catch (run() patches under a try/except and fails soft).
     """
 
-    def wrapped(*args: Any, **kwargs: Any):
-        request_id = f"{id(kwargs) ^ int(time.time() * 1000)}"
+    def wrapped(
+        self: Any,
+        request: Any,
+        generation_args: Any,
+        progress_callback: Any = None,
+        **kwargs: Any,
+    ) -> Any:
+        request_id = f"{id(request) ^ int(time.time() * 1000)}"
+        t0 = time.monotonic()
+        prefill_state: dict[str, Any] = {"processed": 0, "total": None}
 
-        def _progress_callback(processed: int, total: int) -> None:
+        def _chained(processed: int, total: int) -> None:
+            prefill_state["processed"] = processed
+            prefill_state["total"] = total
             telemetry.emit(
                 EventType.PREFILL_PROGRESS,
                 {"request_id": request_id, "processed": processed, "total": total},
             )
+            if callable(progress_callback):
+                progress_callback(processed, total)
 
-        existing_callback = kwargs.get("prompt_progress_callback")
+        ctx, stream = orig(self, request, generation_args, _chained, **kwargs)
 
-        def _chained(processed: int, total: int) -> None:
-            _progress_callback(processed, total)
-            if callable(existing_callback):
-                existing_callback(processed, total)
+        def _instrumented() -> Any:
+            completion_tokens = 0
+            t_first: float | None = None
+            try:
+                for response in stream:
+                    if t_first is None:
+                        t_first = time.monotonic()
+                    completion_tokens += 1
+                    yield response
+            finally:
+                if completion_tokens and t_first is not None:
+                    prompt_tokens = prefill_state["processed"] or None
+                    prefill_elapsed = max(t_first - t0, 1e-6)
+                    generation_elapsed = max(time.monotonic() - t_first, 1e-6)
+                    telemetry.emit(
+                        EventType.GENERATION_STATS,
+                        {
+                            "request_id": request_id,
+                            "prompt_tokens": prompt_tokens,
+                            "completion_tokens": completion_tokens,
+                            "prompt_tps": (
+                                prompt_tokens / prefill_elapsed if prompt_tokens else None
+                            ),
+                            "generation_tps": completion_tokens / generation_elapsed,
+                        },
+                    )
 
-        try:
-            # mlx_lm.server's handler passes its own prompt_progress_callback;
-            # chain ours in front rather than deferring to it, or telemetry
-            # would never see prefill progress.
-            kwargs["prompt_progress_callback"] = _chained
-            generator = orig(*args, **kwargs)
-        except TypeError:
-            # orig doesn't accept prompt_progress_callback (API mismatch) —
-            # fail soft: serve without prefill progress.
-            logger.warning(
-                "mlx_lm.stream_generate does not accept prompt_progress_callback; "
-                "serving without prefill progress",
-                exc_info=True,
-            )
-            if callable(existing_callback):
-                kwargs["prompt_progress_callback"] = existing_callback
-            else:
-                kwargs.pop("prompt_progress_callback", None)
-            generator = orig(*args, **kwargs)
-
-        # mlx_lm.server's handler BREAKS out of its consumption loop on the
-        # final token (finish_reason) instead of exhausting the generator, so
-        # code after the yield loop never runs for real traffic — the stats
-        # emit lives in a finally, which fires via GeneratorExit when the
-        # consumer abandons the generator.
-        last_response = None
-        try:
-            for response in generator:
-                last_response = response
-                yield response
-        finally:
-            if last_response is not None:
-                _emit_generation_stats(last_response, telemetry, request_id)
+        return ctx, _instrumented()
 
     return wrapped
-
-
-def _emit_generation_stats(response: Any, telemetry: TelemetryClient, request_id: str) -> None:
-    try:
-        payload = {
-            "request_id": request_id,
-            "prompt_tokens": getattr(response, "prompt_tokens", None),
-            "completion_tokens": getattr(response, "generation_tokens", None),
-            "prompt_tps": getattr(response, "prompt_tps", None),
-            "generation_tps": getattr(response, "generation_tps", None),
-        }
-        telemetry.emit(EventType.GENERATION_STATS, payload)
-    except Exception:  # noqa: BLE001 - fail soft, never break the serving loop
-        logger.warning("failed to emit generation_stats", exc_info=True)
 
 
 def run(cfg: WorkerConfig, telemetry: TelemetryClient, controller: Any) -> None:
@@ -163,11 +154,13 @@ def run(cfg: WorkerConfig, telemetry: TelemetryClient, controller: Any) -> None:
     import mlx_lm.server as mlx_server
 
     try:
-        original_stream_generate = mlx_server.stream_generate
-        mlx_server.stream_generate = wrap_stream_generate(original_stream_generate, telemetry)
+        original_generate = mlx_server.ResponseGenerator.generate
+        mlx_server.ResponseGenerator.generate = wrap_response_generate(
+            original_generate, telemetry
+        )
     except Exception:  # noqa: BLE001 - fail soft, serve without stats
         logger.warning(
-            "could not instrument mlx_lm.server.stream_generate; serving without stats",
+            "could not instrument mlx_lm.server ResponseGenerator; serving without stats",
             exc_info=True,
         )
 
