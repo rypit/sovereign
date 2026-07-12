@@ -82,6 +82,15 @@ workers/           embedded engine worker processes (spawned via
 harnesses/         cline_cli, mini_swe_agent          (auto-discovered)
 bench/             content-addressed bench cells; only cleanroom.py may
                    import the Orchestrator; bench sub-app CLI lives in bench/cli.py
+scripts/
+  depgraph.py      AST-based dep graph report + `--check` (import cycles,
+                   ARCH_RULES layering violations, docs/dependency-graph.md
+                   freshness) — `make graph` / `make arch`
+  check_docs.py    §N citation validity, ADR well-formedness, architecture.md
+                   <-> ARCH_RULES rule-id parity — `make arch`
+docs/
+  decisions/       ADRs (docs/decisions/README.md has the convention + template)
+  architecture.md  living layering/contracts doc; rule ids mirror ARCH_RULES
 ```
 
 Dependency direction: `config` depends only on Pydantic (the "golden rule" —
@@ -141,3 +150,23 @@ code stays a leaf. `runtime/orchestrator` imports `core/*`; nothing in
   user-facing output goes through the Rich `console`.
 - Docstrings cite plan sections (§N) — they refer to
   `docs/sovereign-implementation-plan-v1.1.md`.
+
+## Working agreements
+
+- Write an ADR (`docs/decisions/`, see its `README.md`) before/alongside a
+  change to: layering or dependency direction, a core Protocol/contract,
+  `sovereign.yaml` schema *semantics*, the memory/admission model, the
+  process/lifecycle model, the telemetry wire protocol, or testing seams.
+  The `/adr` skill scaffolds one.
+- Touch these docs when they apply: `docs/architecture.md` (layering,
+  contracts, or an invariant changed), this file's architecture map (a
+  directory/file's role changed), `docs/dependency-graph.md` via `make graph`
+  (the module set changed).
+- `make check` now runs `make arch` (`scripts/depgraph.py --check` +
+  `scripts/check_docs.py`) alongside lint/typecheck/test — it fails on a
+  layering violation, an import cycle, a stale dependency graph, a broken
+  `§N` citation, or a malformed ADR. Run `/architecture-review` before a PR
+  that touches a Protocol, the config schema, or the telemetry wire format.
+- No ADR needed for a purely additive change (new optional config field,
+  new integration folder following the existing pattern) — say so in the
+  PR description instead of writing one.
