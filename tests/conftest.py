@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import shutil
+import tempfile
+from collections.abc import Iterator
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -70,3 +73,18 @@ def sparse_file():
                 f.truncate(size)
 
     return _make
+
+
+@pytest.fixture
+def socket_path() -> Iterator[Path]:
+    """A unix-domain-socket path short enough to bind on every platform.
+
+    macOS caps AF_UNIX sun_path at ~104 bytes and pytest's tmp_path nests
+    deeply enough on CI runners to exceed it, so socket tests use a dedicated
+    short-lived directory under the system temp root instead of tmp_path.
+    """
+    tmp_dir = tempfile.mkdtemp(prefix="sov-")
+    try:
+        yield Path(tmp_dir) / "t.sock"
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)

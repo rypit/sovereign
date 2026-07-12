@@ -142,7 +142,10 @@ class NativeEngineManager(ActivityMixin, Provisioner):
         location every engine config already carries. Matches the
         ``.sovereign/logs`` default, i.e. ``.sovereign/``; overriding
         ``log_dir`` to point somewhere other than ``<state_dir>/logs`` moves
-        the telemetry socket and worker-config directory along with it."""
+        the telemetry socket and worker-config directory along with it.
+        Note AF_UNIX socket paths are length-capped (~104 bytes on macOS) —
+        a stack rooted very deep in the filesystem can't bind its telemetry
+        socket and runs without live telemetry."""
         return Path(self.config.log_dir).expanduser().parent
 
     def worker_config(self) -> WorkerConfig:

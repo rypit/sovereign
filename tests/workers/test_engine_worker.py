@@ -68,9 +68,9 @@ def _wait_for_health(url: str, timeout: float = 10.0) -> None:
 
 
 @pytest.fixture
-def hub(tmp_path: Path):
+def hub(socket_path: Path):
     cache = TelemetryStateCache()
-    sock_path = tmp_path / "telemetry.sock"
+    sock_path = socket_path
     hub = TelemetryHub(sock_path, cache)
     hub.start()
     yield hub, cache, sock_path

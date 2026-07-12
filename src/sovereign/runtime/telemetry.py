@@ -232,6 +232,10 @@ class TelemetryHub:
         self._socket_path.parent.mkdir(parents=True, exist_ok=True)
         listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         try:
+            # AF_UNIX sun_path is capped (~104 bytes on macOS, 108 on linux) —
+            # a stack rooted deep in the filesystem can make this bind fail
+            # with "AF_UNIX path too long"; the orchestrator degrades to
+            # running without live telemetry in that case.
             listener.bind(str(self._socket_path))
         except OSError:
             listener.close()
