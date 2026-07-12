@@ -18,13 +18,22 @@ ordering is fully sorted, so re-running produces no spurious diffs.
 Usage:
     uv run python scripts/depgraph.py
     uv run python scripts/depgraph.py --root src/sovereign --out docs/dependency-graph.md
+    uv run python scripts/depgraph.py --check
+
+``--check`` runs the same analysis in-memory (nothing is written) and exits
+1 on the first violation found: a runtime import cycle, an ``ARCH_RULES``
+layering violation, or a stale ``docs/dependency-graph.md``. See
+``docs/architecture.md`` — its "Dependency rules" section must list the same
+rule ids as ``ARCH_RULES`` below (``scripts/check_docs.py`` asserts this).
 """
 
 from __future__ import annotations
 
 import argparse
 import ast
+import dataclasses
 import datetime as dt
+import fnmatch
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -33,6 +42,111 @@ DEFAULT_OUT = REPO_ROOT / "docs" / "dependency-graph.md"
 
 # The dotted prefix that marks an import as internal (worth graphing).
 PACKAGE = "sovereign"
+
+
+@dataclasses.dataclass(frozen=True)
+class ArchRule:
+    """A layering rule evaluated over the runtime edge list.
+
+    ``scope`` is an fnmatch-style pattern (dotted module names, ``*`` wildcard)
+    selecting which source modules the rule applies to. ``allowed`` is the
+    exhaustive set of import patterns those modules may use — anything else is
+    a violation. Exactly one of ``allowed`` should be set per rule; keep rules
+    simple (allow-list only) so they stay easy to read as data.
+    """
+
+    id: str
+    description: str
+    scope: tuple[str, ...]
+    allowed: tuple[str, ...]
+    exempt: tuple[str, ...] = ()
+
+    def applies_to(self, module: str) -> bool:
+        if any(fnmatch.fnmatchcase(module, pat) for pat in self.exempt):
+            return False
+        return any(fnmatch.fnmatchcase(module, pat) for pat in self.scope)
+
+    def permits(self, target: str) -> bool:
+        """Is an import of ``target`` allowed under this rule?
+
+        Two rule shapes, distinguished by ``allowed``'s contents: an
+        allow-list (only these patterns are permitted — everything else is a
+        violation) or, when every entry is negated (``"!pattern"``), a
+        deny-list (everything is permitted except these patterns).
+        """
+        if self.allowed and all(pat.startswith("!") for pat in self.allowed):
+            forbidden = [pat[1:] for pat in self.allowed]
+            return not any(fnmatch.fnmatchcase(target, pat) for pat in forbidden)
+        return any(fnmatch.fnmatchcase(target, pat) for pat in self.allowed)
+
+
+# Layering rules, declared as data. Keep in sync with the "Dependency rules"
+# section of docs/architecture.md (rule ids must match exactly).
+ARCH_RULES: tuple[ArchRule, ...] = (
+    ArchRule(
+        id="config-golden-rule",
+        description=(
+            "config.py, **/config.py, and core/base_config.py may only import "
+            "core.units and core.base_config (plus stdlib/Pydantic) — config "
+            "must never own subprocess/os/docker."
+        ),
+        scope=("sovereign.config", "*.config", "sovereign.core.base_config"),
+        allowed=("sovereign.core.units", "sovereign.core.base_config"),
+    ),
+    ArchRule(
+        id="workers-leaf",
+        description=(
+            "workers/* may only import other workers/* modules and "
+            "core.procmem — worker modules stay importable without engine "
+            "bindings or the rest of the control plane."
+        ),
+        scope=("sovereign.workers.*",),
+        allowed=("sovereign.workers.*", "sovereign.core.procmem"),
+    ),
+    ArchRule(
+        id="hf-leaf",
+        description=(
+            "services/inference/hf.py may only import core.errors and "
+            "core.state — it stays a leaf nothing above services/ needs to "
+            "import directly."
+        ),
+        scope=("sovereign.services.inference.hf",),
+        allowed=("sovereign.core.errors", "sovereign.core.state"),
+    ),
+    ArchRule(
+        id="runtime-no-bench",
+        description="runtime/* must never import bench/*.",
+        scope=("sovereign.runtime.*",),
+        allowed=("!sovereign.bench.*",),
+    ),
+    ArchRule(
+        id="bench-single-door",
+        description=(
+            "Only bench/cleanroom.py may import runtime.orchestrator — every "
+            "other bench module reaches the orchestrator (if at all) through "
+            "that one door."
+        ),
+        scope=("sovereign.bench.*",),
+        allowed=("!sovereign.runtime.orchestrator",),
+        exempt=("sovereign.bench.cleanroom",),
+    ),
+    ArchRule(
+        id="core-single-door",
+        description=(
+            "Nothing in core/ imports services/ or harnesses/ at runtime "
+            "except core.registry — the one sanctioned door from the "
+            "contract layer into concrete integrations."
+        ),
+        scope=("sovereign.core.*",),
+        allowed=("!sovereign.services.*", "!sovereign.harnesses.*"),
+        exempt=("sovereign.core.registry",),
+    ),
+)
+
+# Rule ids we've deliberately decided to keep despite a violation, e.g.
+# ("workers-leaf", "sovereign.workers.foo", "sovereign.core.bar"). Empty: the
+# current graph is clean against every rule above.
+GRANDFATHERED: frozenset[tuple[str, str, str]] = frozenset()
 
 
 def discover_modules(root: Path) -> dict[str, Path]:
@@ -359,6 +473,58 @@ def render_report(graph: EdgeGraph, labels: dict[str, str]) -> str:
     return "\n".join(out)
 
 
+def check_arch_rules(graph: EdgeGraph) -> list[str]:
+    """Evaluate ``ARCH_RULES`` over the runtime edge list.
+
+    Returns one human-readable ``"<rule-id>: <message>"`` string per
+    violation, empty if the graph is clean (module-level self-imports never
+    occur and are skipped defensively).
+    """
+    rt = runtime_graph(graph)
+    violations: list[str] = []
+    for module in sorted(rt):
+        for rule in ARCH_RULES:
+            if not rule.applies_to(module):
+                continue
+            for target in sorted(rt[module]):
+                if target == module or rule.permits(target):
+                    continue
+                if (rule.id, module, target) in GRANDFATHERED:
+                    continue
+                violations.append(
+                    f"{rule.id}: `{module}` imports `{target}` — {rule.description}"
+                )
+    return violations
+
+
+def check_cycles(graph: EdgeGraph) -> list[str]:
+    """Return one message per runtime import cycle (empty if none)."""
+    cycles = find_cycles(runtime_graph(graph))
+    return [f"import-cycle: {' -> '.join(scc)} -> ..." for scc in cycles]
+
+
+def check_freshness(graph: EdgeGraph, labels: dict[str, str], out_path: Path) -> str | None:
+    """Return a violation message if ``out_path`` is stale, else ``None``.
+
+    Regenerates the report in-memory and compares it to the checked-in file,
+    ignoring the "_Generated <date>" line (which always differs run to run).
+    """
+
+    def _strip_generated(text: str) -> str:
+        return "\n".join(
+            line for line in text.splitlines() if not line.startswith("_Generated ")
+        )
+
+    if not out_path.exists():
+        return f"docs-freshness: {out_path} does not exist — run `make graph`"
+
+    current = _strip_generated(out_path.read_text(encoding="utf-8"))
+    fresh = _strip_generated(render_report(graph, labels))
+    if current.strip() != fresh.strip():
+        return f"docs-freshness: {out_path} is stale — run `make graph` and commit the result"
+    return None
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -373,6 +539,14 @@ def main() -> int:
         default=DEFAULT_OUT,
         help="Markdown file to write (default: docs/dependency-graph.md)",
     )
+    parser.add_argument(
+        "--check",
+        action="store_true",
+        help=(
+            "Check mode: exit 1 on any runtime import cycle, ARCH_RULES "
+            "violation, or stale docs/dependency-graph.md. Writes nothing."
+        ),
+    )
     args = parser.parse_args()
 
     root: Path = args.root.resolve()
@@ -382,8 +556,25 @@ def main() -> int:
     modules = discover_modules(root)
     graph = build_graph(modules)
     labels = build_labels(modules, root)
-    report = render_report(graph, labels)
 
+    if args.check:
+        violations = [
+            *check_cycles(graph),
+            *check_arch_rules(graph),
+        ]
+        freshness = check_freshness(graph, labels, args.out)
+        if freshness is not None:
+            violations.append(freshness)
+
+        if violations:
+            print(f"depgraph --check: {len(violations)} violation(s):")
+            for v in violations:
+                print(f"  - {v}")
+            return 1
+        print(f"depgraph --check: clean ({len(modules)} modules).")
+        return 0
+
+    report = render_report(graph, labels)
     out: Path = args.out
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(report + "\n", encoding="utf-8")
