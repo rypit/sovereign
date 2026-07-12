@@ -382,11 +382,22 @@ def test_prepare_environment_repo_id_ok(monkeypatch) -> None:
     _manager({"model": "ggml-org/gemma-3-1b-it-GGUF"}).prepare_environment()
 
 
-def test_prepare_environment_draft_model_raises(tmp_path, monkeypatch) -> None:
+def test_prepare_environment_draft_model_accepted(tmp_path, monkeypatch) -> None:
+    # Two-model speculation is served by the worker's LlamaGgufDraftModel — a
+    # configured draft GGUF is valid config again, validated like the main model.
+    model = tmp_path / "m.gguf"
+    model.write_bytes(b"gguf")
+    draft = tmp_path / "d.gguf"
+    draft.write_bytes(b"gguf")
+    monkeypatch.setattr(native_mod, "probe_import", lambda m: True)
+    _manager({"model": str(model), "draft_model": str(draft)}).prepare_environment()
+
+
+def test_prepare_environment_missing_local_draft_raises(tmp_path, monkeypatch) -> None:
     model = tmp_path / "m.gguf"
     model.write_bytes(b"gguf")
     monkeypatch.setattr(native_mod, "probe_import", lambda m: True)
-    with pytest.raises(ValueError, match="no longer supports GGUF draft models"):
+    with pytest.raises(FileNotFoundError, match="draft_model"):
         _manager(
             {"model": str(model), "draft_model": "/nope/missing-draft.gguf"}
         ).prepare_environment()
@@ -635,17 +646,15 @@ def test_estimated_memory_repo_id_from_metadata(monkeypatch) -> None:
     assert m.estimated_memory_bytes() == 2 * 1024**3
 
 
-def test_estimated_memory_excludes_draft_weights(tmp_path, sparse_file) -> None:
-    # llama_cpp has no second-GGUF speculative decoding (supports_draft_model =
-    # False) — a configured draft_model's weights never load, so they must not
-    # inflate admission control's estimate even though prepare_environment()
-    # hard-errors on this config before boot.
+def test_estimated_memory_includes_draft_weights(tmp_path, sparse_file) -> None:
+    # Two-model speculation (worker-side LlamaGgufDraftModel) keeps both GGUFs
+    # in unified memory simultaneously, so the draft's weights count.
     model = tmp_path / "m.gguf"
     sparse_file(model, 2 * 1024**3)  # 2 GiB
     draft = tmp_path / "d.gguf"
     sparse_file(draft, 1 * 1024**3)  # 1 GiB
     m = _manager({"model": str(model), "draft_model": str(draft)})
-    assert m.estimated_memory_bytes() == 2 * 1024**3
+    assert m.estimated_memory_bytes() == 3 * 1024**3
 
 
 def test_per_slot_context_divides_across_slots() -> None:

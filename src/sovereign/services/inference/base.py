@@ -100,12 +100,6 @@ class NativeEngineManager(ActivityMixin, Provisioner):
     consumer_kind = ConsumerKind.NATIVE
     #: Optional extra sentence appended to the missing-binding error.
     binary_hint: ClassVar[str] = ""
-    #: Whether this engine's binding supports true multi-model speculative
-    #: decoding (a second set of weights loaded alongside the main model).
-    #: llama_cpp sets this to False (§3a hard gap) so a configured
-    #: ``draft_model`` doesn't inflate its admission-control estimate for
-    #: weights the worker will never actually load.
-    supports_draft_model: ClassVar[bool] = True
     #: Modules whose importability (probed out-of-process, see
     #: :func:`probe_import`) gates this engine's ``prepare_environment()`` —
     #: replaces the old binary-on-PATH check now that engines run in-process
@@ -210,7 +204,7 @@ class NativeEngineManager(ActivityMixin, Provisioner):
         if self.memory_override_bytes is not None:
             return self.memory_override_bytes
         total = self._model_bytes(self.config.model)
-        if self.config.draft_model is not None and self.supports_draft_model:
+        if self.config.draft_model is not None:
             total += self._model_bytes(self.config.draft_model)
         return total + self.extra_memory_bytes()
 
