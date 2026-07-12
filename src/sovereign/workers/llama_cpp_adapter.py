@@ -262,13 +262,14 @@ def _app_model(app: Any) -> Any | None:
     across versions; a mismatch returns None so callers degrade gracefully
     (serve without stats/speculation) rather than crashing boot."""
     try:
-        from llama_cpp.server.app import get_llama_proxy
+        import llama_cpp.server.app as llama_app
 
-        proxy = getattr(app.state, "llama_proxy", None) or get_llama_proxy
-        # Different llama-cpp-python versions expose the loaded model(s)
-        # differently (a proxy, a dict keyed by model alias, ...). Try the
-        # shapes we know about; anything else fails soft.
-        if proxy is not None and hasattr(proxy, "_current_model"):
+        # create_app() stores the proxy in the module-global `_llama_proxy`
+        # (set_llama_proxy), and LlamaProxy.__init__ eagerly loads the default
+        # model into `_current_model` — verified against llama-cpp-python
+        # 0.3.33. Both are private; a future rename fails soft to None here.
+        proxy = getattr(llama_app, "_llama_proxy", None)
+        if proxy is not None:
             return getattr(proxy, "_current_model", None)
     except Exception:  # noqa: BLE001 - accessor is best-effort
         logger.warning("could not reach llama_cpp server model", exc_info=True)

@@ -17,11 +17,14 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.request
+from pathlib import Path
 
 import psutil
 import pytest
@@ -68,16 +71,43 @@ def _wait_for(predicate, *, timeout: float, interval: float = 1.0, what: str = "
     pytest.fail(f"timed out after {timeout:.0f}s waiting for {what}")
 
 
+@pytest.fixture
+def stack_dir():
+    """A short-lived stack directory under the system temp root.
+
+    Not pytest's tmp_path: the stack dir anchors `.sovereign/telemetry.sock`,
+    and macOS caps AF_UNIX socket paths at ~104 bytes — tmp_path's deep
+    nesting on CI runners exceeds it, which silently degrades `serve` to
+    running without live telemetry (and fails the generation-stats asserts).
+    """
+    d = Path(tempfile.mkdtemp(prefix="sov-"))
+    try:
+        yield d
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
+def _dump_worker_log(state_dir: Path, name: str = "engine") -> None:
+    """Print the worker's log tail so CI failures are diagnosable."""
+    log = state_dir / "logs" / f"{name}.log"
+    if log.exists():
+        tail = log.read_text(errors="replace").splitlines()[-40:]
+        print(f"--- worker log tail ({log}) ---")
+        for line in tail:
+            print(line)
+        print("--- end worker log ---")
+
+
 @pytest.mark.skipif(
     importlib.util.find_spec("mlx_lm") is None,
     reason="mlx-lm not installed (darwin/arm64-only dependency)",
 )
-def test_mlx_stack_boots_serves_and_tears_down(tmp_path) -> None:
-    stack = tmp_path / "stack.yaml"
+def test_mlx_stack_boots_serves_and_tears_down(stack_dir) -> None:
+    stack = stack_dir / "stack.yaml"
     stack.write_text(_STACK_YAML)
-    state_dir = tmp_path / ".sovereign"
+    state_dir = stack_dir / ".sovereign"
 
-    serve = _sovereign("serve", "-f", str(stack), cwd=tmp_path)
+    serve = _sovereign("serve", "-f", str(stack), cwd=stack_dir)
     try:
         # READY, observed through the persisted coordination files.
         def _ready():
@@ -133,7 +163,7 @@ def test_mlx_stack_boots_serves_and_tears_down(tmp_path) -> None:
         assert telemetry["generation_tps"] > 0
 
         # Cross-process teardown: `down` from a separate process reaps the PID.
-        down = _sovereign("down", "--state-dir", str(state_dir), cwd=tmp_path)
+        down = _sovereign("down", "--state-dir", str(state_dir), cwd=stack_dir)
         assert down.wait(timeout=60) == 0
         _wait_for(
             lambda: not psutil.pid_exists(engine_pid),
@@ -145,6 +175,7 @@ def test_mlx_stack_boots_serves_and_tears_down(tmp_path) -> None:
         assert state["services"]["engine"] == "stopped"
         assert state["runtime"] == {}
     finally:
+        _dump_worker_log(state_dir)
         if serve.poll() is None:
             serve.send_signal(signal.SIGINT)
             try:
