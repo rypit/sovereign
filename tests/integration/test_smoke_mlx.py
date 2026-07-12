@@ -1,20 +1,16 @@
-"""Real-boot smoke test: Sovereign demonstrably boots a model (P2.1).
+"""Real-boot smoke test for the mlx_lm embedded worker.
 
-The hermetic suite never executes anything real; this test does. It runs
-`sovereign serve` as a subprocess against a tiny GGUF, waits for READY via the
-persisted state files (the same cross-process coordination `sovereign status`
-uses), hits the live health endpoint, then stops the stack with
-`sovereign down` and asserts the exact engine PID is gone. Along the way it
-sends one real chat completion through the embedded worker and asserts the
-telemetry pipeline surfaced generation stats into status.json — so the
-non-public-API instrumentation (completion wrapping) is exercised against the
-real binding, not just fakes.
+Mirrors ``test_smoke_llama.py`` for the second native engine: boots a tiny MLX
+model through `sovereign serve`, waits for READY via the persisted state
+files, hits the live health endpoint, sends one real chat completion, asserts
+the telemetry pipeline surfaced generation stats into status.json (the
+``stream_generate`` wrapping runs against the real binding here), then tears
+down with `sovereign down` and asserts the exact engine PID is gone.
 
 Opt-in only: marked `integration`, excluded from `make test` (see pytest
-addopts), and skipped when `llama-cpp-python` isn't installed (it is a
-darwin/arm64-marked dependency, so `uv sync` provides it there). CI runs it on
-a macOS arm64 runner with the HF cache cached between runs
-(~/.cache/huggingface).
+addopts), and skipped when `mlx-lm` isn't installed (darwin/arm64-only
+dependency, provided by `uv sync` there). CI runs it on a macOS arm64 runner
+with the HF cache cached between runs (~/.cache/huggingface).
 """
 
 from __future__ import annotations
@@ -32,9 +28,9 @@ import pytest
 
 pytestmark = pytest.mark.integration
 
-# Tiny instruct model: the Q2_K single-file GGUF is ~340 MB.
-_MODEL = "Qwen/Qwen2.5-0.5B-Instruct-GGUF:Q2_K"
-_PORT = 18434
+# Tiny instruct model: the 4-bit MLX snapshot is ~280 MB.
+_MODEL = "mlx-community/Qwen2.5-0.5B-Instruct-4bit"
+_PORT = 18435
 _BOOT_TIMEOUT = 600.0  # first run downloads the model; cached runs boot in seconds
 _STACK_YAML = f"""\
 version: "1.1"
@@ -43,7 +39,7 @@ resources:
   safety_margin_gb: 1
 services:
   - name: engine
-    base_type: llama_cpp
+    base_type: mlx_lm
     health_check:
       type: http
       endpoint: /health
@@ -51,7 +47,7 @@ services:
       timeout_seconds: 300
     config:
       model: {_MODEL}
-      context_size: 2048
+      max_tokens: 64
 """
 
 
@@ -73,10 +69,10 @@ def _wait_for(predicate, *, timeout: float, interval: float = 1.0, what: str = "
 
 
 @pytest.mark.skipif(
-    importlib.util.find_spec("llama_cpp") is None,
-    reason="llama-cpp-python not installed (darwin/arm64-only dependency)",
+    importlib.util.find_spec("mlx_lm") is None,
+    reason="mlx-lm not installed (darwin/arm64-only dependency)",
 )
-def test_llama_stack_boots_serves_and_tears_down(tmp_path) -> None:
+def test_mlx_stack_boots_serves_and_tears_down(tmp_path) -> None:
     stack = tmp_path / "stack.yaml"
     stack.write_text(_STACK_YAML)
     state_dir = tmp_path / ".sovereign"
@@ -103,13 +99,10 @@ def test_llama_stack_boots_serves_and_tears_down(tmp_path) -> None:
         assert "create_time" in handle
 
         # The health endpoint answers for real.
-        with urllib.request.urlopen(
-            f"http://127.0.0.1:{_PORT}/health", timeout=5
-        ) as resp:
+        with urllib.request.urlopen(f"http://127.0.0.1:{_PORT}/health", timeout=5) as resp:
             assert resp.status == 200
 
-        # One real completion flows through the embedded worker: the OpenAI
-        # surface works end-to-end, not just the health route.
+        # One real completion flows through the embedded worker.
         request = urllib.request.Request(
             f"http://127.0.0.1:{_PORT}/v1/chat/completions",
             data=json.dumps(
@@ -126,11 +119,8 @@ def test_llama_stack_boots_serves_and_tears_down(tmp_path) -> None:
             body = json.loads(resp.read())
         assert body["choices"][0]["message"]["content"].strip()
 
-        # The completion must surface generation stats through the telemetry
-        # pipeline (worker instrumentation -> UDS hub -> cache -> status.json).
-        # This is the one place the non-public-API completion wrapping is
-        # checked against the real binding — fail-soft would show up here as
-        # a permanently-None generation_tps.
+        # Generation stats must reach status.json via the telemetry pipeline —
+        # the mlx stream_generate wrapping checked against the real binding.
         def _stats():
             try:
                 status = json.loads((state_dir / "status.json").read_text())
