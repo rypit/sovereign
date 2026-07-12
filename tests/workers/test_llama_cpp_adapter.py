@@ -7,7 +7,11 @@ from __future__ import annotations
 
 from typing import Any, cast
 
-from sovereign.workers.llama_cpp_adapter import build_model_settings, instrument_completions
+from sovereign.workers.llama_cpp_adapter import (
+    build_model_settings,
+    greedy_draft_tokens,
+    instrument_completions,
+)
 from sovereign.workers.protocol import EventType
 from sovereign.workers.telemetry import TelemetryClient
 
@@ -82,6 +86,63 @@ def test_instrument_completions_emits_prefill_and_generation_stats():
     gen_stats = next(p for e, p in telemetry.events if e == EventType.GENERATION_STATS)
     assert gen_stats["completion_tokens"] == 2
     assert gen_stats["generation_tps"] > 0
+
+
+class _FakeDraftLlama:
+    """Deterministic draft model: next token = last seen token + 1.
+
+    Records reset()/eval() calls so tests can assert the loop re-primes the
+    context from scratch on every speculation round.
+    """
+
+    def __init__(self) -> None:
+        self.last_token: int | None = None
+        self.reset_calls = 0
+        self.eval_history: list[list[int]] = []
+
+    def reset(self) -> None:
+        self.reset_calls += 1
+        self.last_token = None
+
+    def eval(self, tokens: list[int]) -> None:
+        self.eval_history.append(list(tokens))
+        self.last_token = tokens[-1]
+
+    def sample(self) -> int:
+        assert self.last_token is not None, "sample() before eval()"
+        return self.last_token + 1
+
+
+def test_greedy_draft_tokens_generates_num_pred_tokens():
+    draft = _FakeDraftLlama()
+    tokens = greedy_draft_tokens(draft, [5, 6, 7], num_pred_tokens=4)
+    # Greedy continuation of the deterministic +1 fake: 8, 9, 10, 11.
+    assert tokens == [8, 9, 10, 11]
+    # Prompt evaluated whole, then one eval per drafted token.
+    assert draft.eval_history[0] == [5, 6, 7]
+    assert len(draft.eval_history) == 1 + 4
+
+
+def test_greedy_draft_tokens_resets_between_calls():
+    draft = _FakeDraftLlama()
+    first = greedy_draft_tokens(draft, [1], num_pred_tokens=2)
+    second = greedy_draft_tokens(draft, [1], num_pred_tokens=2)
+    # Identical input yields identical drafts — no state leaks across rounds.
+    assert first == second == [2, 3]
+    assert draft.reset_calls == 2
+
+
+def test_greedy_draft_tokens_accepts_numpy_like_input_ids():
+    class _IntLike:
+        def __init__(self, v: int) -> None:
+            self._v = v
+
+        def __int__(self) -> int:
+            return self._v
+
+    draft = _FakeDraftLlama()
+    tokens = greedy_draft_tokens(draft, [_IntLike(10), _IntLike(11)], num_pred_tokens=1)
+    assert tokens == [12]
 
 
 def test_instrument_completions_is_noop_for_missing_attrs():

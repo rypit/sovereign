@@ -1,11 +1,12 @@
 """``llama_cpp`` — the first native inference engine (§12, Phase 4).
 
-Runs ``llama-server`` as a native subprocess (bare metal, for real Metal
-acceleration — §2.1) via the shared :class:`NativeEngineManager` lifecycle:
-subprocess + HTTP health + ``psutil`` metrics. The model can be a local GGUF
-path or a HuggingFace repo id (``org/name[:quant]`` or ``org/name/file.gguf``),
+Runs llama-cpp-python embedded in a detached engine-worker process (bare
+metal, for real Metal acceleration — §2.1) via the shared
+:class:`NativeEngineManager` lifecycle: worker subprocess + HTTP health +
+telemetry/``psutil`` metrics. The model can be a local GGUF path or a
+HuggingFace repo id (``org/name[:quant]`` or ``org/name/file.gguf``),
 downloaded by Sovereign into the shared HF cache before launch (DOWNLOADING
-state); the server always starts from the resolved local path.
+state); the worker always starts from the resolved local path.
 """
 
 from __future__ import annotations
@@ -18,6 +19,7 @@ from sovereign.config import ServiceEntry
 from sovereign.core.registry import register_service
 from sovereign.services.inference.base import (
     NativeEngineManager,
+    check_local_artifact,
     probe_import,
 )
 from sovereign.services.inference.llama_cpp.config import (
@@ -44,10 +46,6 @@ class LlamaCppManager(NativeEngineManager):
     config_cls = LlamaCppConfig
     config: LlamaCppConfig
     model_artifact_kind = "gguf"
-    #: llama-cpp-python has no second-GGUF speculative decoding (§3a hard
-    #: gap) — a configured draft_model's weights never actually load, so they
-    #: must not count toward this engine's admission-control estimate.
-    supports_draft_model = False
     #: Probed (out-of-process) rather than checked via a binary-on-PATH: the
     #: engine now runs in-process inside the Python worker.
     import_probe_modules = ("llama_cpp", "llama_cpp.server.app")
@@ -156,10 +154,12 @@ class LlamaCppManager(NativeEngineManager):
     def prepare_environment(self) -> None:
         super().prepare_environment()
         if self.config.draft_model is not None:
-            raise ValueError(
-                f"llama_cpp engine no longer supports GGUF draft models for '{self.name}' "
-                "(no second-GGUF speculative decoding in llama-cpp-python); remove "
-                "draft_model, or use the mlx_lm engine for real speculative decoding."
+            # Two-model speculative decoding runs through Sovereign's own
+            # LlamaGgufDraftModel in the worker adapter (llama-cpp-python only
+            # ships prompt-lookup); the draft GGUF is validated/downloaded like
+            # the main model and its weights count toward admission.
+            check_local_artifact(
+                self.config.draft_model, kind="llama_cpp draft_model", service=self.name
             )
         if self.config.max_parallel is not None and self.config.max_parallel > 1:
             logger.warning(

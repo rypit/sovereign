@@ -1,6 +1,7 @@
 """Engine-worker adapter for llama-cpp-python's built-in OpenAI-compatible server.
 
-Only :func:`build_model_settings` and :func:`instrument_completions` are meant
+Only :func:`build_model_settings`, :func:`instrument_completions`, and
+:func:`greedy_draft_tokens` are meant
 to be imported at module scope elsewhere (they're pure/near-pure and
 unit-testable without the ``llama_cpp`` binding installed). :func:`run` is the
 adapter entrypoint the worker calls, and it is the only place in this module
@@ -64,11 +65,11 @@ def build_model_settings(
     Any other ``engine_kwargs`` entry is passed through verbatim as an escape
     hatch for settings this mapping doesn't know about yet.
 
-    Speculative decoding via a second GGUF is a hard gap in the bindings
-    (§3a) — ``draft_model_path`` is accepted for signature symmetry with the
-    mlx adapter but is intentionally not wired into the settings; callers
-    that need draft-token behavior should use ``num_draft_tokens`` for
-    prompt-lookup decoding instead (handled in :func:`run`).
+    ``draft_model_path`` is deliberately not wired into the settings dict:
+    ``ModelSettings.draft_model`` only accepts the string
+    ``"prompt-lookup-decoding"``, so two-model speculation is attached to the
+    loaded ``Llama`` instance directly (see :func:`run` /
+    :func:`greedy_draft_tokens`) rather than through the server's settings.
     """
     settings: dict[str, Any] = {"model": model_path}
     if alias is not None:
@@ -181,6 +182,28 @@ def _wrap_stream(stream: Any, telemetry: TelemetryClient, request_id: str, total
 _first_chunk_prompt_tps: dict[str, float] = {}
 
 
+def greedy_draft_tokens(draft: Any, input_ids: Any, num_pred_tokens: int) -> list[int]:
+    """Greedy-decode ``num_pred_tokens`` continuation tokens from a draft model.
+
+    ``draft`` duck-types the small slice of ``llama_cpp.Llama`` this needs —
+    ``reset()``, ``eval(tokens: list[int])``, and ``sample() -> int`` — so the
+    speculative loop is unit-testable with a deterministic fake and no binding
+    installed. The context is reset and the full ``input_ids`` re-evaluated on
+    every call: correctness first — the draft model is small, and incremental
+    KV reuse across arbitrary candidate acceptance/rejection is llama.cpp's
+    problem, not ours to replicate here.
+    """
+    tokens = [int(t) for t in input_ids]
+    draft.reset()
+    draft.eval(tokens)
+    drafted: list[int] = []
+    for _ in range(num_pred_tokens):
+        token = int(draft.sample())
+        drafted.append(token)
+        draft.eval([token])
+    return drafted
+
+
 def run(cfg: WorkerConfig, telemetry: TelemetryClient, controller: Any) -> None:
     """Boot the llama-cpp-python server in-process and serve until shutdown.
 
@@ -200,28 +223,9 @@ def run(cfg: WorkerConfig, telemetry: TelemetryClient, controller: Any) -> None:
             max_parallel,
         )
 
-    if cfg.draft_model_path:
-        raise RuntimeError(
-            "llama_cpp engine does not support a second-GGUF draft model for "
-            "speculative decoding in this binding; remove draft_model_path or "
-            "use num_draft_tokens (prompt-lookup decoding) instead."
-        )
-
     model_settings_dict = build_model_settings(
         cfg.engine_kwargs, cfg.model_path, cfg.draft_model_path, cfg.served_model_name
     )
-
-    num_draft_tokens = cfg.engine_kwargs.get("num_draft_tokens")
-    if num_draft_tokens:
-        try:
-            from llama_cpp import LlamaPromptLookupDecoding
-
-            model_settings_dict["draft_model"] = LlamaPromptLookupDecoding(
-                num_pred_tokens=int(num_draft_tokens)
-            )
-        except Exception:  # noqa: BLE001 - fail soft, serve without speculative decoding
-            logger.warning("failed to configure prompt-lookup decoding", exc_info=True)
-
     model_settings = ModelSettings(**model_settings_dict)
 
     api_key = os.environ.get("SOVEREIGN_API_KEY")
@@ -233,7 +237,16 @@ def run(cfg: WorkerConfig, telemetry: TelemetryClient, controller: Any) -> None:
     def _health() -> dict[str, str]:
         return {"status": "ok"}
 
-    _instrument_app_llama(app, telemetry)
+    model = _app_model(app)
+    if model is not None:
+        _attach_draft_model(model, cfg)
+        instrument_completions(model, telemetry)
+    else:
+        logger.warning(
+            "could not reach the llama_cpp server's Llama instance; serving "
+            "without prefill/generation stats%s",
+            " or speculative decoding" if cfg.draft_model_path else "",
+        )
 
     telemetry.emit(EventType.STATE_CHANGE, {"state": "serving"})
 
@@ -243,12 +256,11 @@ def run(cfg: WorkerConfig, telemetry: TelemetryClient, controller: Any) -> None:
     server.run()
 
 
-def _instrument_app_llama(app: Any, telemetry: TelemetryClient) -> None:
-    """Best-effort: reach into the app's held ``Llama`` instance(s) and wrap
-    their completion methods. The exact attribute llama_cpp.server.app uses
-    to hold model state has moved across versions; this is guarded so a
-    mismatch degrades to "serves without stats" rather than crashing boot.
-    """
+def _app_model(app: Any) -> Any | None:
+    """Best-effort: reach the ``Llama`` instance the server app holds. The
+    exact attribute llama_cpp.server.app uses for model state has moved
+    across versions; a mismatch returns None so callers degrade gracefully
+    (serve without stats/speculation) rather than crashing boot."""
     try:
         from llama_cpp.server.app import get_llama_proxy
 
@@ -257,12 +269,63 @@ def _instrument_app_llama(app: Any, telemetry: TelemetryClient) -> None:
         # differently (a proxy, a dict keyed by model alias, ...). Try the
         # shapes we know about; anything else fails soft.
         if proxy is not None and hasattr(proxy, "_current_model"):
-            model = getattr(proxy, "_current_model", None)
-            if model is not None:
-                instrument_completions(model, telemetry)
-    except Exception:  # noqa: BLE001 - instrumentation is best-effort
+            return getattr(proxy, "_current_model", None)
+    except Exception:  # noqa: BLE001 - accessor is best-effort
+        logger.warning("could not reach llama_cpp server model", exc_info=True)
+    return None
+
+
+def _attach_draft_model(model: Any, cfg: WorkerConfig) -> None:
+    """Wire speculative decoding onto the loaded ``Llama`` instance.
+
+    With a ``draft_model_path``, loads the draft GGUF as a second ``Llama``
+    and attaches Sovereign's own :class:`~llama_cpp.LlamaDraftModel`
+    implementation (a greedy loop over :func:`greedy_draft_tokens`) —
+    llama-cpp-python itself only ships prompt-lookup decoding, and the
+    server's ``ModelSettings.draft_model`` accepts only that string form, so
+    object injection has to happen post-construction. Without a draft path
+    but with ``num_draft_tokens``, falls back to prompt-lookup decoding.
+    Failures degrade to plain decoding with a warning.
+    """
+    num_pred_tokens = int(cfg.engine_kwargs.get("num_draft_tokens") or 10)
+    try:
+        if cfg.draft_model_path:
+            import numpy as np
+            from llama_cpp import Llama
+            from llama_cpp.llama_speculative import LlamaDraftModel
+
+            draft_llama = Llama(
+                model_path=cfg.draft_model_path,
+                n_gpu_layers=-1,
+                n_ctx=int(cfg.engine_kwargs.get("context_size") or 0),
+                verbose=False,
+            )
+
+            class LlamaGgufDraftModel(LlamaDraftModel):
+                """Two-model speculation: greedy candidates from a draft GGUF."""
+
+                def __call__(self, input_ids: Any, /, **kwargs: Any) -> Any:
+                    drafted = greedy_draft_tokens(draft_llama, input_ids, num_pred_tokens)
+                    return np.asarray(drafted, dtype=np.intc)
+
+            model.draft_model = LlamaGgufDraftModel()
+            # Llama.__init__ forces logits_all=True whenever a draft model is
+            # passed at construction time; replicate that for the post-hoc
+            # attachment so candidate verification sees per-token logits.
+            if hasattr(model, "_logits_all"):
+                model._logits_all = True
+            logger.info(
+                "llama_cpp worker %s: two-model speculative decoding active "
+                "(draft=%s, num_pred_tokens=%d)",
+                cfg.service,
+                cfg.draft_model_path,
+                num_pred_tokens,
+            )
+        elif cfg.engine_kwargs.get("num_draft_tokens"):
+            from llama_cpp import LlamaPromptLookupDecoding
+
+            model.draft_model = LlamaPromptLookupDecoding(num_pred_tokens=num_pred_tokens)
+    except Exception:  # noqa: BLE001 - fail soft, serve without speculative decoding
         logger.warning(
-            "could not instrument llama_cpp server model for telemetry; "
-            "serving without prefill/generation stats",
-            exc_info=True,
+            "failed to configure speculative decoding; serving without it", exc_info=True
         )
