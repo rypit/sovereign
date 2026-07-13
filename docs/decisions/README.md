@@ -78,3 +78,4 @@ Provenance: plan §N / PR #NN.
 | [0004](0004-embedded-engine-workers.md) | Embedded engine workers over external CLIs |
 | [0005](0005-uds-ndjson-telemetry.md) | UDS NDJSON telemetry, drop-when-unobserved |
 | [0006](0006-engine-gap-policy.md) | Engine-gap policy: surface loudly, bridge when feasible |
+| [0007](0007-llama-cpp-server-over-bindings.md) | llama_cpp via `llama-server`, telemetry over its HTTP surface |
