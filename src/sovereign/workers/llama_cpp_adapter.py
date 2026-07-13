@@ -89,6 +89,10 @@ def build_server_argv(
     trade-off as before; the manager already keeps it off the JSON).
     """
     argv = ["-m", model_path, "--host", host, "--port", str(port)]
+    # /metrics and /slots are disabled by default in llama-server; the
+    # telemetry translator (poll_once) depends on both, so always enable them.
+    # Without these the endpoints 404 and generation_tps/prefill never surface.
+    argv += ["--metrics", "--slots"]
     if served_model_name:
         argv += ["--alias", served_model_name]
     if draft_model_path:

@@ -43,6 +43,17 @@ def test_build_server_argv_basics():
     assert argv[:6] == ["-m", "/models/foo.gguf", "--host", "127.0.0.1", "--port", "9000"]
 
 
+def test_build_server_argv_always_enables_telemetry_endpoints():
+    # /metrics and /slots are off by default in llama-server; the telemetry
+    # translator polls both, so build_server_argv must always request them.
+    argv = build_server_argv(
+        {}, model_path="/m.gguf", draft_model_path=None,
+        served_model_name=None, host="h", port=1,
+    )
+    assert "--metrics" in argv
+    assert "--slots" in argv
+
+
 def test_build_server_argv_maps_resource_kwargs():
     argv = build_server_argv(
         {"gpu_layers": 20, "threads": 4, "context_size": 4096, "max_parallel": 4},
