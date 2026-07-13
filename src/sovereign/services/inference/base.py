@@ -9,6 +9,7 @@ path come from the entry's ``health_check`` block.
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import sys
 import urllib.error
@@ -47,6 +48,11 @@ IMPORT_PROBE_TIMEOUT = 15.0
 # only runs once per process even across many manager instances.
 _IMPORT_PROBE_CACHE: dict[str, bool] = {}
 
+# Per-binary cache of PATH-probe results, mirroring _IMPORT_PROBE_CACHE for
+# engines that run as an external CLI (e.g. llama_cpp's `llama-server`)
+# rather than an in-process Python binding.
+_BINARY_PROBE_CACHE: dict[str, bool] = {}
+
 
 def probe_import(module: str) -> bool:
     """Whether ``import <module>`` succeeds in a fresh interpreter.
@@ -68,6 +74,22 @@ def probe_import(module: str) -> bool:
     except (subprocess.TimeoutExpired, OSError):
         ok = False
     _IMPORT_PROBE_CACHE[module] = ok
+    return ok
+
+
+def probe_binary(binary: str) -> bool:
+    """Whether ``binary`` is on ``PATH``.
+
+    A module-level seam (patched in tests as
+    ``sovereign.services.inference.base.probe_binary``), analogous to
+    :func:`probe_import`, for engines that run as an external CLI subprocess
+    (e.g. ``llama-server``) rather than an in-process Python binding. Cached
+    per binary name for the life of the process.
+    """
+    if binary in _BINARY_PROBE_CACHE:
+        return _BINARY_PROBE_CACHE[binary]
+    ok = shutil.which(binary) is not None
+    _BINARY_PROBE_CACHE[binary] = ok
     return ok
 
 
@@ -357,10 +379,30 @@ class NativeEngineManager(ActivityMixin, Provisioner):
             with p.oneshot():
                 footprint = macos_phys_footprint(proc.pid)
                 memory_bytes = footprint if footprint is not None else p.memory_info().rss
-                return {
-                    "memory_bytes": memory_bytes,
-                    "status": "running",
-                }
+            # Some engines (llama_cpp) launch a native subprocess (llama-server)
+            # that holds the tensors, rather than loading them into the tracked
+            # worker process itself — sum child processes too so memory
+            # accounting/admission reflects where the RAM actually is. A no-op
+            # for engines with no children (e.g. mlx_lm's in-process binding).
+            try:
+                children = p.children(recursive=True)
+            except (psutil.Error, AttributeError):
+                children = []
+            for child in children:
+                try:
+                    with child.oneshot():
+                        child_footprint = macos_phys_footprint(child.pid)
+                        memory_bytes += (
+                            child_footprint
+                            if child_footprint is not None
+                            else child.memory_info().rss
+                        )
+                except (psutil.Error, AttributeError):
+                    continue
+            return {
+                "memory_bytes": memory_bytes,
+                "status": "running",
+            }
         except psutil.NoSuchProcess:
             return {"status": "stopped"}
 

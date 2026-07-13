@@ -60,7 +60,9 @@ runtime/
   teardown.py      cross-process stop from persisted runtime handles (`sovereign down`)
 services/
   docker/         auxiliary services in Docker
-  inference/     embedded Python-binding engine workers + their shared base
+  inference/     native inference engine workers + their shared base (mlx_lm
+                 is an embedded Python binding; llama_cpp is a `llama-server`
+                 subprocess — ADR 0007)
     base.py              shared worker-lifecycle base (NativeEngineManager): dumps
                          a WorkerConfig, launches `sovereign.workers.engine_worker`,
                          HTTP health, psutil/procmem metrics fallback
@@ -77,8 +79,15 @@ workers/           embedded engine worker processes (spawned via
   worker_config.py WorkerConfig dataclass + JSON load/dump (the manager->worker handoff)
   engine_worker.py generic entrypoint: loads WorkerConfig, dispatches to
                    `sovereign.workers.<engine>_adapter` by `engine` key
-  llama_cpp_adapter.py / mlx_lm_adapter.py   pure kwarg-mapping + run() (bindings
-                   imported lazily, inside run(), never at module scope)
+  mlx_lm_adapter.py       pure kwarg-mapping + run() that boots mlx_lm.server
+                   in-process (mlx_lm imported lazily, inside run(), never at
+                   module scope)
+  llama_cpp_adapter.py    ADR 0007: build_server_argv() maps engine_kwargs to
+                   `llama-server` CLI flags; run() launches `llama-server` as a
+                   child subprocess (never imports llama_cpp/fastapi/uvicorn)
+                   and runs a telemetry-translator poll loop over its HTTP
+                   surface (`/slots`, `/metrics`), re-emitting the same UDS
+                   NDJSON events other adapters emit directly
 harnesses/         cline_cli, mini_swe_agent          (auto-discovered)
 bench/             content-addressed bench cells; only cleanroom.py may
                    import the Orchestrator; bench sub-app CLI lives in bench/cli.py

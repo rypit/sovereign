@@ -1,6 +1,6 @@
 # Internal dependency graph
 
-_Generated 2026-07-12 by `scripts/depgraph.py` — 68 modules, 175 internal import edges (155 runtime, 20 type-annotation-only). Regenerate with `make graph`._
+_Generated 2026-07-13 by `scripts/depgraph.py` — 68 modules, 175 internal import edges (155 runtime, 20 type-annotation-only). Regenerate with `make graph`._
 
 Nodes are modules under `sovereign`, grouped by top-level package. Only imports internal to the package are shown. Solid arrows (`-->`) are runtime imports; dashed arrows (`-.->`) are type-annotation-only imports (`if TYPE_CHECKING:` blocks). Type-only edges are excluded from cycle detection and fan-in/fan-out. Modules that participate in a runtime import cycle are outlined in red.
 

@@ -309,30 +309,25 @@ def test_endpoint_carries_api_model_name() -> None:
 
 # --- provisioning ---
 def test_provisioning_declaration() -> None:
-    assert LlamaCppManager.import_probe_modules == ("llama_cpp", "llama_cpp.server.app")
-    assert LlamaCppManager.provisioning_brewfile() is None  # no more Brewfile/binary
-    assert any(
-        "llama-cpp-python[server]" in " ".join(cmd)
-        for cmd in LlamaCppManager.provisioning_commands
-    )
+    brewfile = LlamaCppManager.provisioning_brewfile()
+    assert brewfile is not None
+    assert brewfile.name == "Brewfile"
 
 
-def test_provisioning_satisfied_uses_import_probe(monkeypatch) -> None:
+def test_provisioning_satisfied_uses_binary_probe(monkeypatch) -> None:
     calls: list[str] = []
 
-    def fake_probe(module: str) -> bool:
-        calls.append(module)
+    def fake_probe(binary: str) -> bool:
+        calls.append(binary)
         return True
 
-    monkeypatch.setattr(llama_manager_mod, "probe_import", fake_probe)
+    monkeypatch.setattr(llama_manager_mod, "probe_binary", fake_probe)
     assert LlamaCppManager.provisioning_satisfied() is True
-    assert set(calls) == {"llama_cpp", "llama_cpp.server.app"}
+    assert calls == ["llama-server"]
 
 
 def test_provisioning_not_satisfied_when_probe_fails(monkeypatch) -> None:
-    monkeypatch.setattr(
-        llama_manager_mod, "probe_import", lambda module: module != "llama_cpp"
-    )
+    monkeypatch.setattr(llama_manager_mod, "probe_binary", lambda binary: False)
     assert LlamaCppManager.provisioning_satisfied() is False
 
 
@@ -341,14 +336,14 @@ def test_prepare_environment_provisions_first(monkeypatch) -> None:
 
     order: list[str] = []
 
-    def _record_probe(_m: str) -> bool:
+    def _record_probe(_b: str) -> bool:
         order.append("probe")
         return True
 
     monkeypatch.setattr(
         Provisioner, "provision", classmethod(lambda cls: order.append("provision"))
     )
-    monkeypatch.setattr(native_mod, "probe_import", _record_probe)
+    monkeypatch.setattr(llama_manager_mod, "probe_binary", _record_probe)
     m = _manager({"model": "org/some-hf-repo"})  # repo id: no local file check
     m.prepare_environment()
     assert order[0] == "provision"  # install the toolchain before validating it
@@ -356,7 +351,7 @@ def test_prepare_environment_provisions_first(monkeypatch) -> None:
 
 # --- prepare_environment ---
 def test_prepare_environment_missing_model(monkeypatch) -> None:
-    monkeypatch.setattr(native_mod, "probe_import", lambda m: True)
+    monkeypatch.setattr(llama_manager_mod, "probe_binary", lambda b: True)
     with pytest.raises(FileNotFoundError, match="model for 'llama_heavy_v1' not found"):
         _manager({"model": "/nope/missing.gguf"}).prepare_environment()
 
@@ -364,52 +359,54 @@ def test_prepare_environment_missing_model(monkeypatch) -> None:
 def test_prepare_environment_ok(tmp_path, monkeypatch) -> None:
     model = tmp_path / "m.gguf"
     model.write_bytes(b"gguf")
-    monkeypatch.setattr(native_mod, "probe_import", lambda m: True)
+    monkeypatch.setattr(llama_manager_mod, "probe_binary", lambda b: True)
     _manager({"model": str(model)}).prepare_environment()  # must not raise
 
 
-def test_prepare_environment_missing_binding(tmp_path, monkeypatch) -> None:
+def test_prepare_environment_missing_binary(tmp_path, monkeypatch) -> None:
     model = tmp_path / "m.gguf"
     model.write_bytes(b"gguf")
-    monkeypatch.setattr(native_mod, "probe_import", lambda m: False)
-    with pytest.raises(FileNotFoundError, match="llama_cpp.*not importable"):
+    monkeypatch.setattr(llama_manager_mod, "probe_binary", lambda b: False)
+    with pytest.raises(FileNotFoundError, match="llama-server.*not found on PATH"):
         _manager({"model": str(model)}).prepare_environment()
 
 
 def test_prepare_environment_repo_id_ok(monkeypatch) -> None:
-    monkeypatch.setattr(native_mod, "probe_import", lambda m: True)
+    monkeypatch.setattr(llama_manager_mod, "probe_binary", lambda b: True)
     # A repo id that isn't local must NOT raise (the worker downloads it on start).
     _manager({"model": "ggml-org/gemma-3-1b-it-GGUF"}).prepare_environment()
 
 
 def test_prepare_environment_draft_model_accepted(tmp_path, monkeypatch) -> None:
-    # Two-model speculation is served by the worker's LlamaGgufDraftModel — a
-    # configured draft GGUF is valid config again, validated like the main model.
+    # Two-model speculation is native to llama-server — a configured draft
+    # GGUF is valid config, validated like the main model.
     model = tmp_path / "m.gguf"
     model.write_bytes(b"gguf")
     draft = tmp_path / "d.gguf"
     draft.write_bytes(b"gguf")
-    monkeypatch.setattr(native_mod, "probe_import", lambda m: True)
+    monkeypatch.setattr(llama_manager_mod, "probe_binary", lambda b: True)
     _manager({"model": str(model), "draft_model": str(draft)}).prepare_environment()
 
 
 def test_prepare_environment_missing_local_draft_raises(tmp_path, monkeypatch) -> None:
     model = tmp_path / "m.gguf"
     model.write_bytes(b"gguf")
-    monkeypatch.setattr(native_mod, "probe_import", lambda m: True)
+    monkeypatch.setattr(llama_manager_mod, "probe_binary", lambda b: True)
     with pytest.raises(FileNotFoundError, match="draft_model"):
         _manager(
             {"model": str(model), "draft_model": "/nope/missing-draft.gguf"}
         ).prepare_environment()
 
 
-def test_prepare_environment_max_parallel_warns(tmp_path, monkeypatch, caplog) -> None:
+def test_prepare_environment_max_parallel_no_longer_warns(tmp_path, monkeypatch, caplog) -> None:
+    # ADR 0007: max_parallel is honored natively by llama-server -np, so the
+    # old "has no effect" warning is gone.
     model = tmp_path / "m.gguf"
     model.write_bytes(b"gguf")
-    monkeypatch.setattr(native_mod, "probe_import", lambda m: True)
+    monkeypatch.setattr(llama_manager_mod, "probe_binary", lambda b: True)
     with caplog.at_level("WARNING", logger="sovereign"):
         _manager({"model": str(model), "max_parallel": 4}).prepare_environment()
-    assert any("max_parallel=4" in r.message for r in caplog.records)
+    assert not any("max_parallel" in r.message for r in caplog.records)
 
 
 # --- health ---
@@ -604,6 +601,47 @@ def test_get_metrics_falls_back_to_rss_when_footprint_unavailable(monkeypatch) -
     assert m.get_metrics()["memory_bytes"] == 14500 * 1024**2
 
 
+def test_get_metrics_includes_llama_server_child_process(monkeypatch) -> None:
+    # ADR 0007: tensors live in the llama-server *child*, not the tracked
+    # worker process — get_metrics() must sum the child's memory in too.
+    m = _manager()
+    m.process = cast("subprocess.Popen[bytes]", FakeProc(pid=4242, poll_value=None))
+
+    class FakeMem:
+        def __init__(self, rss):
+            self.rss = rss
+
+    class FakeChildProc:
+        def __init__(self, pid, rss):
+            self.pid = pid
+            self._rss = rss
+
+        def oneshot(self):
+            return contextlib.nullcontext()
+
+        def memory_info(self):
+            return FakeMem(self._rss)
+
+    class FakePsProc:
+        def __init__(self, pid):
+            self.pid = pid
+
+        def oneshot(self):
+            return contextlib.nullcontext()
+
+        def memory_info(self):
+            return FakeMem(500 * 1024**2)  # the tracked worker's own (small) RSS
+
+        def children(self, recursive=False):
+            assert recursive is True
+            return [FakeChildProc(9999, 14000 * 1024**2)]  # the llama-server child
+
+    monkeypatch.setattr(native_mod.psutil, "Process", FakePsProc)
+    monkeypatch.setattr(native_mod, "macos_phys_footprint", lambda pid: None)
+    metrics = m.get_metrics()
+    assert metrics["memory_bytes"] == 500 * 1024**2 + 14000 * 1024**2
+
+
 # --- Phase 7: resource estimation ---
 def test_estimated_memory_uses_declared_override() -> None:
     entry = ServiceEntry(
@@ -689,7 +727,7 @@ def test_prompt_caching_no_kv_cache_type_when_disabled() -> None:
 
 
 def test_prompt_caching_cache_path_inert_warning(tmp_path, monkeypatch, caplog) -> None:
-    monkeypatch.setattr(native_mod, "probe_import", lambda m: True)
+    monkeypatch.setattr(llama_manager_mod, "probe_binary", lambda b: True)
     model = tmp_path / "m.gguf"
     model.write_bytes(b"gguf")
     cache = tmp_path / "cache"
@@ -700,7 +738,7 @@ def test_prompt_caching_cache_path_inert_warning(tmp_path, monkeypatch, caplog) 
 
 
 def test_validate_prompt_caching_creates_dir(tmp_path, monkeypatch) -> None:
-    monkeypatch.setattr(native_mod, "probe_import", lambda m: True)
+    monkeypatch.setattr(llama_manager_mod, "probe_binary", lambda b: True)
     model = tmp_path / "m.gguf"
     model.write_bytes(b"gguf")
     cache = tmp_path / "cache" / "llama"
@@ -712,7 +750,7 @@ def test_validate_prompt_caching_creates_dir(tmp_path, monkeypatch) -> None:
 
 
 def test_validate_prompt_caching_rejects_bad_kv_type(tmp_path, monkeypatch) -> None:
-    monkeypatch.setattr(native_mod, "probe_import", lambda m: True)
+    monkeypatch.setattr(llama_manager_mod, "probe_binary", lambda b: True)
     model = tmp_path / "m.gguf"
     model.write_bytes(b"gguf")
     m = _caching_manager(
@@ -724,7 +762,7 @@ def test_validate_prompt_caching_rejects_bad_kv_type(tmp_path, monkeypatch) -> N
 
 
 def test_validate_prompt_caching_requires_cache_path(tmp_path, monkeypatch) -> None:
-    monkeypatch.setattr(native_mod, "probe_import", lambda m: True)
+    monkeypatch.setattr(llama_manager_mod, "probe_binary", lambda b: True)
     model = tmp_path / "m.gguf"
     model.write_bytes(b"gguf")
     m = _caching_manager({"enabled": True}, {"model": str(model)})
