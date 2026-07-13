@@ -50,6 +50,11 @@ class LlamaCppConfig(NativeEngineConfig):
     gpu_layers: int | None = Field(default=None, ge=0)  # -ngl
     threads: int | None = Field(default=None, gt=0)  # -t
     context_size: int | None = Field(default=None, gt=0)  # -c
+    #: Concurrent request slots — maps onto llama-server's `-np`/`--parallel`
+    #: and is honored natively (ADR 0007): llama-server multiplexes true
+    #: continuous-batching slots over one context window, closing the
+    #: `max_parallel` gap ADR 0006 documented for the prior embedded-binding
+    #: adapter.
     max_parallel: int | None = Field(default=None, gt=0)  # -np
 
     #: Max tokens to draft per step (llama-server ``--draft-max``).

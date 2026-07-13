@@ -1,12 +1,16 @@
 """``llama_cpp`` — the first native inference engine (§12, Phase 4).
 
-Runs llama-cpp-python embedded in a detached engine-worker process (bare
-metal, for real Metal acceleration — §2.1) via the shared
-:class:`NativeEngineManager` lifecycle: worker subprocess + HTTP health +
-telemetry/``psutil`` metrics. The model can be a local GGUF path or a
-HuggingFace repo id (``org/name[:quant]`` or ``org/name/file.gguf``),
-downloaded by Sovereign into the shared HF cache before launch (DOWNLOADING
-state); the worker always starts from the resolved local path.
+Per ADR 0007, runs the native ``llama-server`` binary as a subprocess of a
+detached engine-worker process (bare metal, for real Metal acceleration —
+§2.1) via the shared :class:`NativeEngineManager` lifecycle: worker
+subprocess + HTTP health + telemetry/``psutil`` metrics. The worker
+(``workers/llama_cpp_adapter.py``) launches ``llama-server`` as a *child* and
+translates its HTTP telemetry surface (``/slots``, ``/metrics``) into
+Sovereign's UDS NDJSON events — tensors live in that child, not the tracked
+worker process. The model can be a local GGUF path or a HuggingFace repo id
+(``org/name[:quant]`` or ``org/name/file.gguf``), downloaded by Sovereign
+into the shared HF cache before launch (DOWNLOADING state); the worker
+always starts from the resolved local path.
 """
 
 from __future__ import annotations
@@ -20,7 +24,7 @@ from sovereign.core.registry import register_service
 from sovereign.services.inference.base import (
     NativeEngineManager,
     check_local_artifact,
-    probe_import,
+    probe_binary,
 )
 from sovereign.services.inference.llama_cpp.config import (
     VALID_KV_CACHE_TYPES,
@@ -33,35 +37,23 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger("sovereign")
 
-#: Metal-wheel index for llama-cpp-python — avoids a from-source cmake build
-#: on user machines (see pyproject.toml's platform-marked dependency).
-_LLAMA_CPP_PYTHON_WHEEL_INDEX = "https://abetlen.github.io/llama-cpp-python/whl/metal"
+#: The binary this engine's worker execs. Provisioned via the sibling
+#: Brewfile (`brew "llama.cpp"`); availability is a PATH probe, not an
+#: import probe, since the engine now runs as an external CLI subprocess.
+_LLAMA_SERVER_BINARY = "llama-server"
 
 
 @register_service("llama_cpp")
 class LlamaCppManager(NativeEngineManager):
-    """Supervises one embedded ``llama-cpp-python`` engine worker."""
+    """Supervises one engine worker that runs ``llama-server`` as a child process."""
 
     base_type = "llama_cpp"
     config_cls = LlamaCppConfig
     config: LlamaCppConfig
     model_artifact_kind = "gguf"
-    #: Probed (out-of-process) rather than checked via a binary-on-PATH: the
-    #: engine now runs in-process inside the Python worker.
-    import_probe_modules = ("llama_cpp", "llama_cpp.server.app")
-    #: Fallback install: the prebuilt Metal wheel avoids a from-source cmake
-    #: build. Only reached if the module import probe still fails after any
-    #: Brewfile step (there is none here — see class docstring).
-    provisioning_commands = [
-        [
-            "uv",
-            "pip",
-            "install",
-            "llama-cpp-python[server]>=0.3",
-            "--extra-index-url",
-            _LLAMA_CPP_PYTHON_WHEEL_INDEX,
-        ]
-    ]
+    binary_hint = (
+        "Install it via Homebrew (`brew install llama.cpp`) or run `sovereign provision`."
+    )
 
     def __init__(self, entry: ServiceEntry) -> None:
         super().__init__(entry)
@@ -69,10 +61,13 @@ class LlamaCppManager(NativeEngineManager):
 
     @classmethod
     def provisioning_satisfied(cls) -> bool:
-        """Satisfied once every ``import_probe_modules`` entry imports cleanly —
-        there is no Brewfile/binary for this engine any more (it's a Python
-        binding, not a CLI); ``provisioning_commands`` installs the wheel."""
-        return all(probe_import(m) for m in cls.import_probe_modules)
+        """Satisfied once ``llama-server`` is on ``PATH`` — a binary-on-PATH
+        probe (:func:`sovereign.services.inference.base.probe_binary`), not
+        an import probe, since ADR 0007 runs this engine as an external CLI
+        subprocess rather than an in-process Python binding. The
+        ``Brewfile`` next to this module (`brew "llama.cpp"`) is discovered
+        automatically by the shared :class:`Provisioner` mixin."""
+        return probe_binary(_LLAMA_SERVER_BINARY)
 
     # --- routing (auto base_type) ---
     @classmethod
@@ -107,13 +102,12 @@ class LlamaCppManager(NativeEngineManager):
         return ctx * self.config.kv_bytes_per_token
 
     def per_slot_context(self) -> int | None:
-        """Context available *per agent* — nominally total context divided across
-        ``-np`` slots. The embedded llama-cpp-python server has no ``-np``
-        equivalent: it holds a single ``Llama`` instance and serves requests
-        sequentially (§3a hard gap — see ``max_parallel`` warning in
-        :meth:`prepare_environment`), so in practice there is exactly one slot
-        and this divides across a purely nominal count kept for config
-        compatibility and admission-control math."""
+        """Context available *per agent* — total context divided across ``-np``
+        slots. Per ADR 0007 this division is now **real**: ``llama-server``
+        natively multiplexes ``max_parallel`` continuous-batching slots over
+        one context window (``-c`` total, ``-np`` slots), so each slot gets
+        ``context_size // max_parallel`` tokens of context in practice, not
+        just in admission-control math."""
         if self.config.context_size is None:
             return None
         return self.config.context_size // (self.config.max_parallel or 1)
@@ -121,8 +115,8 @@ class LlamaCppManager(NativeEngineManager):
     # --- engine_kwargs mapping (consumed by workers.llama_cpp_adapter) ---
     def engine_kwargs(self) -> dict[str, Any]:
         """Sovereign-side settings the worker's adapter maps onto
-        ``llama_cpp.server.settings.ModelSettings`` (see
-        ``workers/llama_cpp_adapter.build_model_settings``)."""
+        ``llama-server`` CLI flags (see
+        ``workers/llama_cpp_adapter.build_server_argv``)."""
         kwargs: dict[str, Any] = {}
         if self.config.gpu_layers is not None:
             kwargs["gpu_layers"] = self.config.gpu_layers
@@ -143,9 +137,10 @@ class LlamaCppManager(NativeEngineManager):
         return kwargs
 
     def start_env(self) -> dict[str, str]:
-        """Pass the API key via ``SOVEREIGN_API_KEY`` — the embedded server's
-        adapter reads it from the environment, keeping the secret off the
-        ``ps``-visible command line/worker-config JSON."""
+        """Pass the API key via ``SOVEREIGN_API_KEY`` — the worker adapter reads
+        it from the environment and appends ``--api-key`` to ``llama-server``'s
+        argv itself, keeping the secret off the ``ps``-visible parent command
+        line and out of the dumped worker-config JSON."""
         if self.config.api_key:
             return {"SOVEREIGN_API_KEY": self.config.api_key}
         return {}
@@ -153,33 +148,28 @@ class LlamaCppManager(NativeEngineManager):
     # --- Resource cooperation ---
     def prepare_environment(self) -> None:
         super().prepare_environment()
+        if not probe_binary(_LLAMA_SERVER_BINARY):
+            raise FileNotFoundError(
+                f"llama_cpp binary '{_LLAMA_SERVER_BINARY}' not found on PATH for "
+                f"'{self.name}'. {self.binary_hint}"
+            )
         if self.config.draft_model is not None:
-            # Two-model speculative decoding runs through Sovereign's own
-            # LlamaGgufDraftModel in the worker adapter (llama-cpp-python only
-            # ships prompt-lookup); the draft GGUF is validated/downloaded like
-            # the main model and its weights count toward admission.
+            # Two-model speculative decoding is native to llama-server; the
+            # draft GGUF is validated/downloaded like the main model and its
+            # weights count toward admission.
             check_local_artifact(
                 self.config.draft_model, kind="llama_cpp draft_model", service=self.name
-            )
-        if self.config.max_parallel is not None and self.config.max_parallel > 1:
-            logger.warning(
-                "llama_cpp service '%s': max_parallel=%d has no effect — the embedded "
-                "server is single-Llama/sequential; requests queue rather than "
-                "running concurrently.",
-                self.name,
-                self.config.max_parallel,
             )
         self._validate_prompt_caching()
 
     def _validate_prompt_caching(self) -> None:
         """Pre-flight the prompt-caching policy (§7): dir writable, dtype valid.
 
-        The embedded llama-cpp-python server has no slot-save/restore-to-disk
-        equivalent (§3a hard gap): ``enabled`` degrades to an in-process RAM
-        cache (``cache=True, cache_type="ram"``, wired in the worker adapter),
-        and ``cache_path`` — while still validated as a writable directory for
-        config-compatibility — is inert; we warn so this doesn't look silently
-        broken.
+        ``kv_cache_type`` maps directly onto ``llama-server``'s
+        ``--cache-type-k``/``--cache-type-v`` flags; ``cache_path`` still has
+        no llama-server ``--slot-save-path`` wiring here (accept-and-warn
+        degrade per ADR 0006 Mitigation 2), so it's validated as a writable
+        directory but not yet passed through.
         """
         caching = self.policy.prompt_caching
         if caching is None or not caching.enabled:
@@ -201,9 +191,10 @@ class LlamaCppManager(NativeEngineManager):
                 f"prompt cache dir for '{self.name}' is not writable: {cache_dir} ({exc})"
             ) from exc
         logger.warning(
-            "llama_cpp service '%s': prompt_caching.cache_path (%s) is inert — the "
-            "embedded server degrades to an in-process RAM cache, not disk-backed "
-            "slot-save/restore.",
+            "llama_cpp service '%s': prompt_caching.cache_path (%s) is inert — "
+            "Sovereign doesn't yet wire it to llama-server's --slot-save-path, "
+            "so prompt caching degrades to llama-server's own in-memory reuse, "
+            "not disk-backed slot-save/restore.",
             self.name,
             cache_dir,
         )

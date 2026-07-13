@@ -1,0 +1,4 @@
+# Toolchain for the llama_cpp engine (ADR 0007) — installs the `llama-server`
+# binary. prepare_environment()/`sovereign provision` run `brew bundle` against
+# this file when `llama-server` isn't already on PATH.
+brew "llama.cpp"   # ships the `llama-server` binary
