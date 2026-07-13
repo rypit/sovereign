@@ -102,8 +102,12 @@ jobs:
           enable-cache: true
           python-version: "3.12"
 
-      # No brew llama.cpp: engines are embedded Python bindings now
-      # (llama-cpp-python / mlx-lm), provided by `uv sync` on darwin/arm64.
+      # llama_cpp runs the native llama-server binary (ADR 0007), provisioned
+      # from the manager's Brewfile; mlx-lm stays an embedded binding provided
+      # by `uv sync` on darwin/arm64.
+      - name: Install llama-server
+        run: brew install llama.cpp
+
       - name: Cache HF models
         uses: actions/cache@v4
         with:

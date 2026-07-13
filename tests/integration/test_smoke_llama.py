@@ -5,21 +5,27 @@ The hermetic suite never executes anything real; this test does. It runs
 persisted state files (the same cross-process coordination `sovereign status`
 uses), hits the live health endpoint, then stops the stack with
 `sovereign down` and asserts the exact engine PID is gone. Along the way it
-sends one real chat completion through the embedded worker and asserts the
-telemetry pipeline surfaced generation stats into status.json — so the
-non-public-API instrumentation (completion wrapping) is exercised against the
-real binding, not just fakes.
+sends real chat completions through the worker and asserts the telemetry
+pipeline surfaced generation stats into status.json.
+
+Per ADR 0007 the llama_cpp worker runs the native `llama-server` binary as a
+child and translates its HTTP telemetry surface (`/slots`, `/metrics`) into
+Sovereign's events — this test is the one place that whole path (the argv
+`build_server_argv` produces AND the translator's real JSON parsing) is
+exercised against the real binary, not fakes. It also boots with
+`max_parallel: 2` and fires two concurrent completions, so `-np` continuous
+batching (the gap ADR 0007 closes) is exercised for real, not just asserted in
+mapping tests.
 
 Opt-in only: marked `integration`, excluded from `make test` (see pytest
-addopts), and skipped when `llama-cpp-python` isn't installed (it is a
-darwin/arm64-marked dependency, so `uv sync` provides it there). CI runs it on
-a macOS arm64 runner with the HF cache cached between runs
-(~/.cache/huggingface).
+addopts), and skipped when the `llama-server` binary isn't on PATH. CI's macOS
+arm64 smoke job installs it via `brew install llama.cpp` (the Brewfile next to
+the manager) and caches the HF model between runs (~/.cache/huggingface).
 """
 
 from __future__ import annotations
 
-import importlib.util
+import concurrent.futures
 import json
 import shutil
 import signal
@@ -55,6 +61,7 @@ services:
     config:
       model: {_MODEL}
       context_size: 2048
+      max_parallel: 2
 """
 
 
@@ -103,8 +110,8 @@ def _dump_worker_log(state_dir: Path, name: str = "engine") -> None:
 
 
 @pytest.mark.skipif(
-    importlib.util.find_spec("llama_cpp") is None,
-    reason="llama-cpp-python not installed (darwin/arm64-only dependency)",
+    shutil.which("llama-server") is None,
+    reason="llama-server binary not on PATH (provision via `brew install llama.cpp`)",
 )
 def test_llama_stack_boots_serves_and_tears_down(stack_dir) -> None:
     stack = stack_dir / "stack.yaml"
@@ -138,28 +145,39 @@ def test_llama_stack_boots_serves_and_tears_down(stack_dir) -> None:
         ) as resp:
             assert resp.status == 200
 
-        # One real completion flows through the embedded worker: the OpenAI
-        # surface works end-to-end, not just the health route.
-        request = urllib.request.Request(
-            f"http://127.0.0.1:{_PORT}/v1/chat/completions",
-            data=json.dumps(
-                {
-                    "model": _MODEL,
-                    "messages": [{"role": "user", "content": "Say hi in one word."}],
-                    "max_tokens": 16,
-                }
-            ).encode(),
-            headers={"Content-Type": "application/json"},
-        )
-        with urllib.request.urlopen(request, timeout=120) as resp:
-            assert resp.status == 200
-            body = json.loads(resp.read())
-        assert body["choices"][0]["message"]["content"].strip()
+        # Two concurrent completions flow through the worker: the OpenAI
+        # surface works end-to-end (not just the health route), and with
+        # `max_parallel: 2` llama-server's `-np` continuous batching serves
+        # them over one context/weights — the gap ADR 0007 closes, exercised
+        # for real rather than only asserted in build_server_argv tests.
+        def _complete(prompt: str) -> dict:
+            request = urllib.request.Request(
+                f"http://127.0.0.1:{_PORT}/v1/chat/completions",
+                data=json.dumps(
+                    {
+                        "model": _MODEL,
+                        "messages": [{"role": "user", "content": prompt}],
+                        "max_tokens": 16,
+                    }
+                ).encode(),
+                headers={"Content-Type": "application/json"},
+            )
+            with urllib.request.urlopen(request, timeout=120) as resp:
+                assert resp.status == 200
+                return json.loads(resp.read())
 
-        # The completion must surface generation stats through the telemetry
-        # pipeline (worker instrumentation -> UDS hub -> cache -> status.json).
-        # This is the one place the non-public-API completion wrapping is
-        # checked against the real binding — fail-soft would show up here as
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+            bodies = list(
+                pool.map(_complete, ["Say hi in one word.", "Name one color."])
+            )
+        for body in bodies:
+            assert body["choices"][0]["message"]["content"].strip()
+
+        # The completions must surface generation stats through the telemetry
+        # pipeline (llama-server /slots + /metrics -> adapter translator ->
+        # UDS hub -> cache -> status.json). This is the one place the real
+        # translator's HTTP parsing is checked against the live binary — a
+        # broken flag argv or a drifted /metrics schema would show up here as
         # a permanently-None generation_tps.
         def _stats():
             try:
