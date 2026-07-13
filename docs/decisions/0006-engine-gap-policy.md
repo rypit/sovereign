@@ -45,6 +45,13 @@ since `mlx_lm.server`'s callback provides one).
 
 ## The `max_parallel` gap in detail
 
+> **Historical (ADR 0007):** the gap described below applied to the embedded
+> `llama-cpp-python` server. ADR 0007 moves `llama_cpp` back to `llama-server`,
+> whose native `-np` gives true multi-slot batching — the gap is closed and the
+> "accept-and-warn" handling for `max_parallel` no longer applies. This section
+> is retained for the reasoning it captures.
+
+
 `llama-server -np N` enables **continuous batching with N request slots**:
 the total context (`-c`) is carved into N slices and up to N requests decode
 *simultaneously in one batched forward pass*. Because decoding is

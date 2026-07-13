@@ -2,6 +2,9 @@
 
 Status: accepted
 
+> Note: superseded by ADR 0007 for the `llama_cpp` engine (which moves back to
+> `llama-server`); still in force for `mlx_lm`.
+
 ## Context
 
 Sovereign originally booted native inference engines by shelling out to
