@@ -5,5 +5,14 @@
 # omlx is not in homebrew/core: it installs from the project's own tap, and a
 # performant build must compile from HEAD with the custom Metal kernel —
 # `args:` entries are passed to `brew install` as `--HEAD --with-custom-kernel`.
-tap "jundot/omlx", "https://github.com/jundot/omlx"
+#
+# `trusted: true` grants Homebrew 6.0+ tap trust (https://docs.brew.sh/Tap-Trust):
+# a third-party tap ships arbitrary unsandboxed Ruby, so brew refuses to load
+# it without an explicit grant. This checked-in, reviewed Brewfile is the
+# deliberate place that grant lives — declaring the integration in
+# sovereign.yaml is consent to provision it, same premise as the rest of
+# provisioning. Requires Homebrew >= 6.0 (`brew update` if bundle rejects the
+# `trusted:` key); we deliberately avoid the deprecated global escape hatch
+# HOMEBREW_NO_REQUIRE_TAP_TRUST=1.
+tap "jundot/omlx", "https://github.com/jundot/omlx", trusted: true
 brew "omlx", args: ["HEAD", "with-custom-kernel"]   # ships the `omlx` server CLI (`omlx serve`)
