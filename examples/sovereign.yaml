@@ -80,8 +80,8 @@ services:
 
 # ---------------------------------------------------------------------------
 # Add a native inference engine once you have a GGUF model on disk. llama_cpp
-# runs embedded (llama-cpp-python's built-in server, in-process — no external
-# `llama-server` binary); `uv sync` installs it. Set model, uncomment, add
+# launches the native `llama-server` binary as a subprocess (installed via
+# Homebrew by provisioning — see ADR 0007). Set model, uncomment, add
 # `llama_heavy_v1` to open_webui's dependencies, and uncomment the
 # OPENAI_API_BASE_URL line above to auto-wire the UI to it.
 # ---------------------------------------------------------------------------
@@ -92,7 +92,7 @@ services:
 #       type: http
 #       endpoint: /health
 #       port: 11435
-#       # Generous: covers interpreter start + llama-cpp-python import + model load.
+#       # Generous: covers llama-server start + model load.
 #       timeout_seconds: 300
 #     config:
 #       model: "~/models/your-model.gguf"   # <-- point at a real GGUF ...
