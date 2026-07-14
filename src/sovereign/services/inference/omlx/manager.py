@@ -53,7 +53,12 @@ class OmlxManager(NativeEngineManager):
     config_cls = OmlxConfig
     config: OmlxConfig
     model_artifact_kind = "snapshot"
-    binary_hint = "Install it via Homebrew (`brew install omlx`) or run `sovereign provision`."
+    binary_hint = (
+        "Run `sovereign provision` (installs from the jundot/omlx tap via this "
+        "engine's Brewfile), or manually: `brew tap jundot/omlx "
+        "https://github.com/jundot/omlx && brew install omlx --HEAD "
+        "--with-custom-kernel`."
+    )
 
     @classmethod
     def provisioning_satisfied(cls) -> bool:
