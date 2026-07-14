@@ -83,11 +83,12 @@ jobs:
           enable-cache: true
           python-version: "3.12"
 
-      # llama_cpp runs the native llama-server binary (ADR 0007), provisioned
-      # from the manager's Brewfile; mlx-lm stays an embedded binding provided
-      # by `uv sync` on darwin/arm64.
-      - name: Install llama-server
-        run: brew install llama.cpp
+      # llama_cpp and omlx run native server binaries (ADR 0007), provisioned
+      # from each manager's Brewfile — installed here explicitly so their
+      # smoke tests' PATH-probe skip guards never fire on CI; mlx-lm stays an
+      # embedded binding provided by `uv sync` on darwin/arm64.
+      - name: Install engine binaries
+        run: brew install llama.cpp omlx
 
       - name: Cache HF models
         uses: actions/cache@v4

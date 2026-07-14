@@ -13,8 +13,10 @@ No generation-stats assertion: omlx exposes no telemetry scrape surface
 ever carries heartbeat/memory telemetry for this engine.
 
 Opt-in only: marked `integration`, excluded from `make test` (see pytest
-addopts), and skipped when the `omlx` binary isn't on PATH (provision via
-`brew install omlx`). The HF model is cached between runs
+addopts). The skip guard below covers unprovisioned *local* machines only —
+CI's macOS arm64 smoke job installs the binary via `brew install omlx`
+(see .github/workflows/ci.yml), so this test always executes there rather
+than silently skipping. The HF model is cached between runs
 (~/.cache/huggingface).
 """
 
