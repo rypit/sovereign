@@ -56,8 +56,8 @@ class OmlxManager(NativeEngineManager):
     binary_hint = (
         "Run `sovereign provision` (installs from the jundot/omlx tap via this "
         "engine's Brewfile), or manually: `brew tap jundot/omlx "
-        "https://github.com/jundot/omlx && brew install omlx --HEAD "
-        "--with-custom-kernel`."
+        "https://github.com/jundot/omlx && brew trust jundot/omlx && "
+        "brew install omlx --HEAD --with-custom-kernel`."
     )
 
     @classmethod
