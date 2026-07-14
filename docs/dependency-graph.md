@@ -1,6 +1,6 @@
 # Internal dependency graph
 
-_Generated 2026-07-13 by `scripts/depgraph.py` — 68 modules, 175 internal import edges (155 runtime, 20 type-annotation-only). Regenerate with `make graph`._
+_Generated 2026-07-14 by `scripts/depgraph.py` — 72 modules, 185 internal import edges (163 runtime, 22 type-annotation-only). Regenerate with `make graph`._
 
 Nodes are modules under `sovereign`, grouped by top-level package. Only imports internal to the package are shown. Solid arrows (`-->`) are runtime imports; dashed arrows (`-.->`) are type-annotation-only imports (`if TYPE_CHECKING:` blocks). Type-only edges are excluded from cycle detection and fan-in/fan-out. Modules that participate in a runtime import cycle are outlined in red.
 
@@ -69,6 +69,9 @@ graph LR
     n_sovereign_services_inference_mlx_lm["services/inference/mlx_lm/__init__.py"]
     n_sovereign_services_inference_mlx_lm_config["services/inference/mlx_lm/config.py"]
     n_sovereign_services_inference_mlx_lm_manager["services/inference/mlx_lm/manager.py"]
+    n_sovereign_services_inference_omlx["services/inference/omlx/__init__.py"]
+    n_sovereign_services_inference_omlx_config["services/inference/omlx/config.py"]
+    n_sovereign_services_inference_omlx_manager["services/inference/omlx/manager.py"]
     n_sovereign_services_inference_routing["services/inference/routing.py"]
   end
   subgraph top-level
@@ -86,6 +89,7 @@ graph LR
     n_sovereign_workers_engine_worker["workers/engine_worker.py"]
     n_sovereign_workers_llama_cpp_adapter["workers/llama_cpp_adapter.py"]
     n_sovereign_workers_mlx_lm_adapter["workers/mlx_lm_adapter.py"]
+    n_sovereign_workers_omlx_adapter["workers/omlx_adapter.py"]
     n_sovereign_workers_protocol["workers/protocol.py"]
     n_sovereign_workers_telemetry["workers/telemetry.py"]
     n_sovereign_workers_worker_config["workers/worker_config.py"]
@@ -234,6 +238,13 @@ graph LR
   n_sovereign_services_inference_mlx_lm_manager --> n_sovereign_core_registry
   n_sovereign_services_inference_mlx_lm_manager --> n_sovereign_services_inference_base
   n_sovereign_services_inference_mlx_lm_manager --> n_sovereign_services_inference_mlx_lm_config
+  n_sovereign_services_inference_omlx --> n_sovereign_services_inference_omlx_manager
+  n_sovereign_services_inference_omlx_config --> n_sovereign_core_base_config
+  n_sovereign_services_inference_omlx_manager --> n_sovereign_core_registry
+  n_sovereign_services_inference_omlx_manager --> n_sovereign_core_units
+  n_sovereign_services_inference_omlx_manager --> n_sovereign_services_inference_base
+  n_sovereign_services_inference_omlx_manager --> n_sovereign_services_inference_hf
+  n_sovereign_services_inference_omlx_manager --> n_sovereign_services_inference_omlx_config
   n_sovereign_services_inference_routing --> n_sovereign_core_base_manager
   n_sovereign_services_inference_routing --> n_sovereign_core_errors
   n_sovereign_services_inference_routing --> n_sovereign_core_registry
@@ -244,6 +255,7 @@ graph LR
   n_sovereign_workers_engine_worker --> n_sovereign_workers_worker_config
   n_sovereign_workers_llama_cpp_adapter --> n_sovereign_workers_protocol
   n_sovereign_workers_mlx_lm_adapter --> n_sovereign_workers_protocol
+  n_sovereign_workers_omlx_adapter --> n_sovereign_workers_protocol
   n_sovereign_workers_telemetry --> n_sovereign_workers_protocol
   n_sovereign_bench_cleanroom -.-> n_sovereign_bench_spec
   n_sovereign_bench_perf -.-> n_sovereign_bench_runner
@@ -265,6 +277,8 @@ graph LR
   n_sovereign_workers_llama_cpp_adapter -.-> n_sovereign_workers_worker_config
   n_sovereign_workers_mlx_lm_adapter -.-> n_sovereign_workers_telemetry
   n_sovereign_workers_mlx_lm_adapter -.-> n_sovereign_workers_worker_config
+  n_sovereign_workers_omlx_adapter -.-> n_sovereign_workers_telemetry
+  n_sovereign_workers_omlx_adapter -.-> n_sovereign_workers_worker_config
 ```
 
 ## Import cycles
@@ -277,30 +291,32 @@ Sorted by total coupling (fan-in + fan-out). Counts runtime edges only. High fan
 
 | Module | Fan-in | Fan-out | Total |
 | --- | ---: | ---: | ---: |
+| `core/registry.py` | 12 | 4 | 16 |
 | `cli/stack.py` | 1 | 14 | 15 |
-| `core/registry.py` | 11 | 4 | 15 |
 | `runtime/orchestrator.py` | 2 | 13 | 15 |
 | `core/state.py` | 13 | 0 | 13 |
+| `services/inference/base.py` | 3 | 9 | 12 |
 | `bench/quality.py` | 2 | 9 | 11 |
 | `cli/_common.py` | 5 | 6 | 11 |
-| `services/inference/base.py` | 2 | 9 | 11 |
+| `core/base_config.py` | 10 | 1 | 11 |
 | `bench/cli.py` | 1 | 9 | 10 |
 | `config.py` | 9 | 1 | 10 |
-| `core/base_config.py` | 9 | 1 | 10 |
 | `core/base_harness.py` | 7 | 2 | 9 |
+| `core/units.py` | 9 | 0 | 9 |
 | `services/docker/manager.py` | 3 | 6 | 9 |
 | `bench/cleanroom.py` | 1 | 7 | 8 |
 | `core/base_manager.py` | 8 | 0 | 8 |
-| `core/units.py` | 8 | 0 | 8 |
 | `bench/runner.py` | 3 | 4 | 7 |
 | `core/resolver.py` | 7 | 0 | 7 |
 | `core/resources.py` | 4 | 3 | 7 |
+| `workers/protocol.py` | 7 | 0 | 7 |
 | `cli/__init__.py` | 0 | 6 | 6 |
-| `workers/protocol.py` | 6 | 0 | 6 |
+| `services/inference/omlx/manager.py` | 1 | 5 | 6 |
 | `bench/perf.py` | 2 | 3 | 5 |
 | `core/planning.py` | 1 | 4 | 5 |
 | `core/provisioning.py` | 5 | 0 | 5 |
 | `runtime/dashboard.py` | 2 | 3 | 5 |
+| `services/inference/hf.py` | 3 | 2 | 5 |
 | `services/inference/llama_cpp/manager.py` | 1 | 4 | 5 |
 | `bench/lock.py` | 3 | 1 | 4 |
 | `bench/spec.py` | 3 | 1 | 4 |
@@ -308,7 +324,6 @@ Sorted by total coupling (fan-in + fan-out). Counts runtime edges only. High fan
 | `harnesses/cline_cli/manager.py` | 1 | 3 | 4 |
 | `harnesses/mini_swe_agent/manager.py` | 1 | 3 | 4 |
 | `runtime/manifest.py` | 1 | 3 | 4 |
-| `services/inference/hf.py` | 2 | 2 | 4 |
 | `services/inference/mlx_lm/manager.py` | 1 | 3 | 4 |
 | `services/inference/routing.py` | 0 | 4 | 4 |
 | `workers/engine_worker.py` | 0 | 4 | 4 |
@@ -326,6 +341,7 @@ Sorted by total coupling (fan-in + fan-out). Counts runtime edges only. High fan
 | `services/docker/config.py` | 1 | 1 | 2 |
 | `services/inference/llama_cpp/config.py` | 1 | 1 | 2 |
 | `services/inference/mlx_lm/config.py` | 1 | 1 | 2 |
+| `services/inference/omlx/config.py` | 1 | 1 | 2 |
 | `workers/telemetry.py` | 1 | 1 | 2 |
 | `workers/worker_config.py` | 2 | 0 | 2 |
 | `cli/logging_config.py` | 1 | 0 | 1 |
@@ -338,8 +354,10 @@ Sorted by total coupling (fan-in + fan-out). Counts runtime edges only. High fan
 | `services/docker/__init__.py` | 0 | 1 | 1 |
 | `services/inference/llama_cpp/__init__.py` | 0 | 1 | 1 |
 | `services/inference/mlx_lm/__init__.py` | 0 | 1 | 1 |
+| `services/inference/omlx/__init__.py` | 0 | 1 | 1 |
 | `workers/llama_cpp_adapter.py` | 0 | 1 | 1 |
 | `workers/mlx_lm_adapter.py` | 0 | 1 | 1 |
+| `workers/omlx_adapter.py` | 0 | 1 | 1 |
 | `bench/__init__.py` | 0 | 0 | 0 |
 | `core/__init__.py` | 0 | 0 | 0 |
 | `runtime/__init__.py` | 0 | 0 | 0 |
