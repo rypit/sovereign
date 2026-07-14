@@ -10,114 +10,121 @@ engines **natively** (for real Metal/MLX acceleration), runs auxiliary services 
 Docker, wires them together, and enforces a unified-memory budget so a second
 engine can't OOM-crash the machine.
 
-See [`docs/sovereign-implementation-plan-v1.1.md`](./docs/sovereign-implementation-plan-v1.1.md)
-for the full design.
+## How it works
 
-The default stack also runs **SearXNG**, wired into Open WebUI for web search.
+- **Declare, don't script.** A stack is a list of services (and optionally
+  harnesses) in YAML. Each service names a `base_type` — an inference engine,
+  or `docker` for anything containerized — and Sovereign boots them in
+  dependency order, health-checks them, and keeps a live dashboard
+  (`sovereign monitor`).
+- **Models come from HuggingFace refs.** `model` accepts a local path or an HF
+  repo id (`org/name`, `org/name:Q4_K_M`, `org/name/file.gguf`). If you omit
+  `base_type`, Sovereign routes the model to the right engine from its HF
+  metadata. Models are pre-downloaded into the shared HF cache before launch,
+  with byte-level progress in the dashboard; `sovereign models list/prune`
+  inspects and reclaims the cache.
+- **Memory is budgeted, not hoped for.** Sovereign estimates each model's
+  footprint from its weight files and refuses to boot a service that would
+  blow the machine's unified-memory budget — it never kills a running service.
+  `sovereign plan` shows the routing, estimates, and budget verdict as a
+  no-download dry-run.
+- **Dependencies install themselves.** Declaring a service or harness in YAML
+  is all it takes: each integration owns its dependency chain (Brewfile +
+  install commands), run idempotently at boot or explicitly via
+  `sovereign provision`.
+- **Harnesses and benchmarks are first-class.** Coding agents can be pointed
+  at the stack (`sovereign harness invoke`), and `sovereign bench` sweeps
+  stacks × harnesses × suites into repeatable, content-addressed benchmark
+  cells — performance (TTFT / tok/s / latency) and agentic quality, joined
+  into a speed/quality comparison by `bench compare`.
 
-Contributing? See [`CONTRIBUTING.md`](./CONTRIBUTING.md),
-[`docs/architecture.md`](./docs/architecture.md) for the current layering
-and contracts, and [`docs/decisions/`](./docs/decisions/) for the ADRs
-behind them.
+Sovereign is strictly local: only local engines run, and no cloud model is a
+benchmark baseline. See the
+[implementation plan](./docs/sovereign-implementation-plan-v1.1.md) for the
+full design.
 
-## Status
+## Supported integrations
 
-The MVP orchestration spine is implemented and tested (Phases 0–8 and 10 of the
-roadmap), and **both post-MVP tracks — harnesses and benchmarking — are complete**
-(CI is the source of truth for the test count):
+| Kind | Integration | Notes |
+| --- | --- | --- |
+| Engine | `mlx_lm` | Apple MLX, runs embedded in-process (`mlx-lm` ships as a dependency on Apple Silicon) |
+| Engine | `llama_cpp` | Runs the native `llama-server` binary as a subprocess (installed via Homebrew) |
+| Service | `docker` | Generic container runner — Open WebUI and SearXNG in the examples are just `docker` instances |
+| Harness | `cline_cli` | Cline in headless mode, isolated per-stack config |
+| Harness | `mini_swe_agent` | mini-SWE-agent in-process (the optional `harness` extra) |
 
-- Core contracts (`ServiceManager` / `Harness` Protocols, `base_type` registry),
-  `sovereign.yaml` parsing, and the full Typer CLI (`up`/`down`/`status`/`logs`/
-  `monitor`/`harness`/`bench`).
-- The Orchestrator: DAG boot in dependency order, async reconciliation loop,
-  memory admission control, resolved-stack manifest + drift detection, and
-  harness materialization (including re-materialization when a dependency's
-  endpoint changes, e.g. after a restart).
-- Services: `docker` (a generic Docker container runner — `open_webui` and
-  `searxng` are just instances of it configured in YAML), `llama_cpp`, `mlx_lm`.
-  The Docker daemon is implicit infrastructure: each `docker` service
-  verifies it's reachable on its own, so there's no separate engine entry or
-  dependency to declare. (Existing YAMLs using `base_type: open_webui` or
-  `searxng` need to switch to `base_type: docker`.) `llama_cpp` and
-  `mlx_lm` share a native-engine base and are configured consistently:
-  `llama_cpp`'s config field is now `model` (renamed from `model_path`) and,
-  like `mlx_lm`, accepts a local model path or a HuggingFace repo id
-  (`org/name`, `org/name:Q4_K_M`, or `org/name/file.gguf`); both engines also
-  support speculative-decoding `draft_model`/`num_draft_tokens`, and an optional
-  `served_model_name` for the OpenAI-compatible `"model"` string.
-- HF-native model management. `base_type: auto` (the default when `base_type` is
-  omitted) routes a model to `llama_cpp`/`mlx_lm` from its HuggingFace metadata,
-  so you only declare the `model`. Sovereign estimates a repo's memory footprint
-  from its weight-file sizes for admission control, and **pre-downloads** the
-  model into the shared HF cache before launch — a `DOWNLOADING` state with
-  byte-level progress (MB/s + ETA, Xet-aware via `hf_xet`) in the dashboard. Both
-  engines always launch from the resolved local path (no `--hf-repo`), so
-  `health_check.timeout_seconds` now only needs to cover model *load*, not the
-  download. `sovereign plan -f stack.yaml` is a no-download dry-run (routing +
-  memory estimate + budget verdict per service); `sovereign models list/prune`
-  inspects and reclaims the HF cache.
-- Harnesses: `cline_cli` (subprocess, isolated `CLINE_DIR`, `--yolo`/`--json`
-  headless) and `mini_swe_agent` (in-process `DefaultAgent`/`LitellmModel`, the
-  optional `harness` dependency extra). Both are invocable via
-  `sovereign harness list/materialize/invoke`.
-- Per-integration provisioning: one shared contract (`core/provisioning.py`)
-  lets every service and harness install its own dependency chain (a Brewfile
-  in its folder + install commands) — run at boot, by `sovereign provision`,
-  and by `scripts/setup.py`. Declaring an integration in YAML is all it takes.
-- Benchmarking (`sovereign bench run/ls/compare`): a bench spec (`bench.yaml`,
-  never part of `sovereign.yaml`) sweeps `stacks x harnesses x suites` into
-  content-addressed cells that skip on re-run. Attach mode measures an
-  already-running stack read-only (TTFT/tok-s/latency via an in-house `httpx`
-  prober, the optional `bench` extra); clean-room mode boots/measures/tears
-  down each stack itself behind a lockfile so it can't fight the daemon.
-  Agentic-quality cells run a harness against a native task-suite format,
-  grading from `git diff` + a programmatic grader rather than the harness's
-  own self-report, and gate off stacks whose perf cell already failed
-  its thresholds. `bench compare` joins perf + quality results into a
-  Pareto (speed/quality) comparison across runs.
+Both engines accept local model paths or HF refs, support speculative decoding
+(`draft_model` / `num_draft_tokens`), and an optional `served_model_name` for
+the OpenAI-compatible `"model"` string. The default example stack
+(`examples/sovereign.yaml`) runs an MLX engine plus Open WebUI with SearXNG
+wired in for web search.
 
-Still to come: `launchd` install/uninstall (Phase 9), `comfyui` (Phase 11).
-See the [implementation plan](./docs/sovereign-implementation-plan-v1.1.md) for
-per-phase status, and
-[`docs/harness-bench-implementation-plan.md`](./docs/harness-bench-implementation-plan.md)
-for the harness/bench tracks' detailed phase breakdown.
-
-## Setup
+## Getting started
 
 ```bash
 python3 scripts/setup.py
 ```
 
-Bootstraps the toolchain (Homebrew `uv`), syncs the Python environment,
-registers `sovereign` as a global executable, and then runs
-`sovereign provision` to install every integration's own dependencies.
+This bootstraps the toolchain (Homebrew, `uv`), syncs the Python environment,
+registers `sovereign` as a global executable, and provisions every registered
+integration's dependencies.
 
-### Provisioning
-
-Declaring a service or harness in `sovereign.yaml` is all it takes — Sovereign
-installs its full dependency chain automatically. Each integration folder owns
-its setup artifacts (e.g. `services/llama_cpp/Brewfile`,
-`harnesses/cline_cli/Brewfile` + `npm install -g cline`), and one shared
-contract (`core/provisioning.py`, surfaced as `prepare_environment()` on both
-services and harnesses) runs them idempotently in three places:
-
-- at boot (`sovereign up`), for whatever the stack declares;
-- via `sovereign provision [-f stack.yaml]` — scoped to a stack file, or every
-  registered integration when unscoped (what `setup.py` runs);
-- before one-shot `sovereign harness invoke`/bench quality runs.
-
-### MLX engine
-
-The `mlx_lm` engine ships with the project: `mlx-lm` is a dependency (Apple Silicon
-only), so `uv sync` makes it importable — Sovereign runs it embedded in-process
-(via `mlx_lm.server`'s Python API), not as a separate binary. Try it with a tiny model —
-`examples/mlx.yaml` omits `base_type`, so it's routed to `mlx_lm` automatically:
+Then try a tiny model — `examples/mlx.yaml` omits `base_type`, so it's routed
+to `mlx_lm` automatically:
 
 ```bash
-uv run sovereign plan -f examples/mlx.yaml   # dry-run: shows the routed engine + memory estimate, no download
-uv run sovereign up   -f examples/mlx.yaml   # DOWNLOADING (byte progress) -> STARTING -> READY
-uv run sovereign models list                 # what's in the shared HF cache
+sovereign plan -f examples/mlx.yaml   # dry-run: routed engine + memory estimate, no download
+sovereign up   -f examples/mlx.yaml   # DOWNLOADING (byte progress) -> STARTING -> READY
+sovereign models list                 # what's in the shared HF cache
 ```
+
+## CLI overview
+
+| Command | What it does |
+| --- | --- |
+| `sovereign up` / `down` | Boot / tear down the stack in `sovereign.yaml` (or `-f <file>`) |
+| `sovereign status` | One-shot service status table |
+| `sovereign monitor` | Live dashboard (memory, tok/s, download progress) |
+| `sovereign logs <name>` | Tail a service's logs |
+| `sovereign plan` | Dry-run: engine routing + memory estimates + budget verdict |
+| `sovereign provision` | Install integration dependencies (a stack's, or all) |
+| `sovereign models list/prune` | Inspect / reclaim the shared HF model cache |
+| `sovereign harness list/materialize/invoke` | Work with coding harnesses |
+| `sovereign bench run/ls/compare` | Run and compare benchmarks |
+
+## Harnesses & benchmarking
+
+With a stack up and harnesses declared in its `harnesses:` section:
+
+```bash
+sovereign harness list
+sovereign harness invoke <name> --prompt "..." --workdir /path/to/repo
+```
+
+Benchmarks live in a separate spec file (`bench.yaml`), never in
+`sovereign.yaml`. **Attach mode** measures an already-running stack read-only;
+**clean-room mode** boots, measures, and tears down each stack itself:
+
+```bash
+sovereign bench run -f examples/bench/perf-attach.yaml        # attach: needs a live `sovereign up`
+sovereign bench run -f examples/bench/quality-cleanroom.yaml  # clean-room: self-contained
+sovereign bench ls
+sovereign bench compare
+```
+
+Harness/bench Python dependencies install automatically via provisioning; the
+extras remain as the declarative, lockfile-friendly path (e.g. for CI):
+`uv sync --extra harness --extra bench`.
+
+## Runtime state
+
+All runtime state lives under `.sovereign/` **relative to the directory you run
+Sovereign from** — service states, the dashboard snapshot, the resolved-stack
+manifest, `logs/`, and `benchmarks/`. Separate CLI invocations (`status`,
+`monitor`, `down`, `harness invoke`) coordinate through these files, so run
+them from the same directory as `sovereign up` — or pass `--state-dir`.
+Downloaded models are *not* here; they live in the shared HuggingFace cache
+(`sovereign models list`).
 
 ## Development
 
@@ -130,60 +137,10 @@ make check                 # all of the above (what CI runs)
 ```
 
 CI runs the suite on a macOS arm64 runner (Python 3.12) — the product's actual
-and only target platform. See [`CLAUDE.md`](./CLAUDE.md) for an architecture map
-and codebase conventions (useful for humans too).
+and only target platform. Tests are hermetic and run anywhere.
 
-### Runtime state
-
-All runtime state lives under `.sovereign/` **relative to the directory you run
-Sovereign from** — `state.json` (service states + teardown handles),
-`status.json` (live dashboard snapshot), `manifest.json` (resolved-stack
-fingerprint), `logs/`, and `benchmarks/`. Separate CLI invocations (`status`,
-`monitor`, `down`, `harness invoke`) coordinate through these files, so run
-them from the same directory as `sovereign up` — or pass `--state-dir`.
-Downloaded models are *not* here; they live in the shared HuggingFace cache
-(`sovereign models list`).
-
-### Harnesses & benchmarking
-
-Harness dependencies install automatically when a harness is declared (see
-Provisioning above). The `harness`/`bench` extras remain as the declarative,
-lockfile-friendly path (e.g. for CI):
-
-```bash
-uv sync --extra harness --extra bench
-```
-
-With a stack up (`sovereign up -f examples/sovereign.yaml`) and harnesses
-declared in its `harnesses:` section:
-
-```bash
-uv run sovereign harness list
-uv run sovereign harness invoke <name> --prompt "..." --workdir /path/to/repo
-```
-
-Benchmarks live in a separate spec file, never in `sovereign.yaml`:
-
-```bash
-uv run sovereign bench run -f examples/bench/perf-attach.yaml   # attach mode, needs a live `sovereign up`
-uv run sovereign bench run -f examples/bench/quality-cleanroom.yaml  # bench boots/tears down its own stack
-uv run sovereign bench ls
-uv run sovereign bench compare
-```
-
-## Locked decisions
-
-Recorded here per the plan's Day-1 checklist (§13):
-
-- **`base_type` only** (§11.1). The instance `name` is the unique ID; `base_type`
-  is the factory key that selects a Manager/Harness class. There is no separate
-  `type` field.
-- **Refuse-to-boot, never auto-kill** (§11.5). Under memory pressure, admission
-  control refuses to start a service that would blow the budget, with a specific
-  actionable error. Sovereign never auto-kills a running service. (To be revisited
-  after living with refusal.)
-- **Strictly local — no cloud baseline** (§11, Open Decision #1). Sovereign runs
-  only local engines; no paid cloud model is an allowed benchmark baseline.
-  **LiteLLM and Claude Code are dropped** — the Anthropic-Messages gateway they'd
-  require is out of scope. The Pareto frontier is anchored entirely by local
-  engine × model × harness combinations.
+Contributing? See [`CONTRIBUTING.md`](./CONTRIBUTING.md),
+[`docs/architecture.md`](./docs/architecture.md) for the current layering and
+contracts, [`docs/decisions/`](./docs/decisions/) for the ADRs behind them,
+and [`CLAUDE.md`](./CLAUDE.md) for an architecture map and codebase
+conventions (useful for humans too).
