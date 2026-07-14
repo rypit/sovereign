@@ -1,4 +1,4 @@
-"""Both concrete harnesses (H2 + H3) build together via the real registry."""
+"""All concrete harnesses build together via the real registry."""
 
 from __future__ import annotations
 
@@ -57,14 +57,24 @@ def _config() -> SovereignConfig:
                         "model": "{{ engine.model }}",
                     },
                 },
+                {
+                    "name": "opencode_local",
+                    "base_type": "opencode",
+                    "dependencies": ["engine"],
+                    "config": {
+                        "base_url": "{{ engine.endpoint }}/v1",
+                        "model": "{{ engine.model }}",
+                    },
+                },
             ],
         }
     )
 
 
-def test_both_harnesses_build_and_materialize_together(tmp_path) -> None:
+def test_all_harnesses_build_and_materialize_together(tmp_path) -> None:
     from sovereign.harnesses.cline_cli.manager import ClineCliHarness
     from sovereign.harnesses.mini_swe_agent.manager import MiniSweAgentHarness
+    from sovereign.harnesses.opencode.manager import OpencodeHarness
 
     orch = Orchestrator(
         _config(),
@@ -77,11 +87,13 @@ def test_both_harnesses_build_and_materialize_together(tmp_path) -> None:
 
     assert isinstance(orch.harnesses["cline_local"], ClineCliHarness)
     assert isinstance(orch.harnesses["mini_swe_local"], MiniSweAgentHarness)
+    assert isinstance(orch.harnesses["opencode_local"], OpencodeHarness)
     assert orch.harnesses["cline_local"].resolved_config["base_url"] == "http://127.0.0.1:11435/v1"
     assert orch.harnesses["mini_swe_local"].resolved_config["model"] == "llama3-70b"
+    assert orch.harnesses["opencode_local"].resolved_config["model"] == "llama3-70b"
 
     import json
 
     manifest = json.loads((tmp_path / "manifest.json").read_text())
     names = {h["name"] for h in manifest["harnesses"]}
-    assert names == {"cline_local", "mini_swe_local"}
+    assert names == {"cline_local", "mini_swe_local", "opencode_local"}
