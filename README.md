@@ -62,7 +62,7 @@ wired in for web search.
 ## Getting started
 
 ```bash
-python3 scripts/setup.py
+make setup
 ```
 
 This bootstraps the toolchain (Homebrew, `uv`), syncs the Python environment,
@@ -129,12 +129,14 @@ Downloaded models are *not* here; they live in the shared HuggingFace cache
 ## Development
 
 ```bash
-uv run sovereign --help    # CLI surface
-make test                  # uv run pytest -q
-make lint                  # uv run ruff check .
-make typecheck             # uv run mypy
-make check                 # all of the above (what CI runs)
+sovereign --help   # CLI surface
+make test          # test suite (hermetic, fast)
+make lint          # ruff
+make typecheck     # mypy
+make check         # lint + typecheck + arch guardrails + tests — what CI runs
 ```
+
+Run `make check` before sending a PR.
 
 CI runs the suite on a macOS arm64 runner (Python 3.12) — the product's actual
 and only target platform. Tests are hermetic and run anywhere.
