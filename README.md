@@ -52,6 +52,7 @@ full design.
 | Service | `docker` | Generic container runner — Open WebUI and SearXNG in the examples are just `docker` instances |
 | Harness | `cline_cli` | Cline in headless mode, isolated per-stack config |
 | Harness | `mini_swe_agent` | mini-SWE-agent in-process (the optional `harness` extra) |
+| Harness | `opencode` | opencode in headless mode (`opencode run`), isolated per-stack config |
 
 Both engines accept local model paths or HF refs, support speculative decoding
 (`draft_model` / `num_draft_tokens`), and an optional `served_model_name` for

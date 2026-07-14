@@ -88,7 +88,7 @@ workers/           embedded engine worker processes (spawned via
                    and runs a telemetry-translator poll loop over its HTTP
                    surface (`/slots`, `/metrics`), re-emitting the same UDS
                    NDJSON events other adapters emit directly
-harnesses/         cline_cli, mini_swe_agent          (auto-discovered)
+harnesses/         cline_cli, mini_swe_agent, opencode (auto-discovered)
 bench/             content-addressed bench cells; only cleanroom.py may
                    import the Orchestrator; bench sub-app CLI lives in bench/cli.py
 scripts/
