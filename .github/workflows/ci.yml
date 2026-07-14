@@ -87,8 +87,16 @@ jobs:
       # from each manager's Brewfile — installed here explicitly so their
       # smoke tests' PATH-probe skip guards never fire on CI; mlx-lm stays an
       # embedded binding provided by `uv sync` on darwin/arm64.
-      - name: Install engine binaries
-        run: brew install llama.cpp omlx
+      - name: Install llama-server
+        run: brew install llama.cpp
+
+      # omlx lives in its own tap and must build from HEAD with the custom
+      # Metal kernel — install through the manager's Brewfile (the exact file
+      # `sovereign provision` runs) rather than a hand-rolled `brew install`,
+      # so CI can't drift from what users get. A HEAD build compiles, so this
+      # step is slower than a bottled install.
+      - name: Install omlx (from its Brewfile)
+        run: brew bundle --file src/sovereign/services/inference/omlx/Brewfile
 
       - name: Cache HF models
         uses: actions/cache@v4

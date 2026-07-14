@@ -14,9 +14,11 @@ ever carries heartbeat/memory telemetry for this engine.
 
 Opt-in only: marked `integration`, excluded from `make test` (see pytest
 addopts). The skip guard below covers unprovisioned *local* machines only —
-CI's macOS arm64 smoke job installs the binary via `brew install omlx`
-(see .github/workflows/ci.yml), so this test always executes there rather
-than silently skipping. The HF model is cached between runs
+CI's macOS arm64 smoke job installs the binary from the manager's Brewfile
+(`brew bundle --file src/sovereign/services/inference/omlx/Brewfile`, which
+taps jundot/omlx and builds from HEAD with the custom kernel; see
+.github/workflows/ci.yml), so this test always executes there rather than
+silently skipping. The HF model is cached between runs
 (~/.cache/huggingface).
 """
 
@@ -102,7 +104,10 @@ def _dump_worker_log(state_dir: Path, name: str = "engine") -> None:
 
 @pytest.mark.skipif(
     shutil.which("omlx") is None,
-    reason="omlx binary not on PATH (provision via `brew install omlx`)",
+    reason=(
+        "omlx binary not on PATH (provision via `sovereign provision` or "
+        "`brew bundle --file src/sovereign/services/inference/omlx/Brewfile`)"
+    ),
 )
 def test_omlx_stack_boots_serves_and_tears_down(stack_dir) -> None:
     stack = stack_dir / "stack.yaml"

@@ -1,4 +1,9 @@
 # Toolchain for the omlx engine — installs the `omlx` CLI/server.
 # prepare_environment()/`sovereign provision` run `brew bundle` against this
 # file when `omlx` isn't already on PATH.
-brew "omlx"   # ships the `omlx` server CLI (`omlx serve`)
+#
+# omlx is not in homebrew/core: it installs from the project's own tap, and a
+# performant build must compile from HEAD with the custom Metal kernel —
+# `args:` entries are passed to `brew install` as `--HEAD --with-custom-kernel`.
+tap "jundot/omlx", "https://github.com/jundot/omlx"
+brew "omlx", args: ["HEAD", "with-custom-kernel"]   # ships the `omlx` server CLI (`omlx serve`)
