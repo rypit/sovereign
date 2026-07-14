@@ -1,0 +1,4 @@
+# Toolchain for the omlx engine — installs the `omlx` CLI/server.
+# prepare_environment()/`sovereign provision` run `brew bundle` against this
+# file when `omlx` isn't already on PATH.
+brew "omlx"   # ships the `omlx` server CLI (`omlx serve`)

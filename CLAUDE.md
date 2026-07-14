@@ -61,8 +61,8 @@ runtime/
 services/
   docker/         auxiliary services in Docker
   inference/     native inference engine workers + their shared base (mlx_lm
-                 is an embedded Python binding; llama_cpp is a `llama-server`
-                 subprocess — ADR 0007)
+                 is an embedded Python binding; llama_cpp and omlx are
+                 supervised server subprocesses — ADR 0007)
     base.py              shared worker-lifecycle base (NativeEngineManager): dumps
                          a WorkerConfig, launches `sovereign.workers.engine_worker`,
                          HTTP health, psutil/procmem metrics fallback
@@ -70,8 +70,11 @@ services/
                          selection, memory estimation, download, RoutingCache
     routing.py           engine-routing sweep (each engine's claim_route); registers
                          the router core calls via registry.route_entry()
-    llama_cpp/  mlx_lm/   the two native engines (auto-discovered); each supplies
-                         engine_kwargs() (mapped by its workers/*_adapter.py)
+    llama_cpp/  mlx_lm/  omlx/   the native engines (auto-discovered); each supplies
+                         engine_kwargs() (mapped by its workers/*_adapter.py);
+                         omlx (oMLX server: continuous batching + paged SSD
+                         prefix cache) is explicit-only — claim_route abstains
+                         from `auto`
 workers/           embedded engine worker processes (spawned via
                    `python -m sovereign.workers.engine_worker --config <path>`)
   protocol.py      typed telemetry event schema (NDJSON) + encode/decode
@@ -88,6 +91,11 @@ workers/           embedded engine worker processes (spawned via
                    and runs a telemetry-translator poll loop over its HTTP
                    surface (`/slots`, `/metrics`), re-emitting the same UDS
                    NDJSON events other adapters emit directly
+  omlx_adapter.py         ADR 0007 pattern, no translator: symlinks the one
+                   resolved snapshot into a per-service --model-dir, launches
+                   `omlx serve` as a child subprocess, then just supervises it
+                   (omlx has no /slots-/metrics-style scrape surface — the
+                   ADR 0006 gap the manager logs at pre-flight)
 harnesses/         cline_cli, mini_swe_agent          (auto-discovered)
 bench/             content-addressed bench cells; only cleanroom.py may
                    import the Orchestrator; bench sub-app CLI lives in bench/cli.py
