@@ -122,9 +122,15 @@ def build_server_argv(
 
 def prepare_model_dir(models_root: str, model_name: str, model_path: str) -> str:
     """Build the single-model ``--model-dir`` layout: a symlink named
-    ``model_name`` (possibly nested, e.g. ``org/name``) pointing at the
-    resolved snapshot directory. Idempotent; a stale symlink (model or HF
-    snapshot revision changed) is re-pointed. Returns ``models_root``.
+    ``model_name`` pointing at the resolved snapshot directory. Idempotent;
+    a stale symlink (model or HF snapshot revision changed) is re-pointed.
+    Returns ``models_root``.
+
+    Nested names still produce nested directories, but the manager always
+    passes a flat ``org--name`` (see ``OmlxManager.api_model_name``): omlx
+    derives model ids by joining nested subdirectories with ``--``, and a
+    nested layout gets double-registered under both its leaf and qualified
+    names — flat names make the discovered id equal ``model_name`` verbatim.
 
     A pre-existing *real* directory at the link path is left untouched — the
     user may have materialised the model there deliberately.

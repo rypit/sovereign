@@ -41,6 +41,9 @@ pytestmark = pytest.mark.integration
 
 # Tiny MLX instruct model (~350 MB, 4-bit).
 _MODEL = "mlx-community/Qwen2.5-0.5B-Instruct-4bit"
+# The name omlx serves it under: api_model_name() flattens the repo id to
+# omlx's directory-derived id convention (nested segments join with `--`).
+_SERVED = _MODEL.replace("/", "--")
 _PORT = 18435
 _BOOT_TIMEOUT = 600.0  # first run downloads the model; cached runs boot in seconds
 _STACK_YAML = f"""\
@@ -135,8 +138,9 @@ def test_omlx_stack_boots_serves_and_tears_down(stack_dir) -> None:
         assert psutil.pid_exists(engine_pid)
 
         # The single-model symlink layout the adapter prepared points at the
-        # resolved snapshot inside the shared HF cache.
-        link = state_dir / "omlx" / "engine" / "models" / _MODEL
+        # resolved snapshot inside the shared HF cache — flat `org--name`, so
+        # omlx discovers exactly one model whose id equals _SERVED.
+        link = state_dir / "omlx" / "engine" / "models" / _SERVED
         assert link.is_symlink()
         assert (link / "config.json").exists()
 
@@ -147,14 +151,14 @@ def test_omlx_stack_boots_serves_and_tears_down(stack_dir) -> None:
         ) as resp:
             assert resp.status == 200
             listed = json.loads(resp.read())
-        assert any(m.get("id") == _MODEL for m in listed.get("data", []))
+        assert any(m.get("id") == _SERVED for m in listed.get("data", []))
 
         # A completion flows through omlx's OpenAI surface end-to-end.
         request = urllib.request.Request(
             f"http://127.0.0.1:{_PORT}/v1/chat/completions",
             data=json.dumps(
                 {
-                    "model": _MODEL,
+                    "model": _SERVED,
                     "messages": [{"role": "user", "content": "Say hi in one word."}],
                     "max_tokens": 16,
                 }
