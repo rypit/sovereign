@@ -507,6 +507,8 @@ def test_status_snapshot_shape() -> None:
     orch = _orch(cfg, ports={"engine": 11435})
     asyncio.run(orch.boot())
     snapshot = orch.status_snapshot()
+    assert snapshot["budget"]["system_total_bytes"] > 0  # machine RAM, via psutil
+    assert snapshot["budget"]["system_used_bytes"] >= 0
     assert set(snapshot["services"]) == {"engine", "frontend"}
     frontend = snapshot["services"]["frontend"]
     assert frontend["state"] == "ready"

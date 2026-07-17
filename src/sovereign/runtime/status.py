@@ -12,11 +12,15 @@ from typing import TypedDict
 
 
 class BudgetStatus(TypedDict):
-    """Unified-memory budget summary for the dashboard footer."""
+    """Unified-memory budget summary for the dashboard's Memory panel."""
 
     usable_bytes: int
     reserved_bytes: int
     available_bytes: int
+    #: Machine-wide physical memory, snapshotted alongside the budget so the
+    #: dashboard can chart the stack's (and the whole system's) share of it.
+    system_total_bytes: int
+    system_used_bytes: int
 
 
 class ActivityStatus(TypedDict):
