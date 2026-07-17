@@ -2,10 +2,10 @@
 
 Pure presentation — consumes the :class:`~sovereign.runtime.status.StatusSnapshot`
 shape that ``Orchestrator.status_snapshot()`` produces (and persists as
-``status.json``), and renders two stacked panels — "Sovereign" (the service
-table, with sparklines) and "Activity" (per-service activity lines) — plus the
-budget footer. No orchestration logic lives here; no rendering logic lives in
-the orchestrator.
+``status.json``), and renders three stacked panels — "Sovereign" (the service
+table, with sparklines), "Memory" (usage bars vs budget and machine RAM), and
+"Activity" (per-service activity lines). No orchestration logic lives here; no
+rendering logic lives in the orchestrator.
 
 Two cadences are deliberately decoupled (§5/§8):
 
@@ -224,9 +224,67 @@ def prefill_bar(processed: int, total: int | None, *, elapsed: float = 0.0) -> s
     return f"prefill ▕{pulse}▏ {format_duration(elapsed)}"
 
 
+_USAGE_BAR_WIDTH = 24
+
+
+def usage_color(pct: float) -> str:
+    """Traffic-light style for a usage percentage: <50 green, <85 yellow, else red."""
+    if pct < 50:
+        return "green"
+    if pct < 85:
+        return "yellow"
+    return "red"
+
+
+def usage_bar(pct: float) -> str:
+    """A determinate ▕█░▏ usage bar (same glyphs as :func:`prefill_bar`)."""
+    filled = min(_USAGE_BAR_WIDTH, round(_USAGE_BAR_WIDTH * pct / 100))
+    return f"▕{'█' * filled}{'░' * (_USAGE_BAR_WIDTH - filled)}▏"
+
+
+def memory_panel(status: Mapping[str, Any]) -> Panel | None:
+    """The "Memory" panel: actual usage vs budget and machine RAM, one row per stat.
+
+    Rows degrade gracefully: STACK/SYSTEM need the ``system_*_bytes`` fields, so
+    a status.json written by an older orchestrator shows only the BUDGET row;
+    a status with no budget at all (pre-M5) gets no panel. Reserved/headroom
+    (the admission-control view) stays on `sovereign plan` via budget_footer().
+    """
+    budget = status.get("budget")
+    if not budget:
+        return None
+    stack_used = sum(
+        (svc.get("metrics") or {}).get("memory_bytes", 0)
+        for svc in status.get("services", {}).values()
+    )
+    rows: list[tuple[str, int, int]] = [("BUDGET", stack_used, budget.get("usable_bytes", 0))]
+    system_total = budget.get("system_total_bytes")
+    if system_total:
+        rows.append(("STACK", stack_used, system_total))
+        system_used = budget.get("system_used_bytes")
+        if system_used is not None:
+            rows.append(("SYSTEM", system_used, system_total))
+
+    table = Table(box=box.SIMPLE_HEAD)
+    for col in ("STAT", "USAGE", "USED", "TOTAL", "PCT"):
+        table.add_column(col)
+    for stat, used, total in rows:
+        pct = 100 * used / total if total > 0 else 0.0
+        color = usage_color(pct)
+        table.add_row(
+            Text(stat, style=color),
+            Text(usage_bar(pct), style=color),
+            Text(fmt_size(used), style=color),
+            Text(fmt_size(total), style=color),
+            Text(f"{pct:.0f}%", style=color),
+        )
+    return Panel(table, title="Memory", title_align="left")
+
+
 def dashboard(status: Mapping[str, Any], history: MetricHistory | None = None) -> RenderableType:
-    """Render the §8 dashboard: a "Sovereign" panel (service table) over an
-    "Activity" panel (per-service activity/prefill lines), plus the budget footer."""
+    """Render the §8 dashboard: a "Sovereign" panel (service table), a "Memory"
+    panel (usage bars vs budget and machine RAM), and an "Activity" panel
+    (per-service activity/prefill lines)."""
     table = Table(box=box.SIMPLE_HEAD)
     table.add_column("SERVICE")
     table.add_column("ENGINE")
@@ -293,16 +351,20 @@ def dashboard(status: Mapping[str, Any], history: MetricHistory | None = None) -
             subtitle=f"v{__version__}",
             subtitle_align="right",
         ),
-        Panel(activity_body, title="Activity", title_align="left"),
     ]
-    footer = budget_footer(status.get("budget"))
-    if footer is not None:
-        parts.append(footer)
+    memory = memory_panel(status)
+    if memory is not None:
+        parts.append(memory)
+    parts.append(Panel(activity_body, title="Activity", title_align="left"))
     return Group(*parts)
 
 
 def budget_footer(budget: dict | None) -> Text | None:
-    """A one-line unified-memory summary, or None when the status predates budgets."""
+    """A one-line reserved/headroom summary, or None without a budget.
+
+    Used by `sovereign plan` (where there is no live usage to chart); the
+    dashboard itself renders actual usage via :func:`memory_panel` instead.
+    """
     if not budget:
         return None
     reserved = budget.get("reserved_bytes", 0)

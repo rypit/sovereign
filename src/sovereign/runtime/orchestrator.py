@@ -24,6 +24,8 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any, cast
 
+import psutil
+
 from sovereign.config import HarnessEntry, ServiceEntry, SovereignConfig
 from sovereign.core.base_harness import Harness
 from sovereign.core.base_manager import (
@@ -521,12 +523,15 @@ class Orchestrator:
     def status_snapshot(self) -> StatusSnapshot:
         """Live dashboard snapshot (§8) — the schema `sovereign.runtime.dashboard` renders."""
         reservations = self.budgeter.reservations()
+        system_memory = psutil.virtual_memory()
         return {
             "updated_at": datetime.now(UTC).isoformat(),
             "budget": {
                 "usable_bytes": self.budgeter.usable_bytes,
                 "reserved_bytes": self.budgeter.reserved_bytes,
                 "available_bytes": self.budgeter.available_bytes,
+                "system_total_bytes": system_memory.total,
+                "system_used_bytes": system_memory.used,
             },
             "services": {
                 name: {

@@ -26,6 +26,8 @@ from sovereign.runtime.dashboard import (
     prefill_bar,
     sparkline,
     status_cell,
+    usage_bar,
+    usage_color,
 )
 
 runner = CliRunner()
@@ -205,20 +207,22 @@ def test_dashboard_renders_activity_area() -> None:
     assert "pulling open-webui — 3/8 layers" in text
 
 
-# --- M5: budget footer, EST column, download progress ---
-def test_dashboard_renders_est_column_and_budget_footer() -> None:
+# --- M5: Memory panel, EST column, download progress ---
+def test_dashboard_renders_est_column_and_memory_panel() -> None:
     status = {
         "budget": {
             "usable_bytes": 120 * 10**9,
             "reserved_bytes": 27 * 10**9,
             "available_bytes": 93 * 10**9,
+            "system_total_bytes": 128 * 10**9,
+            "system_used_bytes": 45 * 10**9,
         },
         "services": {
             "mlx_heavy": {
                 "state": "downloading",
                 "descriptor": "mlx-community/Qwen3.6-27B-8bit",
                 "estimated_bytes": 27 * 10**9,
-                "metrics": {},
+                "metrics": {"memory_bytes": 24 * 10**9},
                 # activity is huggingface_hub's own tqdm-rendered lines, forwarded as-is
                 "activity": {
                     "lines": [
@@ -232,8 +236,19 @@ def test_dashboard_renders_est_column_and_budget_footer() -> None:
     assert "EST" in text
     assert "EST (GB)" not in text
     assert "27.0 GB" in text  # estimate column value
-    assert "93.0 GB headroom" in text  # budget footer
-    assert "120.0 GB usable" in text
+    # Memory panel: one row per stat, actual usage vs budget / machine RAM
+    assert "Memory" in text
+    for stat in ("STAT", "USAGE", "USED", "TOTAL", "PCT"):
+        assert stat in text
+    assert "BUDGET" in text
+    assert "STACK" in text
+    assert "SYSTEM" in text
+    assert "24.0 GB" in text  # stack used (sum of services' memory_bytes)
+    assert "120.0 GB" in text  # budget usable
+    assert "128.0 GB" in text  # machine total
+    assert "20%" in text  # BUDGET row: 24/120
+    assert "35%" in text  # SYSTEM row: 45/128
+    assert "headroom" not in text  # reserved/headroom line lives in `plan` only now
     # DOWNLOADING activity flows through the activity area (brackets render literally).
     assert "3.20G/17.8G" in text
 
@@ -241,8 +256,49 @@ def test_dashboard_renders_est_column_and_budget_footer() -> None:
 def test_dashboard_tolerates_status_without_budget() -> None:
     # Old status.json (pre-M5) has no "budget" / "estimated_gb" keys.
     text = _render(dashboard(_STATUS))
-    assert "headroom" not in text  # no footer without a budget
+    assert "Memory" not in text  # no Memory panel without a budget
+    assert "BUDGET" not in text
     assert "RUNNING" in text  # still renders normally
+
+
+def test_memory_panel_budget_row_only_without_system_fields() -> None:
+    # A status.json written by an older orchestrator lacks system_*_bytes:
+    # the panel degrades to just the BUDGET row.
+    status = {
+        "budget": {
+            "usable_bytes": 100 * 10**9,
+            "reserved_bytes": 0,
+            "available_bytes": 100 * 10**9,
+        },
+        "services": {"engine": {"state": "ready", "metrics": {"memory_bytes": 90 * 10**9}}},
+    }
+    text = _render(dashboard(status))
+    assert "BUDGET" in text
+    assert "90%" in text
+    assert "STACK" not in text
+    assert "SYSTEM" not in text
+
+
+def test_usage_color_thresholds() -> None:
+    assert usage_color(0) == "green"
+    assert usage_color(49.9) == "green"
+    assert usage_color(50) == "yellow"
+    assert usage_color(84.9) == "yellow"
+    assert usage_color(85) == "red"
+    assert usage_color(120) == "red"
+
+
+def test_usage_bar_fills_proportionally() -> None:
+    empty, full = usage_bar(0), usage_bar(100)
+    assert empty.startswith("▕") and empty.endswith("▏")
+    assert "█" not in empty
+    assert "░" not in full
+    assert len(usage_bar(50)) == len(empty) == len(full)
+    assert usage_bar(50).count("█") == usage_bar(50).count("░")
+
+
+def test_usage_bar_clamps_over_100_percent() -> None:
+    assert usage_bar(150) == usage_bar(100)
 
 
 def test_dashboard_activity_shown_for_ready_service() -> None:
