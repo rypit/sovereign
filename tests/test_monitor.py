@@ -241,7 +241,6 @@ def test_dashboard_renders_est_column_and_memory_panel() -> None:
     for stat in ("STAT", "USAGE", "USED", "TOTAL", "PCT"):
         assert stat in text
     assert "BUDGET" in text
-    assert "STACK" in text
     assert "SYSTEM" in text
     assert "24.0 GB" in text  # stack used (sum of services' memory_bytes)
     assert "120.0 GB" in text  # budget usable
@@ -275,7 +274,6 @@ def test_memory_panel_budget_row_only_without_system_fields() -> None:
     text = _render(dashboard(status))
     assert "BUDGET" in text
     assert "90%" in text
-    assert "STACK" not in text
     assert "SYSTEM" not in text
 
 

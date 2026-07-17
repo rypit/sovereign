@@ -245,8 +245,8 @@ def usage_bar(pct: float) -> str:
 def memory_panel(status: Mapping[str, Any]) -> Panel | None:
     """The "Memory" panel: actual usage vs budget and machine RAM, one row per stat.
 
-    Rows degrade gracefully: STACK/SYSTEM need the ``system_*_bytes`` fields, so
-    a status.json written by an older orchestrator shows only the BUDGET row;
+    Rows degrade gracefully: SYSTEM needs the ``system_*_bytes`` fields, so a
+    status.json written by an older orchestrator shows only the BUDGET row;
     a status with no budget at all (pre-M5) gets no panel. Reserved/headroom
     (the admission-control view) stays on `sovereign plan` via budget_footer().
     """
@@ -259,11 +259,9 @@ def memory_panel(status: Mapping[str, Any]) -> Panel | None:
     )
     rows: list[tuple[str, int, int]] = [("BUDGET", stack_used, budget.get("usable_bytes", 0))]
     system_total = budget.get("system_total_bytes")
-    if system_total:
-        rows.append(("STACK", stack_used, system_total))
-        system_used = budget.get("system_used_bytes")
-        if system_used is not None:
-            rows.append(("SYSTEM", system_used, system_total))
+    system_used = budget.get("system_used_bytes")
+    if system_total and system_used is not None:
+        rows.append(("SYSTEM", system_used, system_total))
 
     table = Table(box=box.SIMPLE_HEAD)
     for col in ("STAT", "USAGE", "USED", "TOTAL", "PCT"):
