@@ -2,9 +2,10 @@
 
 Pure presentation — consumes the :class:`~sovereign.runtime.status.StatusSnapshot`
 shape that ``Orchestrator.status_snapshot()`` produces (and persists as
-``status.json``), and renders the service table, sparklines, activity lines, and
-budget footer. No orchestration logic lives here; no rendering logic lives in the
-orchestrator.
+``status.json``), and renders two stacked panels — "Sovereign" (the service
+table, with sparklines) and "Activity" (per-service activity lines) — plus the
+budget footer. No orchestration logic lives here; no rendering logic lives in
+the orchestrator.
 
 Two cadences are deliberately decoupled (§5/§8):
 
@@ -27,8 +28,10 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from rich import box
 from rich.console import Console, Group, RenderableType
 from rich.live import Live
+from rich.panel import Panel
 from rich.spinner import Spinner
 from rich.table import Table
 from rich.text import Text
@@ -222,8 +225,9 @@ def prefill_bar(processed: int, total: int | None, *, elapsed: float = 0.0) -> s
 
 
 def dashboard(status: Mapping[str, Any], history: MetricHistory | None = None) -> RenderableType:
-    """Render the §8 dashboard table, plus a live "Provisioning" activity area."""
-    table = Table(title=f"Sovereign Control Plane v{__version__}", title_justify="left")
+    """Render the §8 dashboard: a "Sovereign" panel (service table) over an
+    "Activity" panel (per-service activity/prefill lines), plus the budget footer."""
+    table = Table(box=box.SIMPLE_HEAD)
     table.add_column("SERVICE")
     table.add_column("ENGINE")
     table.add_column("DESCRIPTOR")
@@ -278,12 +282,20 @@ def dashboard(status: Mapping[str, Any], history: MetricHistory | None = None) -
             activity_lines.append(f"  {name}")
             activity_lines.extend(f"    {ln}" for ln in all_lines)
 
+    activity_body = Text(
+        "\n".join(activity_lines) if activity_lines else "no activity", style="dim"
+    )
+    parts: list[RenderableType] = [
+        Panel(
+            table,
+            title="Sovereign",
+            title_align="left",
+            subtitle=f"v{__version__}",
+            subtitle_align="right",
+        ),
+        Panel(activity_body, title="Activity", title_align="left"),
+    ]
     footer = budget_footer(status.get("budget"))
-    if not activity_lines and footer is None:
-        return table
-    parts: list[RenderableType] = [table]
-    if activity_lines:
-        parts += [Text("Activity:", style="bold"), Text("\n".join(activity_lines), style="dim")]
     if footer is not None:
         parts.append(footer)
     return Group(*parts)

@@ -89,7 +89,9 @@ def _render(table) -> str:
 
 def test_dashboard_matches_mockup_shape() -> None:
     text = _render(dashboard(_STATUS))
-    assert f"Sovereign Control Plane v{__version__}" in text
+    assert "Sovereign" in text  # top panel title
+    assert f"v{__version__}" in text  # version in the panel subtitle
+    assert "━" not in text  # borderless table: no heavy header rule / edges
     for header in (
         "SERVICE", "ENGINE", "DESCRIPTOR", "STATUS", "DURATION", "MEM", "ENDPOINT",
     ):
@@ -199,7 +201,7 @@ def test_dashboard_renders_activity_area() -> None:
         }
     }
     text = _render(dashboard(status))
-    assert "Activity:" in text
+    assert "Activity" in text  # panel title
     assert "pulling open-webui — 3/8 layers" in text
 
 
@@ -257,7 +259,7 @@ def test_dashboard_activity_shown_for_ready_service() -> None:
         }
     }
     text = _render(dashboard(status))
-    assert "Activity:" in text
+    assert "Activity" in text  # panel title
     assert "Fetching 8 files:" in text
 
 
@@ -280,25 +282,34 @@ def test_dashboard_renders_multiline_activity_indented() -> None:
         }
     }
     text = _render(dashboard(status))
-    lines = [line for line in text.splitlines() if line.strip()]
+    # Activity lines render inside the Activity panel: strip the panel border
+    # ("│ " + trailing " │") to inspect the indentation of the content itself.
+    lines = [
+        line.removeprefix("│ ").rstrip(" │")
+        for line in text.splitlines()
+        if line.startswith("│")
+    ]
     header = next(line for line in lines if line.strip() == "engine")
     fetching = next(line for line in lines if "Fetching 8 files" in line)
     downloading = next(line for line in lines if "Downloading bytes" in line)
-    assert header.startswith("  ")  # service name header, indented under "Activity:"
+    assert header.startswith("  ")  # service name header, indented in the Activity panel
     assert "[DOWNLOADING]" not in fetching  # state not repeated in the activity block
     assert fetching.startswith("    ")  # each bar line indents under the header
     assert downloading.startswith("    ")
 
 
-def test_dashboard_no_activity_area_when_idle() -> None:
-    # ready service with no activity should not show an Activity area
+def test_dashboard_idle_keeps_activity_panel_with_placeholder() -> None:
+    # Both panels always render (stable layout); an idle Activity panel shows
+    # a dim placeholder instead of disappearing.
     status = {
         "services": {
             "engine": {"state": "ready", "metrics": {}, "activity": {"lines": []}}
         }
     }
     text = _render(dashboard(status))
-    assert "Provisioning:" not in text
+    assert "Sovereign" in text
+    assert "Activity" in text
+    assert "no activity" in text
 
 
 # --- TOK/S column + prefill bars (§5/§8) ---
