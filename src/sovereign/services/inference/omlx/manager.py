@@ -44,6 +44,28 @@ logger = logging.getLogger("sovereign")
 #: pattern).
 _OMLX_BINARY = "omlx"
 
+#: Runtime headroom (decimal GB) added to the *derived* memory guard: the
+#: guard is a ceiling on omlx's whole process, so it must cover the Python
+#: interpreter + MLX runtime + activation buffers that the weights/hot-cache
+#: admission estimate deliberately doesn't model (no engine counts runtime
+#: overhead in estimated_memory_bytes()). Without it, a tiny model yields an
+#: absurd ceiling — a 0.27 GB model produced `ceiling=0.3GB` on a >1 GB
+#: process. An explicit ``memory_guard_gb`` override bypasses the headroom.
+_GUARD_HEADROOM_GB = 2.0
+
+
+def _flatten_model_name(name: str) -> str:
+    """Flatten a model name to omlx's directory-derived id convention.
+
+    omlx names models after their ``--model-dir`` subdirectory, joining
+    nested path segments with ``--`` (e.g. ``mlx-community--Qwen3-8B-4bit``)
+    — and a nested ``org/name`` layout gets double-registered (one physical
+    model discovered under both its leaf and qualified names). Flattening to
+    a single-level ``org--name`` directory sidesteps both: omlx discovers
+    exactly one model whose id equals this string verbatim.
+    """
+    return name.strip("/").replace("/", "--")
+
 
 @register_service("omlx")
 class OmlxManager(NativeEngineManager):
@@ -96,20 +118,20 @@ class OmlxManager(NativeEngineManager):
     def api_model_name(self) -> str:
         """The string clients send as ``"model"``.
 
-        omlx derives model names from ``--model-dir`` subdirectory layout, so
-        the name must be a usable relative path: a repo id (``org/name``,
-        two-level layout) works as-is; a local model directory contributes
-        only its basename. ``served_model_name`` overrides either — the
-        adapter names the symlink from this same value, so what omlx serves
-        and what :meth:`endpoint` advertises always agree.
+        omlx derives model ids from the ``--model-dir`` subdirectory name, so
+        every candidate (``served_model_name``, a repo id, a local dir's
+        basename) is flattened to omlx's ``org--name`` convention via
+        :func:`_flatten_model_name`. The adapter names the symlink from this
+        same value, so the omlx-visible id, what :meth:`endpoint` advertises,
+        and what clients must send always agree.
         """
         if self.config.served_model_name:
-            return self.config.served_model_name
+            return _flatten_model_name(self.config.served_model_name)
         ref = parse_model_ref(self.config.model)
         if ref.is_local:
             assert ref.local_path is not None
-            return ref.local_path.name
-        return ref.repo_id or self.config.model
+            return _flatten_model_name(ref.local_path.name)
+        return _flatten_model_name(ref.repo_id or self.config.model)
 
     # --- engine_kwargs mapping (consumed by workers.omlx_adapter) ---
     def engine_kwargs(self) -> dict[str, Any]:
@@ -118,8 +140,10 @@ class OmlxManager(NativeEngineManager):
 
         ``model_dir``/``model_name`` drive the adapter's single-model symlink
         layout; the memory guard defaults to Sovereign's own admission
-        estimate (rounded GB) so omlx's internal enforcer operates within the
-        slice admission control reserved, not the whole machine.
+        estimate plus :data:`_GUARD_HEADROOM_GB` of runtime headroom, so
+        omlx's internal enforcer operates within the slice admission control
+        reserved (plus the process overhead admission never models), not the
+        whole machine.
         """
         state_root = self._worker_state_dir() / "omlx" / self.name
         kwargs: dict[str, Any] = {
@@ -133,7 +157,7 @@ class OmlxManager(NativeEngineManager):
         if guard_gb is None:
             estimate = self.estimated_memory_bytes()
             if estimate > 0:
-                guard_gb = round(estimate / GB, 2)
+                guard_gb = round(estimate / GB + _GUARD_HEADROOM_GB, 2)
         if guard_gb:
             kwargs["memory_guard_gb"] = guard_gb
 

@@ -228,7 +228,9 @@ def _cfg(tmp_path, **overrides: Any) -> WorkerConfig:
         model_path=str(snapshot),
         engine_kwargs={
             "model_dir": str(tmp_path / "models"),
-            "model_name": "org/m",
+            # Flat `org--name` — what OmlxManager.api_model_name() always
+            # passes (omlx's directory-derived id convention).
+            "model_name": "org--m",
         },
     )
     for key, value in overrides.items():
@@ -254,7 +256,7 @@ def test_run_prepares_model_dir_waits_for_health_then_emits_serving(tmp_path, mo
     argv = captured["argv"]
     assert argv[:2] == ["omlx", "serve"]
     assert argv[argv.index("--model-dir") + 1] == str(tmp_path / "models")
-    assert (tmp_path / "models" / "org" / "m").is_symlink()
+    assert (tmp_path / "models" / "org--m").is_symlink()
     state_changes = [p for e, p in telemetry.events if e == EventType.STATE_CHANGE]
     assert {"state": "serving"} in state_changes
     assert controller.shutdown_callback is not None

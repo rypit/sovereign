@@ -131,7 +131,7 @@ def test_engine_kwargs_always_carries_model_dir_and_name(tmp_path) -> None:
     )
     kwargs = m.engine_kwargs()
     assert kwargs["model_dir"] == str(tmp_path / "omlx" / "omlx_coder_v1" / "models")
-    assert kwargs["model_name"] == "mlx-community/some-model-4bit"
+    assert kwargs["model_name"] == "mlx-community--some-model-4bit"
 
 
 def test_engine_kwargs_full_mapping(tmp_path) -> None:
@@ -182,12 +182,15 @@ def test_engine_kwargs_config_override_wins_last(tmp_path) -> None:
 
 
 # --- memory guard pinned from Sovereign's admission estimate ---
-def test_memory_guard_derived_from_estimate(tmp_path, monkeypatch) -> None:
+def test_memory_guard_derived_from_estimate_plus_headroom(tmp_path, monkeypatch) -> None:
     info = _repo_info("org/m", [("model.safetensors", 20 * 10**9)], tags=("mlx",))
     monkeypatch.setattr(models_mod, "fetch_repo_info", lambda repo_id: info)
     m = _prepared({"model": "org/m", "log_dir": str(tmp_path / "logs"), "hot_cache_gb": 4})
-    # weights (20 GB) + hot tier (4 GB) -> the guard omlx's enforcer gets.
-    assert m.engine_kwargs()["memory_guard_gb"] == 24.0
+    # weights (20 GB) + hot tier (4 GB) + 2 GB runtime headroom -> the guard
+    # omlx's enforcer gets. Headroom covers the interpreter/MLX runtime the
+    # admission estimate deliberately doesn't model (a weights-only guard
+    # produced a fatal 0.3 GB ceiling on a >1 GB process in the smoke run).
+    assert m.engine_kwargs()["memory_guard_gb"] == 26.0
 
 
 def test_memory_guard_explicit_override_wins(tmp_path, monkeypatch) -> None:
@@ -226,11 +229,17 @@ def test_estimated_memory_uses_declared_override() -> None:
     assert OmlxManager(entry).estimated_memory_bytes() == 40 * 10**9
 
 
-# --- api_model_name (must match the adapter's symlink layout) ---
-def test_api_model_name_repo_id_passes_through() -> None:
+# --- api_model_name (must match the adapter's symlink layout AND omlx's
+# --- directory-derived id convention: nested segments join with `--`) ---
+def test_api_model_name_repo_id_flattened_to_omlx_convention() -> None:
     assert _manager({"model": "mlx-community/m-4bit"}).api_model_name() == (
-        "mlx-community/m-4bit"
+        "mlx-community--m-4bit"
     )
+
+
+def test_api_model_name_served_name_with_slash_flattened() -> None:
+    m = _manager({"model": "org/m", "served_model_name": "team/coder"})
+    assert m.api_model_name() == "team--coder"
 
 
 def test_api_model_name_local_path_uses_basename(tmp_path) -> None:
@@ -262,7 +271,7 @@ def test_get_start_args_dumps_worker_config(tmp_path) -> None:
     assert cfg.port == 18000
     assert cfg.health_path == "/v1/models"
     assert cfg.engine_kwargs["max_concurrent_requests"] == 2
-    assert cfg.engine_kwargs["model_name"] == "mlx-community/some-model-4bit"
+    assert cfg.engine_kwargs["model_name"] == "mlx-community--some-model-4bit"
 
 
 def test_api_key_never_in_config_json(tmp_path) -> None:
