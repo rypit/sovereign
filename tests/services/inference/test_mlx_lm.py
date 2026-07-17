@@ -447,6 +447,10 @@ def test_get_metrics_running(monkeypatch) -> None:
             return FakeMem()
 
     monkeypatch.setattr(native_mod.psutil, "Process", FakePsProc)
+    # Stub the footprint probe: on a real macOS runner it would query the
+    # REAL process at pid 4242 (if one happens to exist) and its footprint
+    # would win over the faked rss — a runner-pid-layout flake.
+    monkeypatch.setattr(native_mod, "macos_phys_footprint", lambda pid: None)
     assert m.get_metrics() == {
         "memory_bytes": 6000 * 1024**2,
         "status": "running",
