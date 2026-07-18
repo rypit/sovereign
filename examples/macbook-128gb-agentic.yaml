@@ -297,6 +297,22 @@ services:
 # any API key. The harnesses below are the scriptable equivalents
 # (`sovereign harness invoke ...`) — Cline CLI on the heavy model,
 # mini-swe-agent on the fast lane for cheap batch runs.
+#
+# Giving the model SEARCH: the engines are bare completion servers — tools run
+# client-side, so SearXNG must be exposed per client (the env wiring above
+# only covers Open WebUI chats). SearXNG's JSON API is already enabled
+# (`formats: [html, json]` in its settings.yml — that's what it's for):
+#
+#   Cline (VS Code + the cline harness): register a SearXNG MCP server, e.g.
+#     { "mcpServers": { "searxng": {
+#         "command": "npx", "args": ["-y", "mcp-searxng"],
+#         "env": { "SEARXNG_URL": "http://localhost:8080" } } } }
+#   in Cline's MCP settings. For the harness below, the same JSON goes in
+#   ~/.sovereign/harnesses/cline/settings/cline_mcp_settings.json (the
+#   isolated CLINE_DIR sovereign materializes; written once, it persists).
+#
+#   mini_swe_agent: nothing to install — it drives bash, so tell it in the
+#   task prompt it may `curl "http://localhost:8080/search?q=...&format=json"`.
 # -----------------------------------------------------------------------------
 harnesses:
   - name: cline
