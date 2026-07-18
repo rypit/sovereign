@@ -28,14 +28,33 @@
 # ~80 GB of weights total, one time.
 #
 # Memory plan (decimal GB, admission-controlled — Sovereign refuses to boot a
-# service that would blow the budget, and never kills a running one):
+# service that would blow the budget, and never kills a running one). The
+# declared memory_gb figures below are what admission uses, so they must carry
+# the KV cache explicitly — mlx_lm/omlx estimates only count weights + caches:
 #
-#   coder_heavy   76   (~60% of 128, same split the blog uses for its brain)
-#   coder_fast    24
+#   coder_heavy   81 = ~60 weights + 6 KV hot tier + ~2 runtime + ~13 active KV
+#                      GLM-4.5-Air KV (46 layers x 8 KV heads x 128 dim, fp16)
+#                      ~= 0.19 GB per 1K tokens -> 13 GB ~= 70K tokens in
+#                      flight across the 3 request slots. omlx enforces this
+#                      in-process: its memory guard is pinned to the declared
+#                      estimate (+2 GB headroom), so overload degrades to
+#                      eviction/queueing instead of eating the machine.
+#   coder_fast    25 = ~17.5 weights + 4 prompt-cache cap + ~3.5 active KV
+#                      Qwen3-Coder KV (48 layers x 4 KV heads x 128 dim, fp16)
+#                      ~= 0.10 GB per 1K tokens -> ~35K tokens in flight.
+#                      mlx_lm has NO runtime enforcement — keep fast-lane
+#                      contexts modest; the heavy engine is the long-context
+#                      lane.
 #   docker tools   9   (webui 2, qdrant 2, jupyter 2, browserless 2, searxng 1)
 #   safety margin 12   (macOS + your apps)
 #   ------------------
-#                121 of 128
+#                127 of 128
+#
+# REQUIRED once per boot: macOS caps GPU-wired memory at ~75% of RAM (~96 GB
+# on a 128 GB machine) — below the ~106 GB these two engines wire together.
+# Raise it before `sovereign up` (resets on reboot):
+#
+#   sudo sysctl iogpu.wired_limit_mb=117760      # 115 GiB ceiling
 
 version: "1.1"
 
@@ -56,7 +75,8 @@ services:
   - name: coder_heavy
     base_type: omlx
     priority: critical
-    memory_gb: 76                  # weights ~60 + KV + hot cache, capped
+    memory_gb: 81                  # weights ~60 + hot cache 6 + ~13 active KV
+                                   # (~70K tokens in flight; see header math)
     health_check:
       type: http
       endpoint: /v1/models         # omlx's health surface
@@ -66,7 +86,8 @@ services:
       model: "mlx-community/GLM-4.5-Air-4bit"
       served_model_name: "glm-4.5-air"    # what clients send as "model"
       host: 127.0.0.1
-      max_concurrent_requests: 4   # agent + UI + a subagent or two
+      max_concurrent_requests: 3   # 3 slots x ~24K tokens fits the KV budget;
+                                   # agent turns are mostly sequential anyway
       hot_cache_gb: 6              # in-RAM KV hot tier (counted in memory_gb)
       paged_ssd_cache_max_gb: 200  # SSD cold tier — disk, not unified memory
     dependencies: []
@@ -79,7 +100,7 @@ services:
   - name: coder_fast
     base_type: mlx_lm
     priority: high
-    memory_gb: 24                  # ~17.5 GB weights + KV headroom
+    memory_gb: 25                  # ~17.5 weights + 4 prompt cache + ~3.5 KV
     health_check:
       type: http
       endpoint: /health
@@ -91,6 +112,9 @@ services:
       host: 127.0.0.1
       temp: 0.7                    # Qwen3-Coder recommended sampling
       top_p: 0.8
+      # mlx_lm can't enforce a memory ceiling, so at least bound the prompt
+      # cache — without this it grows without limit as chats accumulate:
+      prompt_cache_bytes: 4000000000
     dependencies: []
 
   # ---------------------------------------------------------------------------
