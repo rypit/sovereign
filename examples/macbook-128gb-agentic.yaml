@@ -32,19 +32,36 @@
 # declared memory_gb figures below are what admission uses, so they must carry
 # the KV cache explicitly — mlx_lm/omlx estimates only count weights + caches:
 #
-#   coder_heavy   81 = ~60 weights + 6 KV hot tier + ~2 runtime + ~13 active KV
+#   coder_heavy   81 = 60.1 weights (verified against the HF repo) + 6 KV hot
+#                      tier + ~2 runtime + ~13 active KV.
 #                      GLM-4.5-Air KV (46 layers x 8 KV heads x 128 dim, fp16)
-#                      ~= 0.19 GB per 1K tokens -> 13 GB ~= 70K tokens in
+#                      ~= 0.19 GB per 1K tokens -> 13 GB ~= 69K tokens in
 #                      flight across the 3 request slots. omlx enforces this
 #                      in-process: its memory guard is pinned to the declared
 #                      estimate (+2 GB headroom), so overload degrades to
 #                      eviction/queueing instead of eating the machine.
-#   coder_fast    25 = ~17.5 weights + 4 prompt-cache cap + ~3.5 active KV
-#                      Qwen3-Coder KV (48 layers x 4 KV heads x 128 dim, fp16)
-#                      ~= 0.10 GB per 1K tokens -> ~35K tokens in flight.
-#                      mlx_lm has NO runtime enforcement — keep fast-lane
-#                      contexts modest; the heavy engine is the long-context
-#                      lane.
+#   coder_fast    25 = 17.2 weights (verified) + 4 prompt-cache cap + ~3.5
+#                      active KV. Qwen3-Coder KV (48 layers x 4 KV heads x
+#                      128 dim, fp16) ~= 0.10 GB per 1K tokens -> ~35K tokens
+#                      in flight. mlx_lm has NO runtime enforcement — keep
+#                      fast-lane contexts modest; the heavy engine is the
+#                      long-context lane.
+#
+# Context sizing — there is no llama.cpp-style `-c` on the MLX engines: KV is
+# allocated lazily as tokens arrive, mlx_lm.server (0.31.x) has no context or
+# KV-size flag, and omlx exposes none through Sovereign. So the window is set
+# by budget + clients, not by the server:
+#
+#   heavy lane   practical ceiling ~64K tokens single-stream (12 GB KV), or
+#                ~23K per slot with all 3 slots busy. The model's native 131K
+#                would need 24.7 GB of KV — past the guard; requests that big
+#                get evicted/queued, so cap clients at 65536.
+#   fast lane    cap completions server-side (max_tokens below); cap prompts
+#                client-side — Qwen's native 262K window would be ~26 GB of
+#                KV with nothing to stop it.
+#   Cline        in the VS Code provider settings, set context window to
+#                65536 (heavy) so Cline truncates before the server does; the
+#                cline harness below caps turns instead (max_turns).
 #   docker tools   9   (webui 2, qdrant 2, jupyter 2, browserless 2, searxng 1)
 #   safety margin 12   (macOS + your apps)
 #   ------------------
@@ -112,6 +129,9 @@ services:
       host: 127.0.0.1
       temp: 0.7                    # Qwen3-Coder recommended sampling
       top_p: 0.8
+      # Default completion cap (--max-tokens; requests can still ask lower).
+      # Prompt-side context has no server flag — cap it in clients (header).
+      max_tokens: 8192
       # mlx_lm can't enforce a memory ceiling, so at least bound the prompt
       # cache — without this it grows without limit as chats accumulate:
       prompt_cache_bytes: 4000000000
@@ -269,6 +289,9 @@ harnesses:
       base_url: "{{ coder_heavy.endpoint }}/v1"
       model: "{{ coder_heavy.model }}"
       timeout_seconds: 1800
+      # Turn cap doubles as a context cap — Cline CLI has no context-window
+      # knob, and each turn compounds the prompt (KV budget math in header):
+      max_turns: 25
 
   - name: swe_mini
     base_type: mini_swe_agent
