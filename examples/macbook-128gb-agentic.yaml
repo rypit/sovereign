@@ -110,6 +110,23 @@ services:
     dependencies: []
 
   # ---------------------------------------------------------------------------
+  # ALTERNATIVE BRAIN — Qwen3-Coder-Next (verified on HF, May 2026: official
+  # Qwen coder on the hybrid linear-attention Qwen3-Next architecture; 79.7B
+  # params, ~3B active, Apache-2.0, native 262K context). Only every 4th layer
+  # keeps full attention (2 KV heads x 256 dim), so KV is ~0.025 GB per 1K
+  # tokens — 8x cheaper than GLM-4.5-Air — and decode is several times faster
+  # (3B active vs 12B). Newer than this file's benchmark knowledge, so it
+  # ships commented; to try it, swap these into coder_heavy:
+  #
+  #   model: "mlx-community/Qwen3-Coder-Next-mxfp4"   # 42.4 GB (verified)
+  #   served_model_name: "qwen3-coder-next"
+  #   ... and lower memory_gb to 56 — even 128K contexts then fit the KV
+  #   budget. The mxfp8 variant (82 GB, near-lossless) fits only if you drop
+  #   coder_fast (memory_gb ~95). mlx-lm 0.31.x supports qwen3_next; if the
+  #   installed omlx version doesn't, fall back to `base_type: mlx_lm`.
+  # ---------------------------------------------------------------------------
+
+  # ---------------------------------------------------------------------------
   # THE BRAIN, part 2 — the fast lane. Qwen3-Coder-30B (MoE, only 3B active)
   # decodes several times faster than the heavy model: quick edits, subagents,
   # and Open WebUI's task work (titles, autocomplete, search queries).
