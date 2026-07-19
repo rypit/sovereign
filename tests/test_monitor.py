@@ -17,15 +17,16 @@ from sovereign.cli import app
 from sovereign.cli import stack as main
 from sovereign.core.state import write_json
 from sovereign.runtime.dashboard import (
-    MetricHistory,
+    PrefillTracker,
     dashboard,
     dashboard_task_factory,
     duration_cell,
     format_duration,
     load_dashboard_status,
+    needs_animation,
     prefill_bar,
-    sparkline,
     status_cell,
+    suppress_ctrl_echo,
     usage_bar,
     usage_color,
 )
@@ -111,58 +112,22 @@ def test_dashboard_matches_mockup_shape() -> None:
     assert "-" in text
 
 
-# --- sparklines ---
-def test_sparkline_empty_for_fewer_than_two_points() -> None:
-    assert sparkline([]) == ""
-    assert sparkline([1.0]) == ""
-
-
-def test_sparkline_flat_when_all_equal() -> None:
-    assert sparkline([5.0, 5.0, 5.0]) == "▅▅▅"
-
-
-def test_sparkline_scales_min_to_max() -> None:
-    spark = sparkline([0.0, 100.0])
-    assert spark[0] == "▁"
-    assert spark[-1] == "█"
-
-
-def test_sparkline_capped_to_render_width() -> None:
-    values = list(range(30))
-    result = sparkline(values)
-    assert len(result) == 12
-    assert result == sparkline(values[-12:])
-
-
-# --- MetricHistory ---
-def test_metric_history_prunes_old_samples_by_age() -> None:
-    history = MetricHistory(window_seconds=0.05)
-    history.record({"services": {"a": {"metrics": {"memory_bytes": 1.0}}}})
-    time.sleep(0.1)
-    history.record({"services": {"a": {"metrics": {"memory_bytes": 2.0}}}})
-    assert history.values("a", "memory_bytes") == [2.0]
-
-
-def test_metric_history_keeps_recent_samples() -> None:
-    history = MetricHistory(window_seconds=5.0)
-    history.record({"services": {"a": {"metrics": {"memory_bytes": 1.0}}}})
-    history.record({"services": {"a": {"metrics": {"memory_bytes": 2.0}}}})
-    assert history.values("a", "memory_bytes") == [1.0, 2.0]
-
-
-def test_metric_history_prunes_services_no_longer_present() -> None:
-    history = MetricHistory()
-    history.record({"services": {"a": {"metrics": {"memory_bytes": 1.0}}}})
-    history.record({"services": {"b": {"metrics": {"memory_bytes": 2.0}}}})
-    assert history.values("a", "memory_bytes") == []
-    assert history.values("b", "memory_bytes") == [2.0]
-
-
-def test_metric_history_instances_share_no_state() -> None:
-    a = MetricHistory()
-    b = MetricHistory()
-    a.record({"services": {"x": {"metrics": {"memory_bytes": 1.0}}}})
-    assert b.values("x", "memory_bytes") == []
+# --- PrefillTracker ---
+def test_prefill_tracker_instances_share_no_state() -> None:
+    status = {
+        "services": {
+            "x": {
+                "metrics": {},
+                "telemetry": {"prefill": [{"request_id": "r1", "processed": 1, "total": None}]},
+            }
+        }
+    }
+    a = PrefillTracker()
+    b = PrefillTracker()
+    a.record(status)
+    time.sleep(0.02)
+    b.record(status)
+    assert b.prefill_elapsed("x", "r1") < a.prefill_elapsed("x", "r1")
 
 
 # --- _status_cell ---
@@ -177,19 +142,51 @@ def test_status_cell_plain_markup_for_steady_states() -> None:
     assert status_cell("failed") == "[red]FAILED[/red]"
 
 
-# --- backward-compat regression: no sparkline artifacts without history ---
-def test_dashboard_without_history_has_no_sparkline_artifacts() -> None:
-    text = _render(dashboard(_STATUS))
-    assert "RUNNING" in text
+# --- needs_animation: redraw between snapshots only while a frame animates ---
+def test_needs_animation_true_for_spinner_states() -> None:
+    for state in ("provisioning", "downloading", "starting"):
+        assert needs_animation({"services": {"a": {"state": state, "metrics": {}}}})
+
+
+def test_needs_animation_true_for_inflight_prefill() -> None:
+    status = {
+        "services": {
+            "a": {
+                "state": "ready",
+                "metrics": {},
+                "telemetry": {"prefill": [{"request_id": "r1", "processed": 1, "total": None}]},
+            }
+        }
+    }
+    assert needs_animation(status)
+
+
+def test_needs_animation_false_for_steady_frame() -> None:
+    # _STATUS has a "starting" service, so build a fully steady status here.
+    steady = {
+        "services": {
+            "a": {"state": "ready", "metrics": {}, "telemetry": {"prefill": []}},
+            "b": {"state": "failed", "metrics": {}},
+        }
+    }
+    assert not needs_animation(steady)
+    assert not needs_animation({"services": {}})
+
+
+# --- suppress_ctrl_echo: safe no-op without a tty (the tty path needs a pty) ---
+def test_suppress_ctrl_echo_noop_without_tty(monkeypatch) -> None:
+    monkeypatch.setattr("sys.stdin", io.StringIO())  # no fileno -> ValueError path
+    with suppress_ctrl_echo():
+        pass
+
+
+# --- sparklines removed: metric cells are plain values ---
+def test_dashboard_has_no_sparkline_artifacts() -> None:
+    prefills = PrefillTracker()
+    prefills.record(_STATUS)
+    text = _render(dashboard(_STATUS, prefills=prefills))
     assert "14.5 GB" in text
-    assert "STARTING" in text
-    assert "http://127.0.0.1:11435" in text
-    assert not any(ch in text for ch in "▁▂▃▄▅▆▇█")
-
-
-def test_dashboard_with_empty_history_has_no_sparkline_artifacts() -> None:
-    text = _render(dashboard(_STATUS, history=MetricHistory()))
-    assert not any(ch in text for ch in "▁▂▃▄▅▆▇█")
+    assert not any(ch in text for ch in "▁▂▃▄▅▆▇")
 
 
 def test_dashboard_renders_activity_area() -> None:
@@ -428,21 +425,14 @@ def test_dashboard_renders_prefill_bar_pulse() -> None:
             }
         }
     }
-    history = MetricHistory()
-    history.record(status)
-    text = _render(dashboard(status, history=history))
+    prefills = PrefillTracker()
+    prefills.record(status)
+    text = _render(dashboard(status, prefills=prefills))
     assert "prefill" in text
 
 
-def test_metric_history_tracks_tokens_per_second() -> None:
-    history = MetricHistory()
-    history.record({"services": {"a": {"metrics": {"tokens_per_second": 10.0}}}})
-    history.record({"services": {"a": {"metrics": {"tokens_per_second": 20.0}}}})
-    assert history.values("a", "tokens_per_second") == [10.0, 20.0]
-
-
-def test_metric_history_prefill_elapsed_grows_across_records() -> None:
-    history = MetricHistory()
+def test_prefill_tracker_elapsed_grows_across_records() -> None:
+    history = PrefillTracker()
     status = {
         "services": {
             "a": {
@@ -459,8 +449,8 @@ def test_metric_history_prefill_elapsed_grows_across_records() -> None:
     assert second >= first
 
 
-def test_metric_history_prefill_elapsed_resets_when_request_disappears() -> None:
-    history = MetricHistory()
+def test_prefill_tracker_elapsed_resets_when_request_disappears() -> None:
+    history = PrefillTracker()
     status_with = {
         "services": {
             "a": {
@@ -560,10 +550,17 @@ def _stub_serve(monkeypatch) -> dict:
     captured: dict = {}
 
     async def fake_serve(
-        config, *, variant_file=None, state_dir=".sovereign", extra_tasks=(), on_transition=None
+        config,
+        *,
+        variant_file=None,
+        state_dir=".sovereign",
+        extra_tasks=(),
+        on_transition=None,
+        on_stop=None,
     ):
         captured["extra_tasks"] = list(extra_tasks)
         captured["on_transition"] = on_transition
+        captured["on_stop"] = on_stop
         return None
 
     monkeypatch.setattr(main, "serve_forever", fake_serve)
@@ -581,6 +578,7 @@ def test_up_shows_dashboard_when_tty(monkeypatch, tmp_path) -> None:
     assert result.exit_code == 0
     assert len(captured["extra_tasks"]) == 1  # dashboard task attached
     assert captured["on_transition"] is None  # dashboard shows transitions
+    assert captured["on_stop"] is not None  # Ctrl+C prints "Stopping stack…"
 
 
 def test_up_headless_when_not_tty(monkeypatch, tmp_path) -> None:

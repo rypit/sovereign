@@ -935,3 +935,39 @@ def test_telemetry_hub_lifecycle_via_serve_forever(socket_path) -> None:
     )
     assert socket_seen.is_set()
     assert not (state_dir / "telemetry.sock").exists()
+
+
+def test_sigint_fires_on_stop_once_after_extra_tasks_exit(socket_path) -> None:
+    """A real first SIGINT invokes the on_stop hook (the CLI's "Stopping
+    stack…" notice) exactly once — and only after the extra tasks (i.e. the
+    dashboard's Live) have wound down, so the notice prints below the panels."""
+    import os
+    import signal
+
+    state_dir = socket_path.parent
+    log: list = []
+    cfg = _config([{"name": "a", "base_type": "x"}])
+    order: list[str] = []
+
+    async def press_ctrl_c(orch: Orchestrator, stop: asyncio.Event) -> None:
+        os.kill(os.getpid(), signal.SIGINT)
+        await stop.wait()
+        order.append("extra-task-exited")
+
+    from sovereign.runtime.orchestrator import serve_forever
+
+    try:
+        asyncio.run(
+            serve_forever(
+                cfg,
+                state_dir=state_dir,
+                manager_factory=lambda entry: FakeManager(entry, log),
+                extra_tasks=[press_ctrl_c],
+                on_stop=lambda: order.append("stopping"),
+            )
+        )
+    finally:
+        # serve_forever's loop-level handler dies with the loop; restore the
+        # default so a later Ctrl+C still interrupts the test run.
+        signal.signal(signal.SIGINT, signal.default_int_handler)
+    assert order == ["extra-task-exited", "stopping"]

@@ -155,7 +155,7 @@ def run(cfg: WorkerConfig, telemetry: TelemetryClient, controller: Any) -> None:
 
     try:
         original_generate = mlx_server.ResponseGenerator.generate
-        mlx_server.ResponseGenerator.generate = wrap_response_generate(
+        mlx_server.ResponseGenerator.generate = wrap_response_generate(  # type: ignore[method-assign]
             original_generate, telemetry
         )
     except Exception:  # noqa: BLE001 - fail soft, serve without stats
