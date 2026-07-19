@@ -78,6 +78,15 @@ sovereign up   -f examples/mlx.yaml   # DOWNLOADING (byte progress) -> STARTING 
 sovereign models list                 # what's in the shared HF cache
 ```
 
+Not just LLMs — `examples/comfyui.yaml` boots ComfyUI serving an SDXL
+checkpoint as a supervised image-generation engine (`base_type: comfyui` is
+explicit; diffusion checkpoints never route via `auto`):
+
+```bash
+sovereign plan -f examples/comfyui.yaml   # checkpoint size + admission verdict
+sovereign up   -f examples/comfyui.yaml   # then open http://127.0.0.1:8188
+```
+
 ## CLI overview
 
 | Command | What it does |
