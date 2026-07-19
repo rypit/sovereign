@@ -155,7 +155,9 @@ def run(cfg: WorkerConfig, telemetry: TelemetryClient, controller: Any) -> None:
 
     try:
         original_generate = mlx_server.ResponseGenerator.generate
-        mlx_server.ResponseGenerator.generate = wrap_response_generate(  # type: ignore[method-assign]
+        # method-assign is real only where mlx_lm is installed (macOS/arm64);
+        # unused-ignore keeps CI (Linux, mlx_lm unresolved -> Any) clean too.
+        mlx_server.ResponseGenerator.generate = wrap_response_generate(  # type: ignore[method-assign, unused-ignore]
             original_generate, telemetry
         )
     except Exception:  # noqa: BLE001 - fail soft, serve without stats
