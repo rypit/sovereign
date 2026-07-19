@@ -4,6 +4,7 @@ Pure library — no typer, no manager imports. Provides:
 - ModelRef parsing from raw model strings (local path, repo id, repo:quant, repo/file.gguf)
 - Repo metadata fetch, memoised per process (never caches offline/transient failures)
 - GGUF file selection with shard grouping and quant disambiguation
+- Single-file checkpoint selection (diffusion ``.safetensors``, the ``"checkpoint"`` kind)
 - Weight byte estimation from metadata or disk
 - Download that forwards huggingface_hub's own tqdm-rendered progress to a callback
 - ``RoutingCache``: persisted engine-routing decisions for offline restarts
@@ -118,7 +119,8 @@ def parse_model_ref(value: str) -> ModelRef:
     Parsing order:
     1. Starts with /  ~  .  or path exists on disk → local.
     2. Exactly one colon in "org/name:QUANT" form → repo + quant.
-    3. Three or more slash segments ending in .gguf → repo (first two) + filename.
+    3. Three or more slash segments ending in .gguf or .safetensors → repo
+       (first two) + filename.
     4. Otherwise "org/name" repo id.
     """
     # 1. Local path
@@ -134,9 +136,9 @@ def parse_model_ref(value: str) -> ModelRef:
         repo, quant = value.split(":", 1)
         return ModelRef(raw=value, is_local=False, repo_id=repo, quant=quant)
 
-    # 3. Three or more "/" segments ending in ".gguf"
+    # 3. Three or more "/" segments ending in ".gguf" / ".safetensors"
     parts = value.split("/")
-    if len(parts) >= 3 and parts[-1].endswith(".gguf"):
+    if len(parts) >= 3 and parts[-1].endswith((".gguf", ".safetensors")):
         repo_id = "/".join(parts[:2])
         filename = "/".join(parts[2:])
         return ModelRef(raw=value, is_local=False, repo_id=repo_id, filename=filename)
@@ -276,15 +278,72 @@ def select_gguf_files(
     )
 
 
+# ---------------------------------------------------------------------------
+# Single-file checkpoint selection (the "checkpoint" artifact kind)
+# ---------------------------------------------------------------------------
+
+
+def select_checkpoint_file(info: RepoInfo, *, filename: str | None) -> str:
+    """Select the one ``.safetensors`` checkpoint file for the given hint.
+
+    The ``"checkpoint"`` kind is a *single* self-contained weights file (a
+    diffusion checkpoint), not a snapshot: with an explicit filename the match
+    must be exact; without one, only **top-level** ``.safetensors`` siblings
+    are considered (diffusion repos also ship a diffusers/ tree of nested
+    component weights that are not loadable as a checkpoint) and exactly one
+    must exist. Ambiguity raises ModelResolutionError — same fail-loud
+    discipline as an ambiguous GGUF quant.
+    """
+    candidates = [name for name, _ in info.siblings if name.endswith(".safetensors")]
+    if not candidates:
+        raise ModelResolutionError(f"No .safetensors files found in '{info.repo_id}'")
+
+    if filename is not None:
+        matches = [f for f in candidates if f == filename or Path(f).name == filename]
+        if not matches:
+            available = ", ".join(sorted(candidates))
+            raise ModelResolutionError(
+                f"File '{filename}' not found in '{info.repo_id}'. Available: {available}"
+            )
+        if len(matches) > 1:
+            options = ", ".join(sorted(matches))
+            raise ModelResolutionError(
+                f"File '{filename}' is ambiguous in '{info.repo_id}': {options}"
+            )
+        return matches[0]
+
+    top_level = [f for f in candidates if "/" not in f]
+    if len(top_level) == 1:
+        return top_level[0]
+    if not top_level:
+        raise ModelResolutionError(
+            f"No top-level .safetensors checkpoint in '{info.repo_id}' "
+            f"(only nested component files). Specify one with "
+            "'org/repo/file.safetensors' syntax."
+        )
+    available = ", ".join(sorted(top_level))
+    raise ModelResolutionError(
+        f"Multiple checkpoints available in '{info.repo_id}': {available}. "
+        "Specify one with 'org/repo/file.safetensors' syntax."
+    )
+
+
 def weight_bytes(
     info: RepoInfo,
-    kind: Literal["snapshot", "gguf"],
+    kind: Literal["snapshot", "gguf", "checkpoint"],
     *,
     quant: str | None = None,
     filename: str | None = None,
 ) -> int | None:
     """Sum of weight file sizes for the given kind. Returns None if any size is unknown."""
     sibling_sizes = dict(info.siblings)
+
+    if kind == "checkpoint":
+        try:
+            file = select_checkpoint_file(info, filename=filename)
+        except ModelResolutionError:
+            return None
+        return sibling_sizes.get(file)
 
     if kind == "gguf":
         try:
@@ -322,7 +381,9 @@ def weight_bytes(
 _SNAPSHOT_IGNORE = ["*.gguf"]
 
 
-def cached_model_path(ref: ModelRef, kind: Literal["snapshot", "gguf"]) -> Path | None:
+def cached_model_path(
+    ref: ModelRef, kind: Literal["snapshot", "gguf", "checkpoint"]
+) -> Path | None:
     """Return the local cache path if the model is already downloaded, else None."""
     if ref.is_local:
         return ref.local_path
@@ -336,6 +397,22 @@ def cached_model_path(ref: ModelRef, kind: Literal["snapshot", "gguf"]) -> Path 
                 ignore_patterns=_SNAPSHOT_IGNORE,
             )
             return Path(path)
+        except Exception:
+            return None
+
+    if kind == "checkpoint":
+        info = _repo_info_cache.get(ref.repo_id)
+        if info is not None:
+            try:
+                filename = select_checkpoint_file(info, filename=ref.filename)
+            except ModelResolutionError:
+                return None
+        elif ref.filename is not None:
+            filename = ref.filename
+        else:
+            return None
+        try:
+            return Path(hf_hub_download(ref.repo_id, filename, local_files_only=True))
         except Exception:
             return None
 
@@ -368,7 +445,7 @@ EstimateSource = Literal["local", "cached", "hub", "unknown"]
 
 
 def estimate_model_bytes_with_source(
-    ref: ModelRef, kind: Literal["snapshot", "gguf"]
+    ref: ModelRef, kind: Literal["snapshot", "gguf", "checkpoint"]
 ) -> tuple[int | None, EstimateSource]:
     """Estimate model weight size in bytes plus where the number came from.
 
@@ -400,7 +477,9 @@ def estimate_model_bytes_with_source(
     return None, "unknown"
 
 
-def estimate_model_bytes(ref: ModelRef, kind: Literal["snapshot", "gguf"]) -> int | None:
+def estimate_model_bytes(
+    ref: ModelRef, kind: Literal["snapshot", "gguf", "checkpoint"]
+) -> int | None:
     """Estimate model weight size in bytes via a fallback chain.
 
     Order: local disk → cached HF path on disk → HF repo metadata → None.
@@ -489,7 +568,7 @@ class _BarSink(io.TextIOBase):
 
 def download_model(
     ref: ModelRef,
-    kind: Literal["snapshot", "gguf"],
+    kind: Literal["snapshot", "gguf", "checkpoint"],
     *,
     progress: Callable[[list[str]], None] | None = None,
 ) -> Path:
@@ -515,12 +594,15 @@ def download_model(
             )
             return Path(path)
 
-        # gguf: metadata needed to select shards
+        # gguf/checkpoint: metadata needed to select the file(s)
         info = fetch_repo_info(ref.repo_id)  # may raise ModelAccessError / ModelNotFoundError
         if info is None:
             raise ModelDownloadError(
                 f"Cannot fetch metadata for '{ref.repo_id}' (offline?)"
             )
+        if kind == "checkpoint":
+            fname = select_checkpoint_file(info, filename=ref.filename)
+            return Path(hf_hub_download(ref.repo_id, fname, tqdm_class=tqdm_class))
         files = select_gguf_files(info, quant=ref.quant, filename=ref.filename)
         first_path: Path | None = None
         for fname in files:

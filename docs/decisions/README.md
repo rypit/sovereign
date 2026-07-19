@@ -79,3 +79,4 @@ Provenance: plan §N / PR #NN.
 | [0005](0005-uds-ndjson-telemetry.md) | UDS NDJSON telemetry, drop-when-unobserved |
 | [0006](0006-engine-gap-policy.md) | Engine-gap policy: surface loudly, bridge when feasible |
 | [0007](0007-llama-cpp-server-over-bindings.md) | llama_cpp via `llama-server`, telemetry over its HTTP surface |
+| [0008](0008-comfyui-checkpoint-artifact-kind.md) | ComfyUI engine + single-file `checkpoint` artifact kind |

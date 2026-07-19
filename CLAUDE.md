@@ -70,11 +70,13 @@ services/
                          selection, memory estimation, download, RoutingCache
     routing.py           engine-routing sweep (each engine's claim_route); registers
                          the router core calls via registry.route_entry()
-    llama_cpp/  mlx_lm/  omlx/   the native engines (auto-discovered); each supplies
-                         engine_kwargs() (mapped by its workers/*_adapter.py);
-                         omlx (oMLX server: continuous batching + paged SSD
-                         prefix cache) is explicit-only — claim_route abstains
-                         from `auto`
+    llama_cpp/  mlx_lm/  omlx/  comfyui/   the native engines (auto-discovered);
+                         each supplies engine_kwargs() (mapped by its
+                         workers/*_adapter.py); omlx (oMLX server: continuous
+                         batching + paged SSD prefix cache) and comfyui
+                         (image/video-gen workflow server; single-file
+                         "checkpoint" artifact kind, ADR 0008) are
+                         explicit-only — claim_route abstains from `auto`
 workers/           embedded engine worker processes (spawned via
                    `python -m sovereign.workers.engine_worker --config <path>`)
   protocol.py      typed telemetry event schema (NDJSON) + encode/decode
@@ -96,6 +98,11 @@ workers/           embedded engine worker processes (spawned via
                    `omlx serve` as a child subprocess, then just supervises it
                    (omlx has no /slots-/metrics-style scrape surface — the
                    ADR 0006 gap the manager logs at pre-flight)
+  comfyui_adapter.py      ADR 0007 pattern, no translator: symlinks the one
+                   resolved checkpoint into a per-service models/checkpoints/
+                   layout wired in via --extra-model-paths-config, launches
+                   `comfy … launch` as a child subprocess, then just
+                   supervises it (same ADR 0006 gap as omlx)
 harnesses/         cline_cli, mini_swe_agent          (auto-discovered)
 bench/             content-addressed bench cells; only cleanroom.py may
                    import the Orchestrator; bench sub-app CLI lives in bench/cli.py

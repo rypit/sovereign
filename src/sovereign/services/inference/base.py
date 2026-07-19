@@ -15,7 +15,7 @@ import sys
 import urllib.error
 import urllib.request
 from pathlib import Path
-from typing import IO, Any, ClassVar, Literal
+from typing import IO, Any, ClassVar
 
 import psutil
 
@@ -25,7 +25,7 @@ import psutil
 # helpers are imported by name.
 from sovereign.config import ServiceEntry
 from sovereign.core.base_config import NativeEngineConfig
-from sovereign.core.base_manager import ActivityMixin
+from sovereign.core.base_manager import ActivityMixin, ModelArtifactKind
 from sovereign.core.procmem import macos_phys_footprint
 from sovereign.core.provisioning import Provisioner
 from sovereign.core.resolver import ConsumerKind, ResolvedEndpoint
@@ -116,9 +116,10 @@ class NativeEngineManager(ActivityMixin, Provisioner):
 
     base_type: ClassVar[str]
     config_cls: ClassVar[type[NativeEngineConfig]]
-    #: Which HF artifact this engine consumes — an MLX/safetensors *snapshot* or a
-    #: single *gguf* file. Drives metadata-based memory estimation and download.
-    model_artifact_kind: ClassVar[Literal["snapshot", "gguf"]]
+    #: Which HF artifact this engine consumes — an MLX/safetensors *snapshot*, a
+    #: single *gguf* file, or a single-file diffusion *checkpoint*. Drives
+    #: metadata-based memory estimation and download.
+    model_artifact_kind: ClassVar[ModelArtifactKind]
     consumer_kind = ConsumerKind.NATIVE
     #: Optional extra sentence appended to the missing-binding error.
     binary_hint: ClassVar[str] = ""

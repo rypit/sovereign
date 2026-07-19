@@ -90,10 +90,11 @@ clean against every rule above.
   handoff from a manager to its engine worker process
   (`v, service, engine, host, port, health_path, telemetry_socket,
   model_path, draft_model_path, served_model_name, engine_kwargs`). ADR 0004.
-  `mlx_lm`'s worker loads tensors in-process; `llama_cpp`'s worker instead
-  launches `llama-server` (native binary) as a child and translates its HTTP
-  telemetry surface into the same wire events — ADR 0007's exception to
-  ADR 0004's in-process-binding default, scoped to `llama_cpp` only.
+  `mlx_lm`'s worker loads tensors in-process; the other engines' workers
+  instead launch a server as a child process under ADR 0007's exception to
+  ADR 0004's in-process-binding default — `llama_cpp` (`llama-server`, with
+  a telemetry translator over its HTTP surface), `omlx` (`omlx serve`,
+  supervise-only) and `comfyui` (`comfy … launch`, supervise-only; ADR 0008).
 - **Telemetry event schema** (`src/sovereign/workers/protocol.py`) — the
   NDJSON wire format workers speak to the parent telemetry hub
   (`heartbeat`, `log`, `state_change`, `memory`, `prefill_progress`,
@@ -118,6 +119,7 @@ clean against every rule above.
 | Embedded engine workers | 0004 | PR #20 |
 | UDS NDJSON telemetry | 0005 | PR #20 |
 | Engine-gap policy (`§3a` in code comments) | 0006 | PR #20 addendum |
+| ComfyUI engine, `checkpoint` artifact kind | 0008 | — |
 
 ## How to change architecture
 
