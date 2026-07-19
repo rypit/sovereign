@@ -3,27 +3,32 @@
 Pure presentation — consumes the :class:`~sovereign.runtime.status.StatusSnapshot`
 shape that ``Orchestrator.status_snapshot()`` produces (and persists as
 ``status.json``), and renders three stacked panels — "Sovereign" (the service
-table, with sparklines), "Memory" (usage bars vs budget and machine RAM), and
-"Activity" (per-service activity lines). No orchestration logic lives here; no
+table), "Memory" (usage bars vs budget and machine RAM), and "Activity"
+(per-service activity lines). No orchestration logic lives here; no
 rendering logic lives in the orchestrator.
 
 Two cadences are deliberately decoupled (§5/§8):
 
 - **1 Hz snapshot**: ``dashboard_task_factory``'s poll loop (and ``monitor``'s
   own poll) re-reads ``orch.status_snapshot()`` / ``status.json`` once a
-  second — that's the ingest rate for MEM/TOK/S history and table content.
-- **12 fps render**: ``Live(..., refresh_per_second=12)`` redraws the same
-  frame far more often than the snapshot changes, purely so the STATUS
-  column's ``Spinner`` (provisioning/downloading/starting) and the prefill
-  pulse animate smoothly. It never causes an extra snapshot read.
+  second — that's the ingest rate for table content.
+- **12 fps animation, only while animating**: when the current frame contains
+  a time-animated element — a STATUS ``Spinner`` (provisioning/downloading/
+  starting) or an in-flight prefill (see :func:`needs_animation`) — the loops
+  redraw at ``ANIMATION_INTERVAL`` between snapshots so it moves smoothly.
+  A steady frame is drawn exactly once per snapshot: ``Live`` repaints its
+  whole (now three-panel-tall) region on every refresh, so redrawing an
+  unchanged frame at 12 fps just flickers. Animation redraws never cause an
+  extra snapshot read.
 """
 
 from __future__ import annotations
 
 import asyncio
+import sys
 import time
-from collections import deque
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -112,48 +117,24 @@ def duration_cell(since: str | None) -> str:
     return format_duration(max(0.0, elapsed))
 
 
-_HISTORY_SECONDS = 60.0  # trailing window kept per service per metric; tune here
+class PrefillTracker:
+    """First-seen times for in-flight prefills, tracked across record() calls.
 
-
-class MetricHistory:
-    """Rolling ~60s-window per-service, per-metric history for sparklines.
-
+    An indeterminate prefill (total=None) renders a "pulse" annotated with a
+    real elapsed duration — the telemetry cache/status.json don't carry a
+    per-request start timestamp, so it's tracked here, dashboard-side.
     Constructed once per dashboard session (once in monitor(), once per
     dashboard_task_factory() task invocation) — never a module-level global,
-    so state never leaks across unrelated sessions or test invocations. Never
-    exposed as a user-facing parameter; always defaults to _HISTORY_SECONDS.
+    so state never leaks across unrelated sessions or test invocations.
     """
 
-    #: Metric keys recorded from each service's ``metrics`` dict into sparkline
-    #: history — memory (MEM column) and generation throughput (TOK/S column).
-    _RECORDED_KEYS = ("memory_bytes", "tokens_per_second")
-
-    def __init__(self, window_seconds: float = _HISTORY_SECONDS) -> None:
-        self._window = window_seconds
-        self._data: dict[str, dict[str, deque[tuple[float, float]]]] = {}
-        #: First-seen monotonic time per (service, request_id), so an
-        #: indeterminate prefill (total=None) can render a "pulse" with a
-        #: real elapsed duration — the telemetry cache/status.json don't
-        #: carry a per-request start timestamp, so this is tracked here,
-        #: dashboard-side, across successive record() calls.
+    def __init__(self) -> None:
         self._prefill_started: dict[tuple[str, str], float] = {}
 
     def record(self, status: Mapping[str, Any]) -> None:
         now = time.monotonic()
-        services = status.get("services", {})
-        for stale in set(self._data) - set(services):
-            del self._data[stale]
         live_requests: set[tuple[str, str]] = set()
-        for name, svc in services.items():
-            metrics = svc.get("metrics") or {}
-            buckets = self._data.setdefault(name, {})
-            for key in self._RECORDED_KEYS:
-                if key in metrics:
-                    dq = buckets.setdefault(key, deque())
-                    dq.append((now, metrics[key]))
-                    cutoff = now - self._window
-                    while dq and dq[0][0] < cutoff:
-                        dq.popleft()
+        for name, svc in status.get("services", {}).items():
             for entry in (svc.get("telemetry") or {}).get("prefill", []):
                 request_id = entry.get("request_id")
                 if not request_id:
@@ -165,40 +146,29 @@ class MetricHistory:
         for req_key in set(self._prefill_started) - live_requests:
             del self._prefill_started[req_key]
 
-    def values(self, service: str, metric: str) -> list[float]:
-        return [v for _, v in self._data.get(service, {}).get(metric, ())]
-
     def prefill_elapsed(self, service: str, request_id: str) -> float:
         """Seconds since this (service, request_id) prefill was first observed."""
         started = self._prefill_started.get((service, request_id), time.monotonic())
         return max(0.0, time.monotonic() - started)
 
 
-_SPARK_CHARS = "▁▂▃▄▅▆▇█"
-_SPARK_WIDTH = 12  # rendered sparkline width; tune here
-
-
-def sparkline(values: Sequence[float]) -> str:
-    """A trailing Unicode-block sparkline, min-max scaled to the visible window."""
-    values = list(values)[-_SPARK_WIDTH:]
-    if len(values) < 2:
-        return ""
-    lo, hi = min(values), max(values)
-    if hi == lo:
-        mid = _SPARK_CHARS[len(_SPARK_CHARS) // 2]
-        return mid * len(values)
-    span = hi - lo
-    return "".join(
-        _SPARK_CHARS[min(int((v - lo) / span * len(_SPARK_CHARS)), len(_SPARK_CHARS) - 1)]
-        for v in values
-    )
-
-
-def _metric_cell(text: str, spark: str) -> str:
-    return f"{text} {spark}" if spark else text
-
-
 _SPINNER_STATES = {"provisioning", "downloading", "starting"}
+
+#: Redraw cadence while a spinner/pulse is animating (~12 fps).
+ANIMATION_INTERVAL = 1 / 12
+
+
+def needs_animation(status: Mapping[str, Any]) -> bool:
+    """True when the rendered frame contains a time-animated element — a STATUS
+    spinner or an in-flight prefill — so pollers know to redraw between
+    snapshots (and to skip redrawing entirely when the frame is steady)."""
+    for svc in status.get("services", {}).values():
+        if svc.get("state") in _SPINNER_STATES:
+            return True
+        if (svc.get("telemetry") or {}).get("prefill"):
+            return True
+    return False
+
 
 _PREFILL_BAR_WIDTH = 16
 
@@ -279,7 +249,7 @@ def memory_panel(status: Mapping[str, Any]) -> Panel | None:
     return Panel(table, title="Memory", title_align="left")
 
 
-def dashboard(status: Mapping[str, Any], history: MetricHistory | None = None) -> RenderableType:
+def dashboard(status: Mapping[str, Any], prefills: PrefillTracker | None = None) -> RenderableType:
     """Render the §8 dashboard: a "Sovereign" panel (service table), a "Memory"
     panel (usage bars vs budget and machine RAM), and an "Activity" panel
     (per-service activity/prefill lines)."""
@@ -299,10 +269,8 @@ def dashboard(status: Mapping[str, Any], history: MetricHistory | None = None) -
         state = svc.get("state", "unknown")
         metrics = svc.get("metrics") or {}
         mem = fmt_size(metrics["memory_bytes"]) if "memory_bytes" in metrics else "-"
-        mem_spark = sparkline(history.values(name, "memory_bytes")) if history else ""
         tps = metrics.get("tokens_per_second")
         tok_s = f"{tps:.1f}" if isinstance(tps, int | float) else "-"
-        tok_spark = sparkline(history.values(name, "tokens_per_second")) if history else ""
         duration = duration_cell(svc.get("since"))
         endpoint = svc.get("endpoint") or "-"
         engine = svc.get("engine") or "-"
@@ -315,8 +283,8 @@ def dashboard(status: Mapping[str, Any], history: MetricHistory | None = None) -
             descriptor,
             status_cell(state),
             duration,
-            _metric_cell(mem, mem_spark),
-            _metric_cell(tok_s, tok_spark),
+            mem,
+            tok_s,
             est,
             endpoint,
         )
@@ -325,7 +293,7 @@ def dashboard(status: Mapping[str, Any], history: MetricHistory | None = None) -
         prefill_lines = []
         for entry in (svc.get("telemetry") or {}).get("prefill", []):
             request_id = entry.get("request_id", "")
-            elapsed = history.prefill_elapsed(name, request_id) if history else 0.0
+            elapsed = prefills.prefill_elapsed(name, request_id) if prefills else 0.0
             prefill_lines.append(
                 prefill_bar(entry.get("processed", 0), entry.get("total"), elapsed=elapsed)
             )
@@ -375,25 +343,59 @@ def budget_footer(budget: dict | None) -> Text | None:
     )
 
 
+@contextmanager
+def suppress_ctrl_echo() -> Iterator[None]:
+    """Stop the tty echoing "^C" (ECHOCTL) while a Live dashboard owns the screen.
+
+    The kernel echoes ``^C`` straight to the terminal at the cursor — invisible
+    to Rich. The cursor sits at the end of a full-width panel border, so those
+    two characters wrap onto a new row, scroll the screen, and ``Live``'s next
+    repaint lands one row low, stranding a duplicate of the frame's top line.
+    No-op without a Unix tty on stdin; always restores the original settings.
+    """
+    try:
+        import termios
+
+        fd = sys.stdin.fileno()
+        saved = termios.tcgetattr(fd)
+    except (ImportError, ValueError, OSError):  # non-Unix, or stdin is not a tty
+        yield
+        return
+    quiet = list(saved)
+    quiet[3] &= ~termios.ECHOCTL
+    termios.tcsetattr(fd, termios.TCSANOW, quiet)
+    try:
+        yield
+    finally:
+        termios.tcsetattr(fd, termios.TCSANOW, saved)
+
+
 def dashboard_task_factory(interval: float = 1.0, live_console: Console | None = None):
     """An extra serve task that renders the live dashboard from in-process state."""
 
     async def task(orch: Orchestrator, stop: asyncio.Event) -> None:
-        history = MetricHistory()
+        prefills = PrefillTracker()
         snapshot = orch.status_snapshot()
-        history.record(snapshot)
-        with Live(
-            dashboard(snapshot, history=history),
+        prefills.record(snapshot)
+        with suppress_ctrl_echo(), Live(
+            dashboard(snapshot, prefills=prefills),
             console=live_console or Console(),
-            refresh_per_second=12,
+            auto_refresh=False,
         ) as live:
             while not stop.is_set():
                 snapshot = orch.status_snapshot()
-                history.record(snapshot)
-                live.update(dashboard(snapshot, history=history))
-                try:
-                    await asyncio.wait_for(stop.wait(), timeout=interval)
-                except TimeoutError:
-                    pass
+                prefills.record(snapshot)
+                live.update(dashboard(snapshot, prefills=prefills), refresh=True)
+                # Between snapshots, redraw only while something animates.
+                animate = needs_animation(snapshot)
+                deadline = time.monotonic() + interval
+                while not stop.is_set() and (remaining := deadline - time.monotonic()) > 0:
+                    timeout = min(remaining, ANIMATION_INTERVAL) if animate else remaining
+                    try:
+                        await asyncio.wait_for(stop.wait(), timeout=timeout)
+                    except TimeoutError:
+                        pass
+                    if animate and not stop.is_set():
+                        live.update(dashboard(snapshot, prefills=prefills), refresh=True)
 
     return task

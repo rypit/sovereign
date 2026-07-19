@@ -1,6 +1,6 @@
 # Internal dependency graph
 
-_Generated 2026-07-19 by `scripts/depgraph.py` — 76 modules, 194 internal import edges (170 runtime, 24 type-annotation-only). Regenerate with `make graph`._
+_Generated 2026-07-19 by `scripts/depgraph.py` — 76 modules, 195 internal import edges (171 runtime, 24 type-annotation-only). Regenerate with `make graph`._
 
 Nodes are modules under `sovereign`, grouped by top-level package. Only imports internal to the package are shown. Solid arrows (`-->`) are runtime imports; dashed arrows (`-.->`) are type-annotation-only imports (`if TYPE_CHECKING:` blocks). Type-only edges are excluded from cycle detection and fan-in/fan-out. Modules that participate in a runtime import cycle are outlined in red.
 
@@ -155,6 +155,7 @@ graph LR
   n_sovereign_cli_stack --> n_sovereign
   n_sovereign_cli_stack --> n_sovereign_bench_lock
   n_sovereign_cli_stack --> n_sovereign_cli__common
+  n_sovereign_cli_stack --> n_sovereign_cli_logging_config
   n_sovereign_cli_stack --> n_sovereign_core_base_manager
   n_sovereign_cli_stack --> n_sovereign_core_errors
   n_sovereign_cli_stack --> n_sovereign_core_planning
@@ -305,7 +306,7 @@ Sorted by total coupling (fan-in + fan-out). Counts runtime edges only. High fan
 | Module | Fan-in | Fan-out | Total |
 | --- | ---: | ---: | ---: |
 | `core/registry.py` | 13 | 4 | 17 |
-| `cli/stack.py` | 1 | 14 | 15 |
+| `cli/stack.py` | 1 | 15 | 16 |
 | `runtime/orchestrator.py` | 2 | 13 | 15 |
 | `core/state.py` | 13 | 0 | 13 |
 | `services/inference/base.py` | 4 | 9 | 13 |
@@ -349,6 +350,7 @@ Sorted by total coupling (fan-in + fan-out). Counts runtime edges only. High fan
 | `__init__.py` | 2 | 0 | 2 |
 | `bench/grading.py` | 1 | 1 | 2 |
 | `bench/report.py` | 1 | 1 | 2 |
+| `cli/logging_config.py` | 2 | 0 | 2 |
 | `core/procmem.py` | 2 | 0 | 2 |
 | `harnesses/cline_cli/config.py` | 1 | 1 | 2 |
 | `harnesses/mini_swe_agent/config.py` | 1 | 1 | 2 |
@@ -359,7 +361,6 @@ Sorted by total coupling (fan-in + fan-out). Counts runtime edges only. High fan
 | `services/inference/omlx/config.py` | 1 | 1 | 2 |
 | `workers/telemetry.py` | 1 | 1 | 2 |
 | `workers/worker_config.py` | 2 | 0 | 2 |
-| `cli/logging_config.py` | 1 | 0 | 1 |
 | `harnesses/__init__.py` | 1 | 0 | 1 |
 | `harnesses/cline_cli/__init__.py` | 0 | 1 | 1 |
 | `harnesses/mini_swe_agent/__init__.py` | 0 | 1 | 1 |

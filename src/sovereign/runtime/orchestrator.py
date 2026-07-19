@@ -580,6 +580,7 @@ async def serve_forever(
     state_dir: str | Path = ".sovereign",
     extra_tasks: Sequence[ExtraTask] = (),
     on_transition: TransitionHook | None = None,
+    on_stop: Callable[[], None] | None = None,
     manager_factory: ManagerFactory | None = None,
     harness_factory: Callable[[HarnessEntry], Harness] | None = None,
 ) -> Orchestrator:
@@ -589,6 +590,11 @@ async def serve_forever(
     including *during boot*, so a foreground dashboard can show services progressing
     through ``PENDING → PROVISIONING → STARTING → READY``. They share the ``stop``
     event, so a signal (even mid-boot) tears everything down together.
+
+    ``on_stop`` fires once per signalled stop, after the extra tasks have wound
+    down (so a dashboard's final frame is already on screen and the notice
+    prints below it) but before service teardown — the CLI's chance to tell
+    the operator teardown has begun (which can take seconds) before it finishes.
     """
     orch = Orchestrator(
         config,
@@ -663,6 +669,13 @@ async def serve_forever(
         for task in background:
             with contextlib.suppress(Exception):
                 await task
+        # After the extra tasks wound down (the dashboard's Live has exited,
+        # leaving its final frame) but before the slow teardown: the signal
+        # notice lands *below* the panels. Only for a real signal — a normal
+        # return or a boot failure isn't "stopping on request".
+        if interrupts and on_stop is not None:
+            with contextlib.suppress(Exception):
+                on_stop()
         await orch.shutdown()
         docker_monitor.stop()
         if hub_started:

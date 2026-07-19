@@ -10,6 +10,7 @@ import asyncio
 import json
 import subprocess
 import time
+from contextlib import nullcontext
 from pathlib import Path
 from typing import Optional
 
@@ -29,14 +30,18 @@ from sovereign.cli._common import (
     app,
     console,
 )
+from sovereign.cli.logging_config import logging_console
 from sovereign.core.state import file_hash, mark_stack_stopped, read_json
 from sovereign.core.units import fmt_size
 from sovereign.runtime.dashboard import (
-    MetricHistory,
+    ANIMATION_INTERVAL,
+    PrefillTracker,
     budget_footer,
     dashboard,
     dashboard_task_factory,
     load_dashboard_status,
+    needs_animation,
+    suppress_ctrl_echo,
 )
 from sovereign.runtime.orchestrator import BootError, serve_forever
 from sovereign.runtime.teardown import stop_service_handle
@@ -87,15 +92,22 @@ def _boot_and_serve(file: Path, *, with_dashboard: bool) -> None:
     # returns, so _fast_exit terminates cleanly and lets the OS reap the thread.
     runner = asyncio.Runner()
     code = 0
+    # With the dashboard up, log records must go through the console hosting
+    # the Live region — a stderr write mid-render strands a duplicate frame.
+    log_routing = logging_console(console) if with_dashboard else nullcontext()
     try:
-        runner.run(
-            serve_forever(
-                config,
-                variant_file=file,
-                extra_tasks=extra_tasks,
-                on_transition=on_transition,
+        with log_routing:
+            runner.run(
+                serve_forever(
+                    config,
+                    variant_file=file,
+                    extra_tasks=extra_tasks,
+                    on_transition=on_transition,
+                    on_stop=lambda: console.print(
+                        "[yellow]Stopping stack… (Ctrl+C again to force quit)[/yellow]"
+                    ),
+                )
             )
-        )
         console.print("[green]Stack stopped.[/green]")
     except BootError as exc:
         console.print(f"[red]Boot failed:[/red] {exc}")
@@ -243,20 +255,35 @@ def monitor(
         console.print("No running stack (no status.json). Run [bold]sovereign up[/bold].")
         raise typer.Exit(0)
 
-    history = MetricHistory()
-    history.record(status)
+    prefills = PrefillTracker()
+    prefills.record(status)
 
     if once:
-        console.print(dashboard(status, history=history))
+        console.print(dashboard(status, prefills=prefills))
         return
 
-    with Live(dashboard(status, history=history), console=console, refresh_per_second=12) as live:
+    # screen=True: render on the alternate screen buffer (like top/htop) — the
+    # terminal repaints it without flicker and restores the shell on exit.
+    # auto_refresh=False: a steady frame is drawn once per snapshot; redrawing
+    # it 12x/s only shimmers. While a spinner/prefill animates, redraw at
+    # ANIMATION_INTERVAL between snapshot polls.
+    with suppress_ctrl_echo(), Live(
+        dashboard(status, prefills=prefills),
+        console=console,
+        auto_refresh=False,
+        screen=True,
+    ) as live:
         try:
             while True:
-                time.sleep(interval)
+                animate = needs_animation(status)
+                deadline = time.monotonic() + interval
+                while (remaining := deadline - time.monotonic()) > 0:
+                    time.sleep(min(remaining, ANIMATION_INTERVAL) if animate else remaining)
+                    if animate:
+                        live.update(dashboard(status, prefills=prefills), refresh=True)
                 status = load_dashboard_status(state_dir) or status
-                history.record(status)
-                live.update(dashboard(status, history=history))
+                prefills.record(status)
+                live.update(dashboard(status, prefills=prefills), refresh=True)
         except KeyboardInterrupt:  # pragma: no cover - interactive
             pass
 

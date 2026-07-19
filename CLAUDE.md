@@ -51,8 +51,10 @@ runtime/
                    ingests uncapped into the cache), DockerMonitorWorker (polls
                    `docker stats` on its own thread, feeds the same cache)
   dashboard.py     Rich live dashboard; renders runtime/status.StatusSnapshot
-                   (MEM + TOK/S sparklines, prefill progress bars); 1 Hz snapshot
-                   poll decoupled from the 12fps spinner/pulse animation refresh
+                   (MEM/TOK/S columns, prefill progress bars); 1 Hz snapshot
+                   poll, plus a 12fps spinner/pulse redraw only while a frame
+                   animates (needs_animation) — steady frames draw once per
+                   snapshot to avoid full-region repaint flicker
   status.py        StatusSnapshot TypedDicts (the schema orchestrator produces
                    and dashboard consumes), incl. TelemetryStatus/PrefillStatus
                    mirroring TelemetryStateCache.snapshot()'s field names
