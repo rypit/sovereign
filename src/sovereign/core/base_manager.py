@@ -17,6 +17,11 @@ if TYPE_CHECKING:
     from sovereign.core.resolver import ResolvedEndpoint, Resolver
     from sovereign.services.inference.hf import ModelRef, RepoInfo
 
+#: Which HF artifact a native engine consumes: a repo *snapshot* (MLX/safetensors
+#: directory), a single *gguf* file (with shards), or a single-file diffusion
+#: *checkpoint* (.safetensors). Drives estimation and download in the HF pipeline.
+ModelArtifactKind = Literal["snapshot", "gguf", "checkpoint"]
+
 
 class ActivityMixin:
     """Standard progress reporting shared by every manager.
@@ -160,7 +165,7 @@ class RoutesModelRef(Protocol):
     #: The resolved ``base_type`` this engine registers under.
     base_type: ClassVar[str]
     #: Which HF artifact the engine consumes — drives the cached weight estimate.
-    model_artifact_kind: ClassVar[Literal["snapshot", "gguf"]]
+    model_artifact_kind: ClassVar[ModelArtifactKind]
 
     @classmethod
     def claim_route(cls, ref: ModelRef, info: RepoInfo | None) -> int | None:

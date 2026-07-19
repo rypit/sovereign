@@ -23,6 +23,7 @@ from sovereign.services.inference.hf import (
     estimate_model_bytes,
     fetch_repo_info,
     parse_model_ref,
+    select_checkpoint_file,
     select_gguf_files,
     weight_bytes,
 )
@@ -86,6 +87,14 @@ def test_parse_repo_with_bare_gguf_filename():
     assert not ref.is_local
     assert ref.repo_id == "org/model"
     assert ref.filename == "file.gguf"
+
+
+def test_parse_repo_with_filename_safetensors():
+    ref = parse_model_ref("stabilityai/sdxl-base/sd_xl_base_1.0.safetensors")
+    assert not ref.is_local
+    assert ref.repo_id == "stabilityai/sdxl-base"
+    assert ref.filename == "sd_xl_base_1.0.safetensors"
+    assert ref.quant is None
 
 
 def test_parse_local_absolute():
@@ -223,6 +232,64 @@ def test_select_no_gguf_files_raises():
 
 
 # ---------------------------------------------------------------------------
+# select_checkpoint_file (the single-file "checkpoint" kind)
+# ---------------------------------------------------------------------------
+
+
+def test_select_checkpoint_single_top_level_auto():
+    info = _repo(siblings=(
+        ("sd_xl_base_1.0.safetensors", 7_000_000_000),
+        ("vae/diffusion_pytorch_model.safetensors", 300_000_000),  # nested: ignored
+        ("model_index.json", 1_000),
+    ))
+    assert select_checkpoint_file(info, filename=None) == "sd_xl_base_1.0.safetensors"
+
+
+def test_select_checkpoint_explicit_filename_hit():
+    info = _repo(siblings=(
+        ("sd_xl_base_1.0.safetensors", 1),
+        ("sd_xl_base_1.0_0.9vae.safetensors", 1),
+    ))
+    assert select_checkpoint_file(info, filename="sd_xl_base_1.0.safetensors") == (
+        "sd_xl_base_1.0.safetensors"
+    )
+
+
+def test_select_checkpoint_explicit_filename_matches_nested_by_basename():
+    info = _repo(siblings=(("weights/model.safetensors", 1),))
+    assert select_checkpoint_file(info, filename="model.safetensors") == (
+        "weights/model.safetensors"
+    )
+
+
+def test_select_checkpoint_explicit_filename_miss_lists_available():
+    info = _repo(siblings=(("sd_xl_base_1.0.safetensors", 1),))
+    with pytest.raises(ModelResolutionError, match="not found.*sd_xl_base_1.0.safetensors"):
+        select_checkpoint_file(info, filename="nope.safetensors")
+
+
+def test_select_checkpoint_ambiguous_top_level_raises():
+    info = _repo(siblings=(
+        ("sd_xl_base_1.0.safetensors", 1),
+        ("sd_xl_base_1.0_0.9vae.safetensors", 1),
+    ))
+    with pytest.raises(ModelResolutionError, match="Multiple checkpoints"):
+        select_checkpoint_file(info, filename=None)
+
+
+def test_select_checkpoint_only_nested_raises():
+    info = _repo(siblings=(("unet/diffusion_pytorch_model.safetensors", 1),))
+    with pytest.raises(ModelResolutionError, match="No top-level"):
+        select_checkpoint_file(info, filename=None)
+
+
+def test_select_checkpoint_no_safetensors_raises():
+    info = _repo(siblings=(("model.gguf", 1),))
+    with pytest.raises(ModelResolutionError, match="No .safetensors"):
+        select_checkpoint_file(info, filename=None)
+
+
+# ---------------------------------------------------------------------------
 # weight_bytes
 # ---------------------------------------------------------------------------
 
@@ -280,6 +347,34 @@ def test_weight_bytes_no_safetensors_no_bin_returns_none():
         ("config.json", 1000),
     ))
     assert weight_bytes(info, "snapshot") is None
+
+
+def test_weight_bytes_checkpoint_single_file():
+    info = _repo(siblings=(
+        ("sd_xl_base_1.0.safetensors", 7_000_000_000),
+        ("vae/diffusion_pytorch_model.safetensors", 300_000_000),
+    ))
+    assert weight_bytes(info, "checkpoint") == 7_000_000_000
+
+
+def test_weight_bytes_checkpoint_explicit_filename():
+    info = _repo(siblings=(
+        ("sd_xl_base_1.0.safetensors", 7_000_000_000),
+        ("sd_xl_base_1.0_0.9vae.safetensors", 7_100_000_000),
+    ))
+    assert weight_bytes(info, "checkpoint", filename="sd_xl_base_1.0_0.9vae.safetensors") == (
+        7_100_000_000
+    )
+
+
+def test_weight_bytes_checkpoint_ambiguous_returns_none():
+    info = _repo(siblings=(("a.safetensors", 1), ("b.safetensors", 2)))
+    assert weight_bytes(info, "checkpoint") is None
+
+
+def test_weight_bytes_checkpoint_missing_size_returns_none():
+    info = _repo(siblings=(("sd.safetensors", None),))
+    assert weight_bytes(info, "checkpoint") is None
 
 
 # ---------------------------------------------------------------------------
@@ -564,3 +659,60 @@ def test_download_model_gguf_forwards_progress_per_shard(monkeypatch, tmp_path):
     assert requested == list(shards)
     assert path == tmp_path / shards[0]
     assert emissions
+
+
+def test_download_model_checkpoint_downloads_selected_file(monkeypatch, tmp_path):
+    info = _repo(
+        repo_id="stabilityai/sdxl-base",
+        siblings=_siblings(
+            ("sd_xl_base_1.0.safetensors", 10),
+            ("vae/diffusion_pytorch_model.safetensors", 5),
+        ),
+    )
+    monkeypatch.setattr(models_mod, "fetch_repo_info", lambda repo_id: info)
+
+    requested: list[str] = []
+
+    def fake_hf_hub_download(repo_id, fname, *, tqdm_class=None):
+        requested.append(fname)
+        return str(tmp_path / fname)
+
+    monkeypatch.setattr(models_mod, "hf_hub_download", fake_hf_hub_download)
+    path = models_mod.download_model(parse_model_ref("stabilityai/sdxl-base"), "checkpoint")
+    assert requested == ["sd_xl_base_1.0.safetensors"]
+    assert path == tmp_path / "sd_xl_base_1.0.safetensors"
+
+
+def test_download_model_checkpoint_honors_explicit_filename(monkeypatch, tmp_path):
+    info = _repo(
+        repo_id="org/model",
+        siblings=_siblings(("a.safetensors", 1), ("b.safetensors", 2)),
+    )
+    monkeypatch.setattr(models_mod, "fetch_repo_info", lambda repo_id: info)
+    monkeypatch.setattr(
+        models_mod,
+        "hf_hub_download",
+        lambda repo_id, fname, *, tqdm_class=None: str(tmp_path / fname),
+    )
+    path = models_mod.download_model(parse_model_ref("org/model/b.safetensors"), "checkpoint")
+    assert path == tmp_path / "b.safetensors"
+
+
+def test_cached_model_path_checkpoint_uses_ref_filename_offline(monkeypatch, tmp_path):
+    # No repo info cached: an explicit filename ref still resolves against the
+    # local HF cache without any metadata fetch.
+    target = tmp_path / "b.safetensors"
+    target.write_bytes(b"w")
+
+    def fake_hf_hub_download(repo_id, fname, *, local_files_only=False):
+        assert local_files_only
+        return str(target)
+
+    monkeypatch.setattr(models_mod, "hf_hub_download", fake_hf_hub_download)
+    ref = parse_model_ref("org/model/b.safetensors")
+    assert models_mod.cached_model_path(ref, "checkpoint") == target
+
+
+def test_cached_model_path_checkpoint_none_without_filename_or_info():
+    ref = parse_model_ref("org/model")
+    assert models_mod.cached_model_path(ref, "checkpoint") is None
