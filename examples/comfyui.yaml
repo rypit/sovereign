@@ -1,0 +1,54 @@
+# A ComfyUI image-generation stack — SDXL served natively on Apple Silicon
+# (PyTorch/MPS) as a supervised engine subprocess (ADR 0008):
+#
+#   uv run sovereign plan -f examples/comfyui.yaml   # dry-run: checkpoint size + admission, no download
+#   uv run sovereign up   -f examples/comfyui.yaml   # PROVISIONING -> DOWNLOADING -> STARTING -> READY
+#
+# First run does three one-time things, in order:
+#   1. PROVISIONING installs comfy-cli (`uv tool install comfy-cli`) and then
+#      ComfyUI itself into ~/.sovereign/comfyui (a multi-GB torch install —
+#      shared across stacks, so it only ever happens once per machine).
+#   2. DOWNLOADING fetches the checkpoint into the shared HF cache
+#      (byte progress in the dashboard).
+#   3. STARTING boots ComfyUI and waits on /system_stats.
+#
+# `base_type: comfyui` must be explicit — the engine deliberately abstains
+# from `auto` routing (diffusion checkpoints are .safetensors, which would
+# contend with the LLM engines' claims; see ADR 0008).
+#
+# `model` is a single-file diffusion checkpoint: `org/repo/file.safetensors`,
+# or a bare `org/repo` when the repo has exactly one top-level .safetensors
+# (anything ambiguous fails loudly and lists the candidates).
+
+version: "1.1"
+
+resources:
+  max_unified_memory_gb: 16     # adjust to your machine; SDXL base is a ~7 GB checkpoint
+  safety_margin_gb: 2
+  default_priority: medium
+
+services:
+  - name: sdxl
+    base_type: comfyui          # explicit — comfyui never claims `auto` refs
+    priority: high
+    health_check:
+      type: http
+      endpoint: /system_stats   # ComfyUI's cheap always-on status endpoint
+      port: 8188
+      # Generous: covers torch import + MPS init. The checkpoint is
+      # pre-downloaded in the DOWNLOADING state before this timer starts.
+      timeout_seconds: 300
+    config:
+      model: "stabilityai/stable-diffusion-xl-base-1.0/sd_xl_base_1.0.safetensors"
+      host: 127.0.0.1
+      # workspace_dir: ~/.sovereign/comfyui   # where comfy-cli installs/finds ComfyUI (the default)
+      # output_dir: ./outputs                 # generated images (--output-directory); default is <workspace>/output
+      # served_model_name: sdxl.safetensors   # rename the checkpoint workflows reference
+      # engine_kwargs:                        # escape hatch: kebab-cased onto ComfyUI's main.py argv
+      #   force_fp16: true                    #   -> --force-fp16
+    dependencies: []
+
+# Once READY, open http://127.0.0.1:8188 and build a workflow — the checkpoint
+# appears in CheckpointLoaderSimple under its filename
+# (sd_xl_base_1.0.safetensors), symlinked into a per-service
+# models/checkpoints/ layout under .sovereign/comfyui/sdxl/.
