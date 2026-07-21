@@ -63,8 +63,8 @@ runtime/
 services/
   docker/         auxiliary services in Docker
   inference/     native inference engine workers + their shared base (mlx_lm
-                 is an embedded Python binding; llama_cpp and omlx are
-                 supervised server subprocesses — ADR 0007)
+                 and mlx_vlm are embedded Python bindings; llama_cpp and omlx
+                 are supervised server subprocesses — ADR 0007)
     base.py              shared worker-lifecycle base (NativeEngineManager): dumps
                          a WorkerConfig, launches `sovereign.workers.engine_worker`,
                          HTTP health, psutil/procmem metrics fallback
@@ -72,13 +72,16 @@ services/
                          selection, memory estimation, download, RoutingCache
     routing.py           engine-routing sweep (each engine's claim_route); registers
                          the router core calls via registry.route_entry()
-    llama_cpp/  mlx_lm/  omlx/  comfyui/   the native engines (auto-discovered);
-                         each supplies engine_kwargs() (mapped by its
-                         workers/*_adapter.py); omlx (oMLX server: continuous
-                         batching + paged SSD prefix cache) and comfyui
-                         (image/video-gen workflow server; single-file
-                         "checkpoint" artifact kind, ADR 0008) are
-                         explicit-only — claim_route abstains from `auto`
+    llama_cpp/  mlx_lm/  mlx_vlm/  omlx/  comfyui/   the native engines
+                         (auto-discovered); each supplies engine_kwargs()
+                         (mapped by its workers/*_adapter.py); omlx (oMLX
+                         server: continuous batching + paged SSD prefix
+                         cache), comfyui (image/video-gen workflow server;
+                         single-file "checkpoint" artifact kind, ADR 0008)
+                         and mlx_vlm (vision-language mlx_vlm.server:
+                         image input + dflash/eagle3/mtp speculative
+                         decoding) are explicit-only — claim_route abstains
+                         from `auto`
 workers/           embedded engine worker processes (spawned via
                    `python -m sovereign.workers.engine_worker --config <path>`)
   protocol.py      typed telemetry event schema (NDJSON) + encode/decode
@@ -89,6 +92,10 @@ workers/           embedded engine worker processes (spawned via
   mlx_lm_adapter.py       pure kwarg-mapping + run() that boots mlx_lm.server
                    in-process (mlx_lm imported lazily, inside run(), never at
                    module scope)
+  mlx_vlm_adapter.py      same in-process pattern for mlx_vlm.server (uvicorn):
+                   build_server_argv() + sys.argv swap + main(); no telemetry
+                   translator yet (same ADR 0006 gap as omlx, logged by the
+                   manager at pre-flight)
   llama_cpp_adapter.py    ADR 0007: build_server_argv() maps engine_kwargs to
                    `llama-server` CLI flags; run() launches `llama-server` as a
                    child subprocess (never imports llama_cpp/fastapi/uvicorn)

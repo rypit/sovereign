@@ -127,3 +127,30 @@ services:
       host: 127.0.0.1
       temp: 0.6
     dependencies: []
+
+# ---------------------------------------------------------------------------
+# Vision-language MLX serving with MTP speculative decoding (mlx_vlm engine).
+# `mlx-vlm` ships with the project like mlx-lm — `uv sync` provides
+# mlx_vlm.server. `model` is a VLM MLX snapshot (image-text-to-text; the
+# vision tower ships in-repo — no llama.cpp-style mmproj sidecar), so the
+# same fast model reads images on /v1/chat/completions. `draft_model` names
+# a split MTP-head repo; both snapshots are pre-downloaded and both count
+# toward the memory budget. Uncomment to use.
+# ---------------------------------------------------------------------------
+#   - name: qwen_vlm
+#     base_type: mlx_vlm
+#     priority: critical
+#     health_check:
+#       type: http
+#       endpoint: /health
+#       port: 8081
+#       # Covers interpreter start + mlx_vlm import + MoE weights + vision
+#       # tower + MTP drafter load.
+#       timeout_seconds: 600
+#     config:
+#       model: "mlx-community/Qwen3.6-35B-A3B-4bit"            # <-- confirm exact repo ids
+#       draft_model: "mlx-community/Qwen3.6-35B-A3B-MTP-4bit"  #     on HF before booting
+#       draft_kind: mtp
+#       draft_block_size: 4
+#       host: 127.0.0.1
+#     dependencies: []
