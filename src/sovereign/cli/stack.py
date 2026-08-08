@@ -160,6 +160,17 @@ def down(
         result = stop_service_handle(handles[name])
         console.print(f"  {name}: {result}")
 
+    # Sandbox containers/networks are per-invoke and never boot-persisted
+    # (ADR 0009), so they have no runtime handle — reap crash leftovers by label.
+    try:
+        from sovereign.services.docker.sandbox import sweep_leftovers
+
+        reaped = sweep_leftovers()
+        if reaped:
+            console.print(f"[dim]Reaped {reaped} leftover sandbox object(s).[/dim]")
+    except Exception:  # noqa: BLE001 - best-effort hygiene, never blocks down
+        pass
+
     # Reflect the teardown in state.json so `status` agrees.
     mark_stack_stopped(state_path)
     console.print("[green]Stack stopped.[/green]")

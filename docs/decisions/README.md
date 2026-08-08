@@ -80,3 +80,4 @@ Provenance: plan §N / PR #NN.
 | [0006](0006-engine-gap-policy.md) | Engine-gap policy: surface loudly, bridge when feasible |
 | [0007](0007-llama-cpp-server-over-bindings.md) | llama_cpp via `llama-server`, telemetry over its HTTP surface |
 | [0008](0008-comfyui-checkpoint-artifact-kind.md) | ComfyUI engine + single-file `checkpoint` artifact kind |
+| [0009](0009-docker-sandboxed-harnesses.md) | Docker-sandboxed harnesses with engine-only egress |

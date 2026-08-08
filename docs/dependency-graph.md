@@ -1,6 +1,6 @@
 # Internal dependency graph
 
-_Generated 2026-07-19 by `scripts/depgraph.py` — 76 modules, 195 internal import edges (171 runtime, 24 type-annotation-only). Regenerate with `make graph`._
+_Generated 2026-08-08 by `scripts/depgraph.py` — 77 modules, 197 internal import edges (173 runtime, 24 type-annotation-only). Regenerate with `make graph`._
 
 Nodes are modules under `sovereign`, grouped by top-level package. Only imports internal to the package are shown. Solid arrows (`-->`) are runtime imports; dashed arrows (`-.->`) are type-annotation-only imports (`if TYPE_CHECKING:` blocks). Type-only edges are excluded from cycle detection and fan-in/fan-out. Modules that participate in a runtime import cycle are outlined in red.
 
@@ -60,6 +60,7 @@ graph LR
     n_sovereign_services_docker["services/docker/__init__.py"]
     n_sovereign_services_docker_config["services/docker/config.py"]
     n_sovereign_services_docker_manager["services/docker/manager.py"]
+    n_sovereign_services_docker_sandbox["services/docker/sandbox.py"]
     n_sovereign_services_inference["services/inference/__init__.py"]
     n_sovereign_services_inference_base["services/inference/base.py"]
     n_sovereign_services_inference_comfyui["services/inference/comfyui/__init__.py"]
@@ -167,6 +168,7 @@ graph LR
   n_sovereign_cli_stack --> n_sovereign_runtime_dashboard
   n_sovereign_cli_stack --> n_sovereign_runtime_orchestrator
   n_sovereign_cli_stack --> n_sovereign_runtime_teardown
+  n_sovereign_cli_stack --> n_sovereign_services_docker_sandbox
   n_sovereign_config --> n_sovereign_core_base_config
   n_sovereign_core_base_config --> n_sovereign_core_units
   n_sovereign_core_base_harness --> n_sovereign_core_provisioning
@@ -221,6 +223,7 @@ graph LR
   n_sovereign_services_docker_manager --> n_sovereign_core_registry
   n_sovereign_services_docker_manager --> n_sovereign_core_resolver
   n_sovereign_services_docker_manager --> n_sovereign_services_docker_config
+  n_sovereign_services_docker_sandbox --> n_sovereign_services_docker_manager
   n_sovereign_services_inference_base --> n_sovereign_config
   n_sovereign_services_inference_base --> n_sovereign_core_base_config
   n_sovereign_services_inference_base --> n_sovereign_core_base_manager
@@ -305,8 +308,8 @@ Sorted by total coupling (fan-in + fan-out). Counts runtime edges only. High fan
 
 | Module | Fan-in | Fan-out | Total |
 | --- | ---: | ---: | ---: |
+| `cli/stack.py` | 1 | 16 | 17 |
 | `core/registry.py` | 13 | 4 | 17 |
-| `cli/stack.py` | 1 | 15 | 16 |
 | `runtime/orchestrator.py` | 2 | 13 | 15 |
 | `core/state.py` | 13 | 0 | 13 |
 | `services/inference/base.py` | 4 | 9 | 13 |
@@ -315,9 +318,9 @@ Sorted by total coupling (fan-in + fan-out). Counts runtime edges only. High fan
 | `cli/_common.py` | 5 | 6 | 11 |
 | `bench/cli.py` | 1 | 9 | 10 |
 | `config.py` | 9 | 1 | 10 |
+| `services/docker/manager.py` | 4 | 6 | 10 |
 | `core/base_harness.py` | 7 | 2 | 9 |
 | `core/units.py` | 9 | 0 | 9 |
-| `services/docker/manager.py` | 3 | 6 | 9 |
 | `bench/cleanroom.py` | 1 | 7 | 8 |
 | `core/base_manager.py` | 8 | 0 | 8 |
 | `workers/protocol.py` | 8 | 0 | 8 |
@@ -355,6 +358,7 @@ Sorted by total coupling (fan-in + fan-out). Counts runtime edges only. High fan
 | `harnesses/cline_cli/config.py` | 1 | 1 | 2 |
 | `harnesses/mini_swe_agent/config.py` | 1 | 1 | 2 |
 | `services/docker/config.py` | 1 | 1 | 2 |
+| `services/docker/sandbox.py` | 1 | 1 | 2 |
 | `services/inference/comfyui/config.py` | 1 | 1 | 2 |
 | `services/inference/llama_cpp/config.py` | 1 | 1 | 2 |
 | `services/inference/mlx_lm/config.py` | 1 | 1 | 2 |
