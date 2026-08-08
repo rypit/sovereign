@@ -61,7 +61,10 @@ runtime/
   manifest.py      resolved stack manifest written at boot (§7b)
   teardown.py      cross-process stop from persisted runtime handles (`sovereign down`)
 services/
-  docker/         auxiliary services in Docker
+  docker/         auxiliary services in Docker; sandbox.py holds the
+                  per-invoke harness-sandbox helpers (ADR 0009: internal
+                  network + egress proxy, label-tracked teardown/sweep) —
+                  harnesses import it lazily inside methods
   inference/     native inference engine workers + their shared base (mlx_lm
                  is an embedded Python binding; llama_cpp and omlx are
                  supervised server subprocesses — ADR 0007)

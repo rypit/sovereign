@@ -1,6 +1,6 @@
 # Internal dependency graph
 
-_Generated 2026-08-08 by `scripts/depgraph.py` — 77 modules, 199 internal import edges (175 runtime, 24 type-annotation-only). Regenerate with `make graph`._
+_Generated 2026-08-08 by `scripts/depgraph.py` — 77 modules, 200 internal import edges (176 runtime, 24 type-annotation-only). Regenerate with `make graph`._
 
 Nodes are modules under `sovereign`, grouped by top-level package. Only imports internal to the package are shown. Solid arrows (`-->`) are runtime imports; dashed arrows (`-.->`) are type-annotation-only imports (`if TYPE_CHECKING:` blocks). Type-only edges are excluded from cycle detection and fan-in/fan-out. Modules that participate in a runtime import cycle are outlined in red.
 
@@ -130,6 +130,7 @@ graph LR
   n_sovereign_bench_quality --> n_sovereign_core_registry
   n_sovereign_bench_quality --> n_sovereign_core_resolver
   n_sovereign_bench_quality --> n_sovereign_core_state
+  n_sovereign_bench_quality --> n_sovereign_services_docker_sandbox
   n_sovereign_bench_report --> n_sovereign_core_state
   n_sovereign_bench_runner --> n_sovereign_bench_cells
   n_sovereign_bench_runner --> n_sovereign_bench_lock
@@ -315,8 +316,8 @@ Sorted by total coupling (fan-in + fan-out). Counts runtime edges only. High fan
 | `runtime/orchestrator.py` | 2 | 13 | 15 |
 | `core/state.py` | 13 | 0 | 13 |
 | `services/inference/base.py` | 4 | 9 | 13 |
+| `bench/quality.py` | 2 | 10 | 12 |
 | `core/base_config.py` | 11 | 1 | 12 |
-| `bench/quality.py` | 2 | 9 | 11 |
 | `cli/_common.py` | 5 | 6 | 11 |
 | `bench/cli.py` | 1 | 9 | 10 |
 | `config.py` | 9 | 1 | 10 |
@@ -338,13 +339,13 @@ Sorted by total coupling (fan-in + fan-out). Counts runtime edges only. High fan
 | `harnesses/cline_cli/manager.py` | 1 | 4 | 5 |
 | `harnesses/mini_swe_agent/manager.py` | 1 | 4 | 5 |
 | `runtime/dashboard.py` | 2 | 3 | 5 |
+| `services/docker/sandbox.py` | 4 | 1 | 5 |
 | `services/inference/comfyui/manager.py` | 1 | 4 | 5 |
 | `services/inference/llama_cpp/manager.py` | 1 | 4 | 5 |
 | `bench/lock.py` | 3 | 1 | 4 |
 | `bench/spec.py` | 3 | 1 | 4 |
 | `core/errors.py` | 4 | 0 | 4 |
 | `runtime/manifest.py` | 1 | 3 | 4 |
-| `services/docker/sandbox.py` | 3 | 1 | 4 |
 | `services/inference/mlx_lm/manager.py` | 1 | 3 | 4 |
 | `services/inference/routing.py` | 0 | 4 | 4 |
 | `workers/engine_worker.py` | 0 | 4 | 4 |
