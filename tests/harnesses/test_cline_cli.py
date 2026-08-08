@@ -230,3 +230,183 @@ def test_fingerprint_skips_version_when_binary_missing(monkeypatch) -> None:
     h = _harness()
     fp = h.fingerprint()
     assert "cline_version" not in fp
+
+
+# --- sandboxed invoke (ADR 0009) ---
+def _sandbox_config(tmp_path, **sandbox) -> dict:
+    return {
+        "base_url": "{{ engine.endpoint }}/v1",
+        "model": "{{ engine.model }}",
+        "config_dir": str(tmp_path / "cfg"),
+        "sandbox": sandbox or {},
+    }
+
+
+class FakeDocker:
+    """Records every docker argv; scripted per-subcommand results (see
+    tests/services/test_sandbox.py for the fuller twin)."""
+
+    def __init__(self) -> None:
+        self.calls: list[list[str]] = []
+        self.results: dict[str, subprocess.CompletedProcess] = {}
+        self.raises: dict[str, BaseException] = {}
+
+    def __call__(self, args, *, binary="docker", timeout=None, check=False):
+        self.calls.append(list(args))
+        key = " ".join(args)
+        for prefix, exc in self.raises.items():
+            if key.startswith(prefix):
+                raise exc
+        for prefix, result in self.results.items():
+            if key.startswith(prefix):
+                return result
+        return subprocess.CompletedProcess(args, 0, "", "")
+
+    def argv(self, prefix: str) -> list[list[str]]:
+        return [c for c in self.calls if " ".join(c).startswith(prefix)]
+
+
+@pytest.fixture
+def sbx_docker(monkeypatch):
+    from sovereign.services.docker import sandbox as sbx_mod
+
+    fake = FakeDocker()
+    fake.results["inspect"] = subprocess.CompletedProcess([], 0, "true\n", "")
+    monkeypatch.setattr(sbx_mod, "run_docker", fake)
+    return fake
+
+
+def test_sandboxed_invoke_full_flow(tmp_path, sbx_docker) -> None:
+    h = _harness(_sandbox_config(tmp_path))
+    result = h.invoke(Task(id="t1", prompt="fix the bug", workdir=str(tmp_path / "work")))
+
+    assert result.success is True
+    # Proxy forwards to the resolved engine port; agent joins the internal net.
+    (net_argv,) = sbx_docker.argv("network create")
+    assert "--internal" in net_argv
+    proxy_argv = next(a for a in sbx_docker.argv("run") if f"{a[3]}".endswith("-proxy"))
+    assert "TCP:host.docker.internal:11435" in proxy_argv
+    agent_argv = next(a for a in sbx_docker.argv("run") if f"{a[3]}".endswith("-agent"))
+    assert agent_argv[-5:] == [
+        "sovereign/cline-sandbox:latest",
+        "cline",
+        "--yolo",
+        "--json",
+        "fix the bug",
+    ]
+    # The staged CLINE_DIR config points at the in-sandbox proxy alias.
+    staged = list((tmp_path / "cfg" / "sandbox").rglob("cline_config.json"))
+    assert len(staged) == 1
+    settings = json.loads(staged[0].read_text())
+    assert settings["openAiCompatibleBaseUrl"] == "http://sovereign-llm:8000/v1"
+    assert settings["openAiCompatibleModelId"] == "llama3-70b"
+    # Teardown removed the network afterwards.
+    assert any(" ".join(a).startswith("network rm") for a in sbx_docker.calls)
+
+
+def test_sandboxed_invoke_env_is_allowlist_only(tmp_path, sbx_docker, monkeypatch) -> None:
+    monkeypatch.setenv("HOST_SECRET", "leak")
+    h = _harness(_sandbox_config(tmp_path))
+    h.invoke(Task(id="t1", prompt="x", workdir=str(tmp_path)))
+    agent_argv = next(a for a in sbx_docker.argv("run") if f"{a[3]}".endswith("-agent"))
+    env_pairs = [agent_argv[i + 1] for i, a in enumerate(agent_argv) if a == "-e"]
+    assert sorted(env_pairs) == ["CLINE_DIR=/cline", "HOME=/home/node"]
+    mounts = [agent_argv[i + 1] for i, a in enumerate(agent_argv) if a == "-v"]
+    assert f"{tmp_path}:/workspace" in mounts
+
+
+def test_sandboxed_invoke_requires_workdir(tmp_path, sbx_docker) -> None:
+    h = _harness(_sandbox_config(tmp_path))
+    result = h.invoke(Task(id="t1", prompt="x"))
+    assert result.success is False
+    assert "workdir" in str(result.metadata["error"])
+
+
+def test_sandboxed_invoke_docker_exit_maps_to_infra_error(tmp_path, sbx_docker) -> None:
+    sbx_docker.results["run --rm"] = subprocess.CompletedProcess([], 125, "", "no such image")
+    h = _harness(_sandbox_config(tmp_path))
+    result = h.invoke(Task(id="t1", prompt="x", workdir=str(tmp_path)))
+    assert result.success is False
+    assert result.exit_code == 125
+    assert result.metadata["error"] == "docker"
+
+
+def test_sandboxed_invoke_timeout_tears_down(tmp_path, sbx_docker) -> None:
+    sbx_docker.raises["run --rm"] = subprocess.TimeoutExpired(
+        cmd="run", timeout=1, output=b"partial"
+    )
+    h = _harness(_sandbox_config(tmp_path))
+    result = h.invoke(Task(id="t1", prompt="x", workdir=str(tmp_path)))
+    assert result.success is False
+    assert result.metadata["error"] == "timeout"
+    assert result.output == "partial"
+    assert any(" ".join(a).startswith("network rm sov-sbx-") for a in sbx_docker.calls)
+
+
+def test_sandboxed_invoke_network_none_skips_proxy(tmp_path, sbx_docker) -> None:
+    h = _harness(_sandbox_config(tmp_path, network="none"))
+    h.invoke(Task(id="t1", prompt="x", workdir=str(tmp_path)))
+    assert not sbx_docker.argv("network create")
+    agent_argv = next(a for a in sbx_docker.argv("run") if f"{a[3]}".endswith("-agent"))
+    assert agent_argv[agent_argv.index("--network") + 1] == "none"
+
+
+def test_sandbox_disabled_falls_back_to_native(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(cline_mod.shutil, "which", lambda _b: "/usr/local/bin/cline")
+    monkeypatch.setattr(cline_mod.subprocess, "run", lambda *a, **kw: FakeCompleted())
+    h = _harness(_sandbox_config(tmp_path, enabled=False))
+    result = h.invoke(Task(id="t1", prompt="x"))
+    assert result.success is True  # went through the host-subprocess path
+
+
+def test_sandboxed_prepare_environment_builds_default_image(tmp_path, sbx_docker) -> None:
+    sbx_docker.results["version"] = subprocess.CompletedProcess([], 0, "27.0\n", "")
+    sbx_docker.results["image inspect"] = subprocess.CompletedProcess([], 1, "", "")
+    h = _harness(_sandbox_config(tmp_path))
+    h.prepare_environment()
+    (build_argv,) = sbx_docker.argv("build")
+    assert build_argv[2] == "sovereign/cline-sandbox:latest"
+    assert build_argv[3].endswith("cline_cli/sandbox")
+
+
+def test_sandboxed_prepare_environment_skips_host_provisioning(
+    tmp_path, sbx_docker, monkeypatch
+) -> None:
+    from sovereign.core.provisioning import Provisioner
+
+    sbx_docker.results["version"] = subprocess.CompletedProcess([], 0, "27.0\n", "")
+    provisioned: list[type] = []
+    monkeypatch.setattr(Provisioner, "provision", classmethod(lambda cls: provisioned.append(cls)))
+    _harness(_sandbox_config(tmp_path)).prepare_environment()
+    assert provisioned == []
+
+
+def test_sandboxed_prepare_environment_daemon_down_raises(tmp_path, sbx_docker) -> None:
+    sbx_docker.results["version"] = subprocess.CompletedProcess([], 1, "", "")
+    h = _harness(_sandbox_config(tmp_path))
+    with pytest.raises(RuntimeError, match="daemon is not reachable"):
+        h.prepare_environment()
+
+
+def test_sandboxed_fingerprint_uses_image_not_host_binary(tmp_path, monkeypatch) -> None:
+    calls: list = []
+    monkeypatch.setattr(cline_mod.subprocess, "run", lambda *a, **kw: calls.append(a))
+    h = _harness(_sandbox_config(tmp_path))
+    fp = h.fingerprint()
+    assert fp["sandbox_image"] == "sovereign/cline-sandbox:latest"
+    assert "cline_version" not in fp and calls == []
+
+
+def test_sandboxed_invoke_rejects_remote_engine(tmp_path, sbx_docker) -> None:
+    from sovereign.services.docker.sandbox import SandboxError
+
+    h = _harness(
+        {
+            "base_url": "http://gpu-box.local:8080/v1",
+            "model": "m",
+            "config_dir": str(tmp_path / "cfg"),
+            "sandbox": {},
+        }
+    )
+    with pytest.raises(SandboxError, match="loopback"):
+        h.invoke(Task(id="t1", prompt="x", workdir=str(tmp_path)))

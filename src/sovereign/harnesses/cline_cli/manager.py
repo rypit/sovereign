@@ -39,6 +39,10 @@ if TYPE_CHECKING:
 # Per-command timeout for `cline --version` when building the fingerprint.
 _VERSION_PROBE_TIMEOUT = 5.0
 
+# Sovereign-owned sandbox image, built from the package's sandbox/ Dockerfile
+# on first use (ADR 0009). A user-supplied sandbox.image is pulled instead.
+DEFAULT_SANDBOX_IMAGE = "sovereign/cline-sandbox:latest"
+
 
 def _parse_ndjson(text: str) -> list[dict[str, Any]]:
     """Best-effort parse of ``--json`` NDJSON output; skips malformed lines."""
@@ -67,6 +71,31 @@ class ClineCliHarness(BaseHarness):
     def __init__(self, entry: HarnessEntry) -> None:
         super().__init__(entry)
         self.config = ClineCliConfig.model_validate(entry.config)
+
+    # --- sandbox (ADR 0009) ---
+    def _sandboxed(self) -> bool:
+        return self.config.sandbox is not None and self.config.sandbox.enabled
+
+    def _sandbox_image(self) -> str:
+        assert self.config.sandbox is not None
+        return self.config.sandbox.image or DEFAULT_SANDBOX_IMAGE
+
+    def prepare_environment(self) -> None:
+        """Host provisioning natively; daemon probe + image build/pull sandboxed."""
+        if not self._sandboxed():
+            super().prepare_environment()
+            return
+        from sovereign.services.docker import sandbox as sbx
+
+        cfg = self.config.sandbox
+        assert cfg is not None
+        if not sbx.daemon_reachable(binary=cfg.binary):
+            raise RuntimeError(
+                f"Docker daemon is not reachable via '{cfg.binary}' (needed by the "
+                f"'{self.name}' sandbox). Start Docker Desktop or OrbStack and retry."
+            )
+        context = Path(__file__).parent / "sandbox" if cfg.image is None else None
+        sbx.ensure_image(self._sandbox_image(), context_dir=context, binary=cfg.binary)
 
     # --- wiring ---
     def _config_dir(self) -> Path:
@@ -98,6 +127,11 @@ class ClineCliHarness(BaseHarness):
 
     def fingerprint(self) -> dict[str, object]:
         fp = super().fingerprint()
+        if self._sandboxed():
+            # The image tag is the version identity inside the sandbox; the
+            # host binary (possibly absent) is irrelevant to the run.
+            fp["sandbox_image"] = self._sandbox_image()
+            return fp
         binary = self._resolve_binary()
         if binary is not None:
             try:
@@ -112,6 +146,100 @@ class ClineCliHarness(BaseHarness):
                 pass
         return fp
 
+    def _cline_argv(self, binary: str, task: Task) -> list[str]:
+        args = [binary, "--yolo", "--json", task.prompt]
+        if self.config.max_turns is not None:
+            args += ["--max-turns", str(self.config.max_turns)]
+        return args
+
+    def _run_result(self, task: Task, returncode: int, stdout: str, stderr: str) -> RunResult:
+        events = _parse_ndjson(stdout)
+        return RunResult(
+            task_id=task.id,
+            success=returncode == 0,
+            exit_code=returncode,
+            output=stdout,
+            metadata={"events": events, "stderr": stderr},
+        )
+
+    def _invoke_sandboxed(self, task: Task) -> RunResult:
+        """One throwaway container per task, engine-only egress (ADR 0009)."""
+        from sovereign.services.docker import sandbox as sbx
+
+        cfg = self.config.sandbox
+        assert cfg is not None
+        if not task.workdir:
+            return RunResult(
+                task_id=task.id,
+                success=False,
+                metadata={"error": "sandbox requires a task workdir"},
+            )
+
+        sbx.sweep_leftovers(binary=cfg.binary, harness=self.name)
+        sid = sbx.sandbox_id(self.name)
+        base_url = self._resolved("base_url", self.config.base_url)
+        engine_port, container_url = sbx.rewrite_base_url(base_url)
+
+        # Per-invoke staging CLINE_DIR: same settings materialize() writes, but
+        # the base URL points at the in-sandbox proxy alias instead of the host.
+        staging = self._config_dir() / "sandbox" / sid
+        staging.mkdir(parents=True, exist_ok=True)
+        settings = {
+            "apiProvider": "openai-compatible",
+            "openAiCompatibleBaseUrl": container_url,
+            "openAiCompatibleModelId": self._resolved("model", self.config.model),
+            "openAiCompatibleApiKey": self._resolved("api_key", self.config.api_key),
+        }
+        (staging / "cline_config.json").write_text(json.dumps(settings, indent=2) + "\n")
+
+        try:
+            if cfg.network == "engine_only":
+                sbx.create_internal_network(sid, harness_name=self.name, binary=cfg.binary)
+                sbx.start_egress_proxy(
+                    sid,
+                    engine_port,
+                    harness_name=self.name,
+                    image=cfg.proxy_image,
+                    binary=cfg.binary,
+                )
+                network = sid
+            else:
+                network = "none"
+            proc = sbx.run_sandboxed(
+                sid,
+                harness_name=self.name,
+                image=self._sandbox_image(),
+                argv=self._cline_argv("cline", task),
+                mounts=[f"{task.workdir}:/workspace", f"{staging}:/cline", *cfg.mounts],
+                # The container env is exactly this allowlist — never os.environ.
+                env={"CLINE_DIR": "/cline", "HOME": "/home/node"},
+                network=network,
+                memory_bytes=cfg.memory_bytes,
+                workdir="/workspace",
+                timeout=self.config.timeout_seconds,
+                binary=cfg.binary,
+            )
+        except sbx.SandboxTimeout as exc:
+            return RunResult(
+                task_id=task.id,
+                success=False,
+                output=exc.partial_stdout,
+                metadata={"error": "timeout"},
+            )
+        finally:
+            sbx.teardown_sandbox(sid, binary=cfg.binary)
+
+        if proc.returncode in (125, 126, 127):
+            # Docker infrastructure failure (image/daemon/entrypoint), not cline.
+            return RunResult(
+                task_id=task.id,
+                success=False,
+                exit_code=proc.returncode,
+                output=proc.stdout,
+                metadata={"error": "docker", "stderr": proc.stderr},
+            )
+        return self._run_result(task, proc.returncode, proc.stdout, proc.stderr)
+
     # --- invocation ---
     def invoke(self, task: Task) -> RunResult:
         """Run one headless ``cline --yolo --json`` session and parse its NDJSON.
@@ -119,6 +247,8 @@ class ClineCliHarness(BaseHarness):
         Self-reported success is metadata, not proof — grading (diff + tests)
         happens separately at the bench layer.
         """
+        if self._sandboxed():
+            return self._invoke_sandboxed(task)
         binary = self._resolve_binary()
         if binary is None:
             raise FileNotFoundError(
@@ -127,9 +257,7 @@ class ClineCliHarness(BaseHarness):
             )
 
         env = {**os.environ, "CLINE_DIR": str(self._config_dir())}
-        args = [binary, "--yolo", "--json", task.prompt]
-        if self.config.max_turns is not None:
-            args += ["--max-turns", str(self.config.max_turns)]
+        args = self._cline_argv(binary, task)
 
         try:
             proc = subprocess.run(  # noqa: S603 - argv is constructed, not shell
@@ -150,11 +278,4 @@ class ClineCliHarness(BaseHarness):
                 metadata={"error": "timeout"},
             )
 
-        events = _parse_ndjson(proc.stdout)
-        return RunResult(
-            task_id=task.id,
-            success=proc.returncode == 0,
-            exit_code=proc.returncode,
-            output=proc.stdout,
-            metadata={"events": events, "stderr": proc.stderr},
-        )
+        return self._run_result(task, proc.returncode, proc.stdout, proc.stderr)
