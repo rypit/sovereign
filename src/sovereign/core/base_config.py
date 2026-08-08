@@ -82,6 +82,13 @@ class SandboxConfig(SovereignBaseModel):
     #: ``none`` = ``--network none``. Harnesses whose LLM traffic originates on
     #: the host may ignore ``engine_only`` and always isolate fully.
     network: Literal["engine_only", "none"] = "engine_only"
+    #: Additional stack services the sandboxed agent may reach (service names,
+    #: e.g. ``[searxng]``). Each gets its own proxy route + in-sandbox alias
+    #: (``sovereign-<name>``), published to the agent as
+    #: ``SOVEREIGN_<NAME>_URL``. Opt-in: every entry widens the egress surface
+    #: beyond the engine — a service that itself reaches the internet (like
+    #: searxng) reopens an indirect channel. Ignored under ``network: none``.
+    allow: list[str] = Field(default_factory=list)
     #: Optional hard cap mapped to ``docker run --memory``. Sandboxes are NOT
     #: counted against the stack's admission budget (ADR 0009).
     memory_bytes: GbBytes | None = Field(default=None, gt=0, validation_alias="memory_gb")

@@ -89,8 +89,9 @@ clean against every rule above.
   A harness with a `sandbox:` block runs its invoke inside a per-invoke
   throwaway Docker container (`services/docker/sandbox.py`, ADR 0009):
   sandbox objects are label-tracked (`sovereign.sandbox=1`), excluded from
-  admission control and `DockerMonitorWorker`, and their only network route
-  — if any — is the local engine via an internal network + egress proxy.
+  admission control and `DockerMonitorWorker`, and their only network routes
+  — if any — are the local engine plus explicitly `sandbox.allow`-listed
+  local services, each via its own egress proxy on an internal network.
   Harnesses import the sandbox module lazily inside methods (discovery
   imports harness modules unconditionally); the leaf-consumer direction is
   unchanged — nothing imports harnesses back.

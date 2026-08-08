@@ -24,13 +24,22 @@ network egress, which is the requirement that motivates this change.
   supervised, health-polled, boot-persisted, or admission-counted; sandboxes
   are excluded from the memory budget (an optional `memory_gb` maps to
   `docker run --memory` instead) and from `DockerMonitorWorker`.
-- **Strict engine-only egress.** In `engine_only` mode the agent container
-  joins an `--internal` network whose only other member is a socat proxy
-  (attached to the bridge with `--add-host host.docker.internal:host-gateway`)
-  forwarding one TCP port to the native engine. The agent reaches the LLM at
-  the fixed alias `http://sovereign-llm:8000` and nothing else. `none` mode
-  is `--network none` — used by harnesses whose LLM traffic originates on the
-  host (mini_swe_agent), where the command container needs no network at all.
+- **Strict engine-only egress, widened only by explicit allow-listing.** In
+  `engine_only` mode the agent container joins an `--internal` network whose
+  only other members are socat proxies (attached to the bridge with
+  `--add-host host.docker.internal:host-gateway`), one per permitted route.
+  The engine route always exists — the agent reaches the LLM at the fixed
+  alias `http://sovereign-llm:8000`. Additional stack services (e.g.
+  `searxng`, or a host-side HTTP MCP declared as a service) are reachable
+  only when named in `sandbox.allow`: each gets its own sidecar + alias
+  (`sovereign-<name>`) and is published to the agent as
+  `SOVEREIGN_<NAME>_URL`. Allow-listing is a deliberate widening — a routed
+  service that itself reaches the internet reopens an indirect exfiltration
+  channel, so the default stays engine-only. Allow-listed services must
+  resolve to a local (loopback) endpoint. `none` mode is `--network none` —
+  used by harnesses whose LLM traffic originates on the host
+  (mini_swe_agent), where the command container needs no network at all;
+  `allow` is ignored there.
 - **Invoke-time endpoint rewrite, no new `ConsumerKind`.** Harness resolution
   stays `NATIVE` (host-truth base_url); the sandbox path parses the loopback
   port out of the resolved URL and substitutes the proxy alias only inside

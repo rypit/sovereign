@@ -99,30 +99,52 @@ def test_create_internal_network_failure_raises(docker: FakeDocker) -> None:
         sbx.create_internal_network("sid", harness_name="h")
 
 
-def test_start_egress_proxy_argv_and_alias(docker: FakeDocker) -> None:
+def test_start_egress_proxies_argv_and_alias(docker: FakeDocker) -> None:
     docker.script("inspect", stdout="true\n")
-    sbx.start_egress_proxy("sid", 11434, harness_name="h")
+    sbx.start_egress_proxies("sid", {sbx.PROXY_ALIAS: 11434}, harness_name="h")
     (run_argv,) = docker.argv("run")
     assert "host.docker.internal:host-gateway" in run_argv
     assert f"TCP-LISTEN:{sbx.PROXY_PORT},fork,reuseaddr" in run_argv
     assert "TCP:host.docker.internal:11434" in run_argv
     (connect_argv,) = docker.argv("network connect")
-    assert connect_argv == ["network", "connect", "--alias", sbx.PROXY_ALIAS, "sid", "sid-proxy"]
+    assert connect_argv == [
+        "network", "connect", "--alias", sbx.PROXY_ALIAS, "sid", f"sid-{sbx.PROXY_ALIAS}",
+    ]
 
 
-def test_start_egress_proxy_never_ready_rolls_back(docker: FakeDocker, monkeypatch) -> None:
+def test_start_egress_proxies_one_sidecar_per_route(docker: FakeDocker) -> None:
+    docker.script("inspect", stdout="true\n")
+    sbx.start_egress_proxies(
+        "sid", {sbx.PROXY_ALIAS: 11434, "sovereign-searxng": 8888}, harness_name="h"
+    )
+    run_argvs = docker.argv("run")
+    assert len(run_argvs) == 2
+    assert any("TCP:host.docker.internal:11434" in a for a in run_argvs)
+    assert any("TCP:host.docker.internal:8888" in a for a in run_argvs)
+    connects = docker.argv("network connect")
+    aliases = [a[a.index("--alias") + 1] for a in connects]
+    assert aliases == [sbx.PROXY_ALIAS, "sovereign-searxng"]
+
+
+def test_start_egress_proxies_never_ready_rolls_back(docker: FakeDocker, monkeypatch) -> None:
     monkeypatch.setattr(sbx.time, "sleep", lambda _s: None)
     docker.script("inspect", stdout="false\n")
     with pytest.raises(sbx.SandboxError, match="never reached running"):
-        sbx.start_egress_proxy("sid", 11434, harness_name="h")
-    assert docker.argv("rm -f sid-proxy") and docker.argv("network rm sid")
+        sbx.start_egress_proxies("sid", {sbx.PROXY_ALIAS: 11434}, harness_name="h")
+    assert docker.argv("ps -aq") and docker.argv("network rm sid")
 
 
-def test_start_egress_proxy_run_failure_rolls_back(docker: FakeDocker) -> None:
+def test_start_egress_proxies_run_failure_rolls_back(docker: FakeDocker) -> None:
     docker.script("run", returncode=125, stderr="no such image")
     with pytest.raises(sbx.SandboxError, match="no such image"):
-        sbx.start_egress_proxy("sid", 11434, harness_name="h")
+        sbx.start_egress_proxies("sid", {sbx.PROXY_ALIAS: 11434}, harness_name="h")
     assert docker.argv("network rm sid")
+
+
+def test_service_alias_and_env_var() -> None:
+    assert sbx.service_alias("searxng") == "sovereign-searxng"
+    assert sbx.service_env_var("searxng") == "SOVEREIGN_SEARXNG_URL"
+    assert sbx.service_env_var("my-mcp.v2") == "SOVEREIGN_MY_MCP_V2_URL"
 
 
 # --- run_sandboxed ---
@@ -170,10 +192,19 @@ def test_run_sandboxed_timeout_kills_and_carries_stdout(docker: FakeDocker) -> N
 
 
 # --- teardown / sweep ---
-def test_teardown_removes_everything_never_raises(docker: FakeDocker) -> None:
-    docker.raises["rm -f sid-agent"] = OSError("gone")
+def test_teardown_removes_by_sandbox_id_label(docker: FakeDocker) -> None:
+    docker.script("ps -aq", stdout="c1\nc2\n")
     sbx.teardown_sandbox("sid")
-    assert docker.argv("rm -f sid-proxy") and docker.argv("network rm sid")
+    (ps_argv,) = docker.argv("ps -aq")
+    assert f"label={sbx.SANDBOX_ID_LABEL}=sid" in ps_argv
+    assert docker.argv("rm -f c1") and docker.argv("rm -f c2")
+    assert docker.argv("network rm sid")
+
+
+def test_teardown_never_raises(docker: FakeDocker) -> None:
+    docker.raises["ps -aq"] = OSError("gone")
+    sbx.teardown_sandbox("sid")
+    assert docker.argv("network rm sid")
 
 
 def test_sweep_filters_by_label_and_scopes_by_harness(docker: FakeDocker) -> None:

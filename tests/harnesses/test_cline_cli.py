@@ -36,6 +36,7 @@ def _entry(config: dict | None = None) -> HarnessEntry:
 def _resolver() -> Resolver:
     reg = ServiceRegistry()
     reg.register("engine", ResolvedEndpoint("http", "127.0.0.1", 11435, model="llama3-70b"))
+    reg.register("searxng", ResolvedEndpoint("http", "127.0.0.1", 8888))
     return Resolver(reg, env={})
 
 
@@ -284,7 +285,7 @@ def test_sandboxed_invoke_full_flow(tmp_path, sbx_docker) -> None:
     # Proxy forwards to the resolved engine port; agent joins the internal net.
     (net_argv,) = sbx_docker.argv("network create")
     assert "--internal" in net_argv
-    proxy_argv = next(a for a in sbx_docker.argv("run") if f"{a[3]}".endswith("-proxy"))
+    proxy_argv = next(a for a in sbx_docker.argv("run") if f"{a[3]}".endswith("-sovereign-llm"))
     assert "TCP:host.docker.internal:11435" in proxy_argv
     agent_argv = next(a for a in sbx_docker.argv("run") if f"{a[3]}".endswith("-agent"))
     assert agent_argv[-5:] == [
@@ -395,6 +396,53 @@ def test_sandboxed_fingerprint_uses_image_not_host_binary(tmp_path, monkeypatch)
     fp = h.fingerprint()
     assert fp["sandbox_image"] == "sovereign/cline-sandbox:latest"
     assert "cline_version" not in fp and calls == []
+
+
+def test_sandboxed_allow_routes_extra_service(tmp_path, sbx_docker) -> None:
+    h = _harness(_sandbox_config(tmp_path, allow=["searxng"]))
+    h.invoke(Task(id="t1", prompt="x", workdir=str(tmp_path)))
+    # Two proxy sidecars: the engine + the allow-listed service.
+    proxy_targets = {a[-1] for a in sbx_docker.argv("run") if a[-1].startswith("TCP:")}
+    assert proxy_targets == {
+        "TCP:host.docker.internal:11435",
+        "TCP:host.docker.internal:8888",
+    }
+    connects = sbx_docker.argv("network connect")
+    aliases = {a[a.index("--alias") + 1] for a in connects}
+    assert aliases == {"sovereign-llm", "sovereign-searxng"}
+    # The agent learns the reachable address via the published env var.
+    agent_argv = next(a for a in sbx_docker.argv("run") if f"{a[3]}".endswith("-agent"))
+    env_pairs = [agent_argv[i + 1] for i, a in enumerate(agent_argv) if a == "-e"]
+    assert "SOVEREIGN_SEARXNG_URL=http://sovereign-searxng:8000" in env_pairs
+
+
+def test_sandboxed_allow_unknown_service_raises(tmp_path, sbx_docker) -> None:
+    from sovereign.services.docker.sandbox import SandboxError
+
+    h = _harness(_sandbox_config(tmp_path, allow=["ghost"]))
+    with pytest.raises(SandboxError, match="'ghost' is not in the running stack"):
+        h.invoke(Task(id="t1", prompt="x", workdir=str(tmp_path)))
+
+
+def test_sandboxed_allow_remote_service_raises(tmp_path, sbx_docker) -> None:
+    from sovereign.core.resolver import ResolvedEndpoint, Resolver, ServiceRegistry
+    from sovereign.services.docker.sandbox import SandboxError
+
+    reg = ServiceRegistry()
+    reg.register("engine", ResolvedEndpoint("http", "127.0.0.1", 11435, model="m"))
+    reg.register("remote_svc", ResolvedEndpoint("http", "gpu-box.local", 9999))
+    h = ClineCliHarness(_entry(_sandbox_config(tmp_path, allow=["remote_svc"])))
+    h.resolve(Resolver(reg, env={}))
+    with pytest.raises(SandboxError, match="non-local host"):
+        h.invoke(Task(id="t1", prompt="x", workdir=str(tmp_path)))
+
+
+def test_sandboxed_allow_ignored_under_network_none(tmp_path, sbx_docker) -> None:
+    h = _harness(_sandbox_config(tmp_path, network="none", allow=["ghost"]))
+    result = h.invoke(Task(id="t1", prompt="x", workdir=str(tmp_path)))
+    # No proxies, no registry lookup for 'ghost' — the run proceeds offline.
+    assert result.success is True
+    assert not sbx_docker.argv("network create")
 
 
 def test_sandboxed_invoke_rejects_remote_engine(tmp_path, sbx_docker) -> None:

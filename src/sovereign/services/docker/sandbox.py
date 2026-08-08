@@ -20,6 +20,7 @@ tests already patch for the ``docker`` service.
 from __future__ import annotations
 
 import logging
+import re
 import subprocess
 import time
 import uuid
@@ -35,8 +36,11 @@ logger = logging.getLogger("sovereign")
 SANDBOX_LABEL = "sovereign.sandbox"
 #: Label carrying the owning harness's instance name (scoped sweeps).
 HARNESS_LABEL = "sovereign.harness"
-#: In-network alias + listen port of the egress proxy. Fixed values are safe:
-#: each sandbox gets its own namespaced network.
+#: Label carrying the sandbox instance id (per-sandbox teardown).
+SANDBOX_ID_LABEL = "sovereign.sandbox_id"
+#: In-network alias of the engine's egress proxy, and the listen port every
+#: proxy uses. Fixed values are safe: each sandbox gets its own namespaced
+#: network, and each route gets its own proxy container.
 PROXY_ALIAS = "sovereign-llm"
 PROXY_PORT = 8000
 
@@ -71,8 +75,23 @@ def _labels(sid: str, harness_name: str) -> list[str]:
         "--label",
         f"{HARNESS_LABEL}={harness_name}",
         "--label",
-        f"sovereign.sandbox_id={sid}",
+        f"{SANDBOX_ID_LABEL}={sid}",
     ]
+
+
+def is_loopback_host(host: str) -> bool:
+    """True iff ``host`` means "this machine" (proxy-routable via host-gateway)."""
+    return host in _LOOPBACK
+
+
+def service_alias(name: str) -> str:
+    """The in-sandbox network alias for an allow-listed service."""
+    return f"sovereign-{name}"
+
+
+def service_env_var(name: str) -> str:
+    """The env var publishing an allow-listed service's in-sandbox URL."""
+    return "SOVEREIGN_" + re.sub(r"[^A-Za-z0-9]", "_", name).upper() + "_URL"
 
 
 def rewrite_base_url(base_url: str) -> tuple[int, str]:
@@ -104,60 +123,68 @@ def create_internal_network(sid: str, *, harness_name: str, binary: str = "docke
         raise SandboxError(f"failed to create sandbox network '{sid}': {result.stderr.strip()}")
 
 
-def start_egress_proxy(
+def start_egress_proxies(
     sid: str,
-    engine_port: int,
+    routes: Mapping[str, int],
     *,
     harness_name: str,
     image: str = "alpine/socat",
     binary: str = "docker",
 ) -> None:
-    """Start the socat sidecar bridging the internal network to the engine port.
+    """Start one socat sidecar per route, bridging the internal network out.
 
-    The proxy sits on the default bridge (where ``host.docker.internal`` is
-    reachable) and is then connected into the internal network under the fixed
-    ``sovereign-llm`` alias — the only path out of the sandbox. Rolls back and
-    raises :class:`SandboxError` if the proxy never reports running.
+    ``routes`` maps an in-sandbox alias to a host port — the engine route
+    (``sovereign-llm``) plus one per allow-listed service. Each proxy sits on
+    the default bridge (where ``host.docker.internal`` is reachable) and is
+    connected into the internal network under its alias; together they are the
+    only paths out of the sandbox. Rolls back the whole sandbox and raises
+    :class:`SandboxError` if any proxy fails to come up.
     """
-    run_args = [
-        "run",
-        "-d",
-        "--name",
-        f"{sid}-proxy",
-        *_labels(sid, harness_name),
-        "--add-host",
-        "host.docker.internal:host-gateway",
-        image,
-        f"TCP-LISTEN:{PROXY_PORT},fork,reuseaddr",
-        f"TCP:host.docker.internal:{engine_port}",
-    ]
-    result = run_docker(run_args, binary=binary, timeout=60)
-    if result.returncode != 0:
-        teardown_sandbox(sid, binary=binary)
-        raise SandboxError(f"failed to start egress proxy for '{sid}': {result.stderr.strip()}")
-
-    connect = run_docker(
-        ["network", "connect", "--alias", PROXY_ALIAS, sid, f"{sid}-proxy"],
-        binary=binary,
-        timeout=30,
-    )
-    if connect.returncode != 0:
-        teardown_sandbox(sid, binary=binary)
-        raise SandboxError(
-            f"failed to attach egress proxy to sandbox network '{sid}': {connect.stderr.strip()}"
-        )
-
-    for _ in range(_PROXY_READY_TRIES):
-        probe = run_docker(
-            ["inspect", "-f", "{{.State.Running}}", f"{sid}-proxy"],
+    for alias, port in routes.items():
+        name = f"{sid}-{alias}"
+        run_args = [
+            "run",
+            "-d",
+            "--name",
+            name,
+            *_labels(sid, harness_name),
+            "--add-host",
+            "host.docker.internal:host-gateway",
+            image,
+            f"TCP-LISTEN:{PROXY_PORT},fork,reuseaddr",
+            f"TCP:host.docker.internal:{port}",
+        ]
+        result = run_docker(run_args, binary=binary, timeout=60)
+        if result.returncode != 0:
+            teardown_sandbox(sid, binary=binary)
+            raise SandboxError(
+                f"failed to start egress proxy '{alias}' for '{sid}': {result.stderr.strip()}"
+            )
+        connect = run_docker(
+            ["network", "connect", "--alias", alias, sid, name],
             binary=binary,
-            timeout=10,
+            timeout=30,
         )
-        if probe.returncode == 0 and probe.stdout.strip() == "true":
-            return
-        time.sleep(_PROXY_READY_DELAY)
-    teardown_sandbox(sid, binary=binary)
-    raise SandboxError(f"egress proxy for '{sid}' never reached running state")
+        if connect.returncode != 0:
+            teardown_sandbox(sid, binary=binary)
+            raise SandboxError(
+                f"failed to attach egress proxy '{alias}' to sandbox network '{sid}': "
+                f"{connect.stderr.strip()}"
+            )
+
+    for alias in routes:
+        for _ in range(_PROXY_READY_TRIES):
+            probe = run_docker(
+                ["inspect", "-f", "{{.State.Running}}", f"{sid}-{alias}"],
+                binary=binary,
+                timeout=10,
+            )
+            if probe.returncode == 0 and probe.stdout.strip() == "true":
+                break
+            time.sleep(_PROXY_READY_DELAY)
+        else:
+            teardown_sandbox(sid, binary=binary)
+            raise SandboxError(f"egress proxy '{alias}' for '{sid}' never reached running state")
 
 
 def run_sandboxed(
@@ -206,12 +233,21 @@ def run_sandboxed(
 
 
 def teardown_sandbox(sid: str, *, binary: str = "docker") -> None:
-    """Remove one sandbox's containers and network. Never raises."""
-    for name in (f"{sid}-agent", f"{sid}-proxy"):
-        try:
-            run_docker(["rm", "-f", name], binary=binary, timeout=30)
-        except (OSError, subprocess.SubprocessError):  # pragma: no cover - best effort
-            pass
+    """Remove one sandbox's containers (agent + every proxy) and network.
+
+    Container discovery goes by the per-sandbox id label rather than by name,
+    so a variable number of proxy sidecars is torn down uniformly. Never raises.
+    """
+    try:
+        ps = run_docker(
+            ["ps", "-aq", "--filter", f"label={SANDBOX_ID_LABEL}={sid}"],
+            binary=binary,
+            timeout=30,
+        )
+        for cid in ps.stdout.split():
+            run_docker(["rm", "-f", cid], binary=binary, timeout=30)
+    except (OSError, subprocess.SubprocessError):  # pragma: no cover - best effort
+        pass
     try:
         run_docker(["network", "rm", sid], binary=binary, timeout=30)
     except (OSError, subprocess.SubprocessError):  # pragma: no cover - best effort

@@ -23,6 +23,7 @@ drift from a future Cline release.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import shutil
 import subprocess
@@ -35,6 +36,8 @@ from sovereign.harnesses.cline_cli.config import ClineCliConfig
 
 if TYPE_CHECKING:
     from sovereign.config import HarnessEntry
+
+logger = logging.getLogger("sovereign")
 
 # Per-command timeout for `cline --version` when building the fingerprint.
 _VERSION_PROBE_TIMEOUT = 5.0
@@ -162,8 +165,48 @@ class ClineCliHarness(BaseHarness):
             metadata={"events": events, "stderr": stderr},
         )
 
+    def _allowed_routes(self) -> tuple[dict[str, int], dict[str, str]]:
+        """Proxy routes + published env vars for ``sandbox.allow`` services.
+
+        Each allow-listed service name is resolved against the live registry
+        (the same one ``resolve()`` ran with) and becomes an in-sandbox alias
+        ``sovereign-<name>`` plus a ``SOVEREIGN_<NAME>_URL`` env var, so the
+        agent can discover the reachable address without guessing ports.
+        """
+        from sovereign.services.docker import sandbox as sbx
+
+        cfg = self.config.sandbox
+        assert cfg is not None
+        routes: dict[str, int] = {}
+        env: dict[str, str] = {}
+        if not cfg.allow:
+            return routes, env
+        if self.resolver is None:
+            raise sbx.SandboxError(
+                f"harness '{self.name}' has sandbox.allow set but was never resolved "
+                "against a running stack"
+            )
+        for name in cfg.allow:
+            if name not in self.resolver.registry:
+                raise sbx.SandboxError(
+                    f"sandbox.allow service '{name}' is not in the running stack's "
+                    f"registry for harness '{self.name}' — is it booted (and listed "
+                    "in this harness's dependencies)?"
+                )
+            endpoint = self.resolver.registry.get(name)
+            if not sbx.is_loopback_host(endpoint.host):
+                raise sbx.SandboxError(
+                    f"sandbox.allow service '{name}' resolves to non-local host "
+                    f"'{endpoint.host}' — only local services can be proxy-routed"
+                )
+            alias = sbx.service_alias(name)
+            routes[alias] = endpoint.port
+            env[sbx.service_env_var(name)] = f"http://{alias}:{sbx.PROXY_PORT}"
+        return routes, env
+
     def _invoke_sandboxed(self, task: Task) -> RunResult:
-        """One throwaway container per task, engine-only egress (ADR 0009)."""
+        """One throwaway container per task; egress only to the engine plus
+        explicitly allow-listed services (ADR 0009)."""
         from sovereign.services.docker import sandbox as sbx
 
         cfg = self.config.sandbox
@@ -179,6 +222,14 @@ class ClineCliHarness(BaseHarness):
         sid = sbx.sandbox_id(self.name)
         base_url = self._resolved("base_url", self.config.base_url)
         engine_port, container_url = sbx.rewrite_base_url(base_url)
+        allow_routes: dict[str, int] = {}
+        allow_env: dict[str, str] = {}
+        if cfg.network == "engine_only":
+            allow_routes, allow_env = self._allowed_routes()
+        elif cfg.allow:
+            logger.debug(
+                "harness '%s': sandbox.allow is ignored under network 'none'", self.name
+            )
 
         # Per-invoke staging CLINE_DIR: same settings materialize() writes, but
         # the base URL points at the in-sandbox proxy alias instead of the host.
@@ -195,9 +246,9 @@ class ClineCliHarness(BaseHarness):
         try:
             if cfg.network == "engine_only":
                 sbx.create_internal_network(sid, harness_name=self.name, binary=cfg.binary)
-                sbx.start_egress_proxy(
+                sbx.start_egress_proxies(
                     sid,
-                    engine_port,
+                    {sbx.PROXY_ALIAS: engine_port, **allow_routes},
                     harness_name=self.name,
                     image=cfg.proxy_image,
                     binary=cfg.binary,
@@ -212,7 +263,7 @@ class ClineCliHarness(BaseHarness):
                 argv=self._cline_argv("cline", task),
                 mounts=[f"{task.workdir}:/workspace", f"{staging}:/cline", *cfg.mounts],
                 # The container env is exactly this allowlist — never os.environ.
-                env={"CLINE_DIR": "/cline", "HOME": "/home/node"},
+                env={"CLINE_DIR": "/cline", "HOME": "/home/node", **allow_env},
                 network=network,
                 memory_bytes=cfg.memory_bytes,
                 workdir="/workspace",
