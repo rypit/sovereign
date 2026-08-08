@@ -1,6 +1,6 @@
 # Internal dependency graph
 
-_Generated 2026-07-19 by `scripts/depgraph.py` — 76 modules, 195 internal import edges (171 runtime, 24 type-annotation-only). Regenerate with `make graph`._
+_Generated 2026-08-08 by `scripts/depgraph.py` — 82 modules, 207 internal import edges (181 runtime, 26 type-annotation-only). Regenerate with `make graph`._
 
 Nodes are modules under `sovereign`, grouped by top-level package. Only imports internal to the package are shown. Solid arrows (`-->`) are runtime imports; dashed arrows (`-.->`) are type-annotation-only imports (`if TYPE_CHECKING:` blocks). Type-only edges are excluded from cycle detection and fan-in/fan-out. Modules that participate in a runtime import cycle are outlined in red.
 
@@ -47,6 +47,12 @@ graph LR
     n_sovereign_harnesses_mini_swe_agent["harnesses/mini_swe_agent/__init__.py"]
     n_sovereign_harnesses_mini_swe_agent_config["harnesses/mini_swe_agent/config.py"]
     n_sovereign_harnesses_mini_swe_agent_manager["harnesses/mini_swe_agent/manager.py"]
+    n_sovereign_harnesses_opencode["harnesses/opencode/__init__.py"]
+    n_sovereign_harnesses_opencode_config["harnesses/opencode/config.py"]
+    n_sovereign_harnesses_opencode_manager["harnesses/opencode/manager.py"]
+    n_sovereign_harnesses_pi["harnesses/pi/__init__.py"]
+    n_sovereign_harnesses_pi_config["harnesses/pi/config.py"]
+    n_sovereign_harnesses_pi_manager["harnesses/pi/manager.py"]
   end
   subgraph runtime
     n_sovereign_runtime_dashboard["runtime/dashboard.py"]
@@ -192,6 +198,16 @@ graph LR
   n_sovereign_harnesses_mini_swe_agent_manager --> n_sovereign_core_base_harness
   n_sovereign_harnesses_mini_swe_agent_manager --> n_sovereign_core_registry
   n_sovereign_harnesses_mini_swe_agent_manager --> n_sovereign_harnesses_mini_swe_agent_config
+  n_sovereign_harnesses_opencode --> n_sovereign_harnesses_opencode_manager
+  n_sovereign_harnesses_opencode_config --> n_sovereign_core_base_config
+  n_sovereign_harnesses_opencode_manager --> n_sovereign_core_base_harness
+  n_sovereign_harnesses_opencode_manager --> n_sovereign_core_registry
+  n_sovereign_harnesses_opencode_manager --> n_sovereign_harnesses_opencode_config
+  n_sovereign_harnesses_pi --> n_sovereign_harnesses_pi_manager
+  n_sovereign_harnesses_pi_config --> n_sovereign_core_base_config
+  n_sovereign_harnesses_pi_manager --> n_sovereign_core_base_harness
+  n_sovereign_harnesses_pi_manager --> n_sovereign_core_registry
+  n_sovereign_harnesses_pi_manager --> n_sovereign_harnesses_pi_config
   n_sovereign_runtime_dashboard --> n_sovereign
   n_sovereign_runtime_dashboard --> n_sovereign_core_state
   n_sovereign_runtime_dashboard --> n_sovereign_core_units
@@ -280,6 +296,8 @@ graph LR
   n_sovereign_core_registry -.-> n_sovereign_config
   n_sovereign_harnesses_cline_cli_manager -.-> n_sovereign_config
   n_sovereign_harnesses_mini_swe_agent_manager -.-> n_sovereign_config
+  n_sovereign_harnesses_opencode_manager -.-> n_sovereign_config
+  n_sovereign_harnesses_pi_manager -.-> n_sovereign_config
   n_sovereign_runtime_dashboard -.-> n_sovereign_runtime_orchestrator
   n_sovereign_runtime_manifest -.-> n_sovereign_runtime_orchestrator
   n_sovereign_services_inference_llama_cpp_manager -.-> n_sovereign_services_inference_hf
@@ -305,17 +323,17 @@ Sorted by total coupling (fan-in + fan-out). Counts runtime edges only. High fan
 
 | Module | Fan-in | Fan-out | Total |
 | --- | ---: | ---: | ---: |
-| `core/registry.py` | 13 | 4 | 17 |
+| `core/registry.py` | 15 | 4 | 19 |
 | `cli/stack.py` | 1 | 15 | 16 |
 | `runtime/orchestrator.py` | 2 | 13 | 15 |
+| `core/base_config.py` | 13 | 1 | 14 |
 | `core/state.py` | 13 | 0 | 13 |
 | `services/inference/base.py` | 4 | 9 | 13 |
-| `core/base_config.py` | 11 | 1 | 12 |
 | `bench/quality.py` | 2 | 9 | 11 |
 | `cli/_common.py` | 5 | 6 | 11 |
+| `core/base_harness.py` | 9 | 2 | 11 |
 | `bench/cli.py` | 1 | 9 | 10 |
 | `config.py` | 9 | 1 | 10 |
-| `core/base_harness.py` | 7 | 2 | 9 |
 | `core/units.py` | 9 | 0 | 9 |
 | `services/docker/manager.py` | 3 | 6 | 9 |
 | `bench/cleanroom.py` | 1 | 7 | 8 |
@@ -338,6 +356,8 @@ Sorted by total coupling (fan-in + fan-out). Counts runtime edges only. High fan
 | `core/errors.py` | 4 | 0 | 4 |
 | `harnesses/cline_cli/manager.py` | 1 | 3 | 4 |
 | `harnesses/mini_swe_agent/manager.py` | 1 | 3 | 4 |
+| `harnesses/opencode/manager.py` | 1 | 3 | 4 |
+| `harnesses/pi/manager.py` | 1 | 3 | 4 |
 | `runtime/manifest.py` | 1 | 3 | 4 |
 | `services/inference/mlx_lm/manager.py` | 1 | 3 | 4 |
 | `services/inference/routing.py` | 0 | 4 | 4 |
@@ -354,6 +374,8 @@ Sorted by total coupling (fan-in + fan-out). Counts runtime edges only. High fan
 | `core/procmem.py` | 2 | 0 | 2 |
 | `harnesses/cline_cli/config.py` | 1 | 1 | 2 |
 | `harnesses/mini_swe_agent/config.py` | 1 | 1 | 2 |
+| `harnesses/opencode/config.py` | 1 | 1 | 2 |
+| `harnesses/pi/config.py` | 1 | 1 | 2 |
 | `services/docker/config.py` | 1 | 1 | 2 |
 | `services/inference/comfyui/config.py` | 1 | 1 | 2 |
 | `services/inference/llama_cpp/config.py` | 1 | 1 | 2 |
@@ -364,6 +386,8 @@ Sorted by total coupling (fan-in + fan-out). Counts runtime edges only. High fan
 | `harnesses/__init__.py` | 1 | 0 | 1 |
 | `harnesses/cline_cli/__init__.py` | 0 | 1 | 1 |
 | `harnesses/mini_swe_agent/__init__.py` | 0 | 1 | 1 |
+| `harnesses/opencode/__init__.py` | 0 | 1 | 1 |
+| `harnesses/pi/__init__.py` | 0 | 1 | 1 |
 | `runtime/status.py` | 1 | 0 | 1 |
 | `runtime/teardown.py` | 1 | 0 | 1 |
 | `services/__init__.py` | 1 | 0 | 1 |

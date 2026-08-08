@@ -1,0 +1,3 @@
+# Toolchain for the opencode harness — installed by prepare_environment() /
+# `sovereign provision` when the `opencode` binary is missing.
+brew "node"             # Node.js — provides npm, which installs the opencode CLI

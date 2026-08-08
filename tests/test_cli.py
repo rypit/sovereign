@@ -603,7 +603,7 @@ def test_provision_unscoped_covers_all_registered() -> None:
     # full walk over every registered service + harness without side effects.
     result = runner.invoke(app, ["provision"])
     assert result.exit_code == 0, result.stdout
-    for base_type in ("llama_cpp", "docker", "cline_cli", "mini_swe_agent"):
+    for base_type in ("llama_cpp", "docker", "cline_cli", "mini_swe_agent", "pi", "opencode"):
         assert base_type in result.stdout
 
 

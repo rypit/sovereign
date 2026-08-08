@@ -105,7 +105,9 @@ workers/           embedded engine worker processes (spawned via
                    layout wired in via --extra-model-paths-config, launches
                    `comfy … launch` as a child subprocess, then just
                    supervises it (same ADR 0006 gap as omlx)
-harnesses/         cline_cli, mini_swe_agent          (auto-discovered)
+harnesses/         cline_cli, mini_swe_agent, pi, opencode   (auto-discovered;
+                   pi/opencode wrap npm CLIs headlessly — JSON event streams
+                   over an isolated config dir, same shape as cline_cli)
 bench/             content-addressed bench cells; only cleanroom.py may
                    import the Orchestrator; bench sub-app CLI lives in bench/cli.py
 scripts/
