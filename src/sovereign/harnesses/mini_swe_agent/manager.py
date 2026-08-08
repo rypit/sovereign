@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import concurrent.futures
 import importlib
+import logging
 import os
 import sys
 from pathlib import Path
@@ -33,10 +34,16 @@ from sovereign.harnesses.mini_swe_agent.config import MiniSweAgentConfig
 if TYPE_CHECKING:
     from sovereign.config import HarnessEntry
 
+logger = logging.getLogger("sovereign")
+
 _INSTALL_HINT = (
     "mini-swe-agent is not installed. Install the optional harness extra: "
     "`uv sync --extra harness` (or `pip install sovereign[harness]`)."
 )
+
+# Where the agent's shell commands run when sandboxed (ADR 0009). The agent
+# itself stays a host process, so this only needs a shell + common tools.
+DEFAULT_SANDBOX_IMAGE = "python:3.12-slim"
 
 
 @register_harness("mini_swe_agent")
@@ -62,6 +69,85 @@ class MiniSweAgentHarness(BaseHarness):
     def __init__(self, entry: HarnessEntry) -> None:
         super().__init__(entry)
         self.config = MiniSweAgentConfig.model_validate(entry.config)
+        #: The DockerEnvironment of the current sandboxed invoke, for cleanup.
+        self._sandbox_env: Any = None
+
+    # --- sandbox (ADR 0009) ---
+    def _sandboxed(self) -> bool:
+        return self.config.sandbox is not None and self.config.sandbox.enabled
+
+    def _sandbox_image(self) -> str:
+        assert self.config.sandbox is not None
+        return self.config.sandbox.image or DEFAULT_SANDBOX_IMAGE
+
+    def prepare_environment(self) -> None:
+        """Host package install always (the agent runs on the host), plus the
+        daemon probe + exec-image pull when sandboxed."""
+        super().prepare_environment()
+        if not self._sandboxed():
+            return
+        from sovereign.services.docker import sandbox as sbx
+
+        cfg = self.config.sandbox
+        assert cfg is not None
+        if not sbx.daemon_reachable(binary=cfg.binary):
+            raise RuntimeError(
+                f"Docker daemon is not reachable via '{cfg.binary}' (needed by the "
+                f"'{self.name}' sandbox). Start Docker Desktop or OrbStack and retry."
+            )
+        sbx.ensure_image(self._sandbox_image(), binary=cfg.binary)
+
+    def _sandbox_environment(self, workdir: str) -> Any:
+        """Build the upstream DockerEnvironment the agent execs commands into."""
+        from minisweagent.environments.docker import DockerEnvironment
+
+        from sovereign.services.docker.sandbox import HARNESS_LABEL, SANDBOX_LABEL
+
+        cfg = self.config.sandbox
+        assert cfg is not None
+        if cfg.network != "none":
+            logger.debug(
+                "harness '%s': mini_swe_agent sandboxes always run --network none "
+                "(LLM traffic originates on the host); ignoring network=%r",
+                self.name,
+                cfg.network,
+            )
+        run_args = [
+            "--rm",
+            "--network",
+            "none",
+            "--label",
+            f"{SANDBOX_LABEL}=1",
+            "--label",
+            f"{HARNESS_LABEL}={self.name}",
+            "-v",
+            f"{workdir}:/workspace",
+        ]
+        for mount in cfg.mounts:
+            run_args += ["-v", mount]
+        if cfg.memory_bytes is not None:
+            run_args += ["--memory", str(cfg.memory_bytes)]
+        return DockerEnvironment(
+            image=self._sandbox_image(),
+            cwd="/workspace",
+            executable=cfg.binary,
+            run_args=run_args,
+        )
+
+    def _cleanup_sandbox(self) -> None:
+        """Stop the exec container; reap anything a timed-out run left behind."""
+        env, self._sandbox_env = self._sandbox_env, None
+        cleanup = getattr(env, "cleanup", None)
+        if callable(cleanup):
+            try:
+                cleanup()
+            except Exception:  # noqa: BLE001 - best effort, the sweep is the backstop
+                pass
+        from sovereign.services.docker import sandbox as sbx
+
+        cfg = self.config.sandbox
+        assert cfg is not None
+        sbx.sweep_leftovers(binary=cfg.binary, harness=self.name)
 
     # --- wiring ---
     def _config_dir(self) -> Path:
@@ -101,8 +187,14 @@ class MiniSweAgentHarness(BaseHarness):
             model_name=f"openai/{model_name}",
             model_kwargs={"api_base": base_url, "api_key": api_key},
         )
-        # LocalEnvironment requires a string cwd (mini-swe-agent v2 validates it).
-        env = LocalEnvironment(cwd=workdir or os.getcwd())
+        if self._sandboxed():
+            # LLM traffic stays on the host (base_url untouched); only the
+            # agent's shell commands move into the throwaway container.
+            env = self._sandbox_environment(workdir or os.getcwd())
+            self._sandbox_env = env
+        else:
+            # LocalEnvironment requires a string cwd (mini-swe-agent v2 validates it).
+            env = LocalEnvironment(cwd=workdir or os.getcwd())
         return DefaultAgent(
             model,
             env,
@@ -110,17 +202,8 @@ class MiniSweAgentHarness(BaseHarness):
             **self.config.extra,
         )
 
-    def invoke(self, task: Task) -> RunResult:
-        """Run one headless ``mini-swe-agent`` session against ``task.prompt``.
-
-        Self-reported success is metadata, not proof — grading (diff + tests)
-        happens separately at the bench layer.
-        """
-        agent = self._build_agent(task.workdir)
-        cwd = os.getcwd()
+    def _run_agent(self, agent: Any, task: Task) -> RunResult:
         try:
-            if task.workdir:
-                os.chdir(task.workdir)
             with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
                 future = pool.submit(agent.run, task.prompt)
                 try:
@@ -139,10 +222,44 @@ class MiniSweAgentHarness(BaseHarness):
                 output=str(exc),
                 metadata={"error": type(exc).__name__},
             )
+        return self._to_run_result(task.id, result)
+
+    def invoke(self, task: Task) -> RunResult:
+        """Run one headless ``mini-swe-agent`` session against ``task.prompt``.
+
+        Self-reported success is metadata, not proof — grading (diff + tests)
+        happens separately at the bench layer.
+        """
+        if self._sandboxed():
+            if not task.workdir:
+                return RunResult(
+                    task_id=task.id,
+                    success=False,
+                    metadata={"error": "sandbox requires a task workdir"},
+                )
+            agent = self._build_agent(task.workdir)
+            try:
+                # No os.chdir: the cwd lives inside the container.
+                return self._run_agent(agent, task)
+            finally:
+                self._cleanup_sandbox()
+
+        agent = self._build_agent(task.workdir)
+        cwd = os.getcwd()
+        try:
+            if task.workdir:
+                try:
+                    os.chdir(task.workdir)
+                except OSError as exc:
+                    return RunResult(
+                        task_id=task.id,
+                        success=False,
+                        output=str(exc),
+                        metadata={"error": type(exc).__name__},
+                    )
+            return self._run_agent(agent, task)
         finally:
             os.chdir(cwd)
-
-        return self._to_run_result(task.id, result)
 
     @staticmethod
     def _to_run_result(task_id: str, result: Any) -> RunResult:

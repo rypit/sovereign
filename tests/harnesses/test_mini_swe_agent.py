@@ -91,12 +91,27 @@ class FakeEnv:
         self.cwd = cwd
 
 
+class FakeDockerEnv:
+    """Stands in for minisweagent.environments.docker.DockerEnvironment."""
+
+    last_instance: FakeDockerEnv | None = None
+
+    def __init__(self, **kwargs):
+        self.kwargs = kwargs
+        self.cleaned_up = False
+        FakeDockerEnv.last_instance = self
+
+    def cleanup(self):
+        self.cleaned_up = True
+
+
 _MSA_MODULES = (
     "minisweagent",
     "minisweagent.agents",
     "minisweagent.agents.default",
     "minisweagent.environments",
     "minisweagent.environments.local",
+    "minisweagent.environments.docker",
     "minisweagent.models",
     "minisweagent.models.litellm_model",
 )
@@ -110,19 +125,10 @@ def _block_minisweagent(monkeypatch) -> None:
 
 
 def _install_fake_minisweagent(monkeypatch, agent_cls=FakeAgent) -> None:
-    modules = {
-        "minisweagent": types.ModuleType("minisweagent"),
-        "minisweagent.agents": types.ModuleType("minisweagent.agents"),
-        "minisweagent.agents.default": types.ModuleType("minisweagent.agents.default"),
-        "minisweagent.environments": types.ModuleType("minisweagent.environments"),
-        "minisweagent.environments.local": types.ModuleType("minisweagent.environments.local"),
-        "minisweagent.models": types.ModuleType("minisweagent.models"),
-        "minisweagent.models.litellm_model": types.ModuleType(
-            "minisweagent.models.litellm_model"
-        ),
-    }
+    modules = {name: types.ModuleType(name) for name in _MSA_MODULES}
     modules["minisweagent.agents.default"].DefaultAgent = agent_cls  # type: ignore[attr-defined]
     modules["minisweagent.environments.local"].LocalEnvironment = FakeEnv  # type: ignore[attr-defined]
+    modules["minisweagent.environments.docker"].DockerEnvironment = FakeDockerEnv  # type: ignore[attr-defined]
     modules["minisweagent.models.litellm_model"].LitellmModel = FakeModel  # type: ignore[attr-defined]
     for name, mod in modules.items():
         monkeypatch.setitem(sys.modules, name, mod)
@@ -251,3 +257,125 @@ def test_invoke_exception_returns_failure(monkeypatch) -> None:
     assert result.success is False
     assert result.metadata["error"] == "RuntimeError"
     assert "boom" in result.output
+
+
+# --- sandboxed invoke (ADR 0009) ---
+def _sandbox_harness(tmp_path, monkeypatch, agent_cls=FakeAgent, **sandbox) -> MiniSweAgentHarness:
+    _install_fake_minisweagent(monkeypatch, agent_cls)
+    return _harness(
+        {
+            "base_url": "{{ engine.endpoint }}/v1",
+            "model": "{{ engine.model }}",
+            "config_dir": str(tmp_path / "cfg"),
+            "sandbox": sandbox or {},
+        }
+    )
+
+
+@pytest.fixture
+def sbx_docker(monkeypatch):
+    """Patch the sandbox module's docker seam (for the sweep + daemon probe)."""
+    import subprocess as sp
+
+    from sovereign.services.docker import sandbox as sbx_mod
+
+    calls: list[list[str]] = []
+
+    def fake_run(args, *, binary="docker", timeout=None, check=False):
+        calls.append(list(args))
+        stdout = "27.0\n" if args[:1] == ["version"] else ""
+        return sp.CompletedProcess(args, 0, stdout, "")
+
+    monkeypatch.setattr(sbx_mod, "run_docker", fake_run)
+    return calls
+
+
+def test_sandboxed_invoke_uses_docker_env_network_none(tmp_path, sbx_docker, monkeypatch) -> None:
+    h = _sandbox_harness(tmp_path, monkeypatch, network="engine_only", memory_gb=1)
+    work = tmp_path / "work"
+    work.mkdir()
+    result = h.invoke(Task(id="t1", prompt="fix it", workdir=str(work)))
+
+    assert result.success is True
+    env = FakeDockerEnv.last_instance
+    assert env is not None
+    assert env.kwargs["image"] == "python:3.12-slim"
+    assert env.kwargs["cwd"] == "/workspace"
+    run_args = env.kwargs["run_args"]
+    # engine_only is ignored for this harness: commands always run offline.
+    assert run_args[run_args.index("--network") + 1] == "none"
+    assert f"{work}:/workspace" in run_args
+    assert "sovereign.sandbox=1" in run_args
+    assert "sovereign.harness=mini_swe_local" in run_args
+    assert run_args[run_args.index("--memory") + 1] == str(10**9)
+    # The LLM still talks to the host endpoint — no proxy rewrite.
+    assert FakeAgent.last_instance is not None
+    model_kwargs = FakeAgent.last_instance.model.kwargs
+    assert model_kwargs["model_kwargs"]["api_base"] == "http://127.0.0.1:11435/v1"
+
+
+def test_sandboxed_invoke_cleans_up_and_sweeps(tmp_path, sbx_docker, monkeypatch) -> None:
+    h = _sandbox_harness(tmp_path, monkeypatch)
+    (tmp_path / "w").mkdir()
+    h.invoke(Task(id="t1", prompt="x", workdir=str(tmp_path / "w")))
+    env = FakeDockerEnv.last_instance
+    assert env is not None and env.cleaned_up
+    assert ["ps", "-aq", "--filter", "label=sovereign.sandbox", "--filter",
+            "label=sovereign.harness=mini_swe_local"] in sbx_docker
+
+
+def test_sandboxed_invoke_sweeps_on_timeout(tmp_path, sbx_docker, monkeypatch) -> None:
+    h = _sandbox_harness(tmp_path, monkeypatch, agent_cls=SleepyAgent)
+    h.config.timeout_seconds = 1
+    (tmp_path / "w").mkdir()
+    result = h.invoke(Task(id="t1", prompt="x", workdir=str(tmp_path / "w")))
+    assert result.metadata["error"] == "timeout"
+    env = FakeDockerEnv.last_instance
+    assert env is not None and env.cleaned_up
+    assert any(c[:2] == ["ps", "-aq"] for c in sbx_docker)
+
+
+def test_sandboxed_invoke_requires_workdir(tmp_path, sbx_docker, monkeypatch) -> None:
+    FakeDockerEnv.last_instance = None
+    h = _sandbox_harness(tmp_path, monkeypatch)
+    result = h.invoke(Task(id="t1", prompt="x"))
+    assert result.success is False
+    assert "workdir" in str(result.metadata["error"])
+    assert FakeDockerEnv.last_instance is None  # never even built the container
+
+
+def test_sandbox_disabled_uses_local_environment(tmp_path, monkeypatch) -> None:
+    h = _sandbox_harness(tmp_path, monkeypatch, enabled=False)
+    h.invoke(Task(id="t1", prompt="x"))
+    assert FakeAgent.last_instance is not None
+    assert isinstance(FakeAgent.last_instance.env, FakeEnv)
+
+
+def test_sandboxed_prepare_environment_pulls_image_and_provisions_host(
+    tmp_path, sbx_docker, monkeypatch
+) -> None:
+    from sovereign.core.provisioning import Provisioner
+
+    provisioned: list[type] = []
+    monkeypatch.setattr(Provisioner, "provision", classmethod(lambda cls: provisioned.append(cls)))
+    h = _sandbox_harness(tmp_path, monkeypatch)
+    h.prepare_environment()
+    # Host package still required (agent runs on the host) …
+    assert provisioned == [MiniSweAgentHarness]
+    # … and the exec image is probed/ensured.
+    assert any(c[:2] == ["image", "inspect"] for c in sbx_docker)
+
+
+def test_sandboxed_prepare_environment_daemon_down_raises(tmp_path, monkeypatch) -> None:
+    import subprocess as sp
+
+    from sovereign.core.provisioning import Provisioner
+    from sovereign.services.docker import sandbox as sbx_mod
+
+    monkeypatch.setattr(Provisioner, "provision", classmethod(lambda cls: None))
+    monkeypatch.setattr(
+        sbx_mod, "run_docker", lambda args, **kw: sp.CompletedProcess(args, 1, "", "")
+    )
+    h = _sandbox_harness(tmp_path, monkeypatch)
+    with pytest.raises(RuntimeError, match="daemon is not reachable"):
+        h.prepare_environment()

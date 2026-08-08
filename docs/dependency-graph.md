@@ -1,6 +1,6 @@
 # Internal dependency graph
 
-_Generated 2026-08-08 by `scripts/depgraph.py` — 77 modules, 197 internal import edges (173 runtime, 24 type-annotation-only). Regenerate with `make graph`._
+_Generated 2026-08-08 by `scripts/depgraph.py` — 77 modules, 199 internal import edges (175 runtime, 24 type-annotation-only). Regenerate with `make graph`._
 
 Nodes are modules under `sovereign`, grouped by top-level package. Only imports internal to the package are shown. Solid arrows (`-->`) are runtime imports; dashed arrows (`-.->`) are type-annotation-only imports (`if TYPE_CHECKING:` blocks). Type-only edges are excluded from cycle detection and fan-in/fan-out. Modules that participate in a runtime import cycle are outlined in red.
 
@@ -189,11 +189,13 @@ graph LR
   n_sovereign_harnesses_cline_cli_manager --> n_sovereign_core_base_harness
   n_sovereign_harnesses_cline_cli_manager --> n_sovereign_core_registry
   n_sovereign_harnesses_cline_cli_manager --> n_sovereign_harnesses_cline_cli_config
+  n_sovereign_harnesses_cline_cli_manager --> n_sovereign_services_docker_sandbox
   n_sovereign_harnesses_mini_swe_agent --> n_sovereign_harnesses_mini_swe_agent_manager
   n_sovereign_harnesses_mini_swe_agent_config --> n_sovereign_core_base_config
   n_sovereign_harnesses_mini_swe_agent_manager --> n_sovereign_core_base_harness
   n_sovereign_harnesses_mini_swe_agent_manager --> n_sovereign_core_registry
   n_sovereign_harnesses_mini_swe_agent_manager --> n_sovereign_harnesses_mini_swe_agent_config
+  n_sovereign_harnesses_mini_swe_agent_manager --> n_sovereign_services_docker_sandbox
   n_sovereign_runtime_dashboard --> n_sovereign
   n_sovereign_runtime_dashboard --> n_sovereign_core_state
   n_sovereign_runtime_dashboard --> n_sovereign_core_units
@@ -333,15 +335,16 @@ Sorted by total coupling (fan-in + fan-out). Counts runtime edges only. High fan
 | `bench/perf.py` | 2 | 3 | 5 |
 | `core/planning.py` | 1 | 4 | 5 |
 | `core/provisioning.py` | 5 | 0 | 5 |
+| `harnesses/cline_cli/manager.py` | 1 | 4 | 5 |
+| `harnesses/mini_swe_agent/manager.py` | 1 | 4 | 5 |
 | `runtime/dashboard.py` | 2 | 3 | 5 |
 | `services/inference/comfyui/manager.py` | 1 | 4 | 5 |
 | `services/inference/llama_cpp/manager.py` | 1 | 4 | 5 |
 | `bench/lock.py` | 3 | 1 | 4 |
 | `bench/spec.py` | 3 | 1 | 4 |
 | `core/errors.py` | 4 | 0 | 4 |
-| `harnesses/cline_cli/manager.py` | 1 | 3 | 4 |
-| `harnesses/mini_swe_agent/manager.py` | 1 | 3 | 4 |
 | `runtime/manifest.py` | 1 | 3 | 4 |
+| `services/docker/sandbox.py` | 3 | 1 | 4 |
 | `services/inference/mlx_lm/manager.py` | 1 | 3 | 4 |
 | `services/inference/routing.py` | 0 | 4 | 4 |
 | `workers/engine_worker.py` | 0 | 4 | 4 |
@@ -358,7 +361,6 @@ Sorted by total coupling (fan-in + fan-out). Counts runtime edges only. High fan
 | `harnesses/cline_cli/config.py` | 1 | 1 | 2 |
 | `harnesses/mini_swe_agent/config.py` | 1 | 1 | 2 |
 | `services/docker/config.py` | 1 | 1 | 2 |
-| `services/docker/sandbox.py` | 1 | 1 | 2 |
 | `services/inference/comfyui/config.py` | 1 | 1 | 2 |
 | `services/inference/llama_cpp/config.py` | 1 | 1 | 2 |
 | `services/inference/mlx_lm/config.py` | 1 | 1 | 2 |

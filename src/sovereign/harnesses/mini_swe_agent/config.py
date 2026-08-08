@@ -11,7 +11,7 @@ from typing import Any
 
 from pydantic import Field
 
-from sovereign.core.base_config import SovereignBaseModel
+from sovereign.core.base_config import SandboxConfig, SovereignBaseModel
 
 
 class MiniSweAgentConfig(SovereignBaseModel):
@@ -33,3 +33,8 @@ class MiniSweAgentConfig(SovereignBaseModel):
     config_dir: str | None = None
     #: Escape hatch passed through to ``DefaultAgent`` (e.g. ``cost_limit``).
     extra: dict[str, Any] = Field(default_factory=dict)
+    #: Run the agent's shell commands inside a per-task Docker container
+    #: (ADR 0009). The agent process (and its LLM traffic) stays on the host,
+    #: so the container always runs with ``--network none`` regardless of the
+    #: block's ``network`` setting.
+    sandbox: SandboxConfig | None = None
