@@ -1,10 +1,18 @@
-# Toolchain for the omlx engine — installs the `omlx` CLI/server.
-# prepare_environment()/`sovereign provision` run `brew bundle` against this
-# file when `omlx` isn't already on PATH.
+# Toolchain for the omlx engine — installs oMLX, which provides the `omlx`
+# CLI/server. prepare_environment()/`sovereign provision` run `brew bundle`
+# against this file when `omlx` isn't already on PATH.
 #
-# omlx is not in homebrew/core: it installs from the project's own tap, and a
-# performant build must compile from HEAD with the custom Metal kernel —
-# `args:` entries are passed to `brew install` as `--HEAD --with-custom-kernel`.
+# oMLX is installed as a *cask* from the rypit/omlx-cask tap
+# (https://github.com/rypit/omlx-cask): it installs the prebuilt, signed
+# `oMLX.app` from the project's GitHub releases and links the CLI bundled
+# inside it onto PATH as `omlx` — the same `omlx serve` the worker adapter
+# launches. The prebuilt bundle ships the native Metal kernels precompiled, so
+# provisioning is a download rather than the source build the upstream `omlx`
+# formula needs (`--with-custom-kernel` compiles the kernels and requires a
+# full Xcode install). The cask pins no version: it resolves the latest stable
+# release at install time (HOMEBREW_OMLX_VERSION=rc|pre|<tag> selects another)
+# and does not verify checksums. Requires macOS 15 (Sequoia) or newer on
+# Apple Silicon.
 #
 # `trusted: true` grants Homebrew 6.0+ tap trust (https://docs.brew.sh/Tap-Trust):
 # a third-party tap ships arbitrary unsandboxed Ruby, so brew refuses to load
@@ -14,5 +22,5 @@
 # provisioning. Requires Homebrew >= 6.0 (`brew update` if bundle rejects the
 # `trusted:` key); we deliberately avoid the deprecated global escape hatch
 # HOMEBREW_NO_REQUIRE_TAP_TRUST=1.
-tap "jundot/omlx", "https://github.com/jundot/omlx", trusted: true
-brew "omlx", args: ["HEAD", "with-custom-kernel"]   # ships the `omlx` server CLI (`omlx serve`)
+tap "rypit/omlx-cask", "https://github.com/rypit/omlx-cask", trusted: true
+cask "rypit/omlx-cask/omlx-cask"   # oMLX.app + its bundled CLI linked onto PATH as `omlx` (`omlx serve`)
