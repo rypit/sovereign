@@ -39,9 +39,10 @@ if TYPE_CHECKING:
 logger = logging.getLogger("sovereign")
 
 #: The binary this engine's worker execs. Provisioned via the sibling
-#: Brewfile (`brew "omlx"`); availability is a PATH probe, not an import
-#: probe, since the engine runs as an external CLI subprocess (ADR 0007
-#: pattern).
+#: Brewfile (`cask "omlx-cask"` from the rypit/omlx-cask tap, which installs
+#: the prebuilt oMLX.app and links its bundled CLI onto PATH under this
+#: name); availability is a PATH probe, not an import probe, since the
+#: engine runs as an external CLI subprocess (ADR 0007 pattern).
 _OMLX_BINARY = "omlx"
 
 #: Runtime headroom (decimal GB) added to the *derived* memory guard: the
@@ -76,10 +77,11 @@ class OmlxManager(NativeEngineManager):
     config: OmlxConfig
     model_artifact_kind = "snapshot"
     binary_hint = (
-        "Run `sovereign provision` (installs from the jundot/omlx tap via this "
-        "engine's Brewfile), or manually: `brew tap jundot/omlx "
-        "https://github.com/jundot/omlx && brew trust jundot/omlx && "
-        "brew install omlx --HEAD --with-custom-kernel`."
+        "Run `sovereign provision` (installs the oMLX app + CLI as a cask from "
+        "the rypit/omlx-cask tap via this engine's Brewfile), or manually: "
+        "`brew tap rypit/omlx-cask https://github.com/rypit/omlx-cask && "
+        "brew trust rypit/omlx-cask && "
+        "brew install --cask rypit/omlx-cask/omlx-cask`."
     )
 
     @classmethod
@@ -87,8 +89,9 @@ class OmlxManager(NativeEngineManager):
         """Satisfied once ``omlx`` is on ``PATH`` — a binary-on-PATH probe,
         same rationale as ``llama_cpp``: the engine runs as an external CLI
         subprocess, not an in-process binding. The ``Brewfile`` next to this
-        module (`brew "omlx"`) is discovered automatically by the shared
-        :class:`Provisioner` mixin."""
+        module (`cask "omlx-cask"`, whose ``binary`` stanza links the
+        app-bundled CLI onto PATH as ``omlx``) is discovered automatically by
+        the shared :class:`Provisioner` mixin."""
         return probe_binary(_OMLX_BINARY)
 
     # --- routing (auto base_type) ---

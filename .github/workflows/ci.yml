@@ -70,7 +70,9 @@ jobs:
 
   smoke:
     name: smoke (real engine boots, macos arm64)
-    runs-on: macos-14
+    # macos-15, not macos-14: the oMLX cask installed below requires macOS 15
+    # (Sequoia) or newer (`depends_on macos: :sequoia`).
+    runs-on: macos-15
     # Non-blocking for the first iteration: real-model boots depend on
     # the Hub and runner capacity — flakiness must not gate merges yet.
     continue-on-error: true
@@ -90,11 +92,12 @@ jobs:
       - name: Install llama-server
         run: brew install llama.cpp
 
-      # omlx lives in its own tap and must build from HEAD with the custom
-      # Metal kernel — install through the manager's Brewfile (the exact file
-      # `sovereign provision` runs) rather than a hand-rolled `brew install`,
-      # so CI can't drift from what users get. A HEAD build compiles, so this
-      # step is slower than a bottled install.
+      # omlx is a cask from the rypit/omlx-cask tap (the prebuilt oMLX.app,
+      # with its bundled CLI linked onto PATH as `omlx`) — install through the
+      # manager's Brewfile (the exact file `sovereign provision` runs) rather
+      # than a hand-rolled `brew install`, so CI can't drift from what users
+      # get. The cask resolves the latest stable release at install time, so
+      # this step tracks upstream releases rather than a pinned version.
       - name: Install omlx (from its Brewfile)
         run: brew bundle --file src/sovereign/services/inference/omlx/Brewfile
 

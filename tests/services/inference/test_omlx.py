@@ -302,6 +302,25 @@ def test_provisioning_declaration() -> None:
     assert brewfile.name == "Brewfile"
 
 
+def test_provisioning_brewfile_installs_the_omlx_cask() -> None:
+    """omlx is provisioned as a *cask* from the rypit/omlx-cask tap (the
+    prebuilt oMLX.app, whose bundled CLI the cask links onto PATH as `omlx`),
+    not the upstream source-built `omlx` formula — the Brewfile must carry
+    only the cask so `sovereign provision` never compiles the Metal kernels
+    (which needs full Xcode) or depends on the jundot tap's trust grant."""
+    brewfile = OmlxManager.provisioning_brewfile()
+    assert brewfile is not None
+    directives = [
+        line.split("#", 1)[0].strip()
+        for line in brewfile.read_text(encoding="utf-8").splitlines()
+    ]
+    directives = [d for d in directives if d]
+    assert directives == [
+        'tap "rypit/omlx-cask", "https://github.com/rypit/omlx-cask", trusted: true',
+        'cask "rypit/omlx-cask/omlx-cask"',
+    ]
+
+
 def test_provisioning_satisfied_uses_binary_probe(monkeypatch) -> None:
     calls: list[str] = []
 

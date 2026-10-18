@@ -16,10 +16,10 @@ Opt-in only: marked `integration`, excluded from `make test` (see pytest
 addopts). The skip guard below covers unprovisioned *local* machines only —
 CI's macOS arm64 smoke job installs the binary from the manager's Brewfile
 (`brew bundle --file src/sovereign/services/inference/omlx/Brewfile`, which
-taps jundot/omlx and builds from HEAD with the custom kernel; see
-.github/workflows/ci.yml), so this test always executes there rather than
-silently skipping. The HF model is cached between runs
-(~/.cache/huggingface).
+taps rypit/omlx-cask and installs the prebuilt oMLX.app cask, linking its
+bundled CLI onto PATH as `omlx`; see .github/workflows/ci.yml), so this test
+always executes there rather than silently skipping. The HF model is cached
+between runs (~/.cache/huggingface).
 """
 
 from __future__ import annotations
