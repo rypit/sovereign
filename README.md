@@ -49,13 +49,16 @@ full design.
 | --- | --- | --- |
 | Engine | `mlx_lm` | Apple MLX, runs embedded in-process (`mlx-lm` ships as a dependency on Apple Silicon) |
 | Engine | `llama_cpp` | Runs the native `llama-server` binary as a subprocess (installed via Homebrew) |
+| Engine | `omlx` | Runs the oMLX server (continuous batching, paged KV cache with an SSD tier) as a subprocess; installed as the prebuilt `oMLX.app` from the [`rypit/omlx-cask`](https://github.com/rypit/omlx-cask) Homebrew cask, which links its bundled `omlx` CLI onto PATH (macOS 15+). Opt-in via an explicit `base_type: omlx` — never routed via `auto` |
+| Engine | `comfyui` | ComfyUI image/video-generation workflow server as a subprocess, serving one single-file checkpoint; explicit `base_type: comfyui` only |
 | Service | `docker` | Generic container runner — Open WebUI and SearXNG in the examples are just `docker` instances |
 | Harness | `cline_cli` | Cline in headless mode, isolated per-stack config |
 | Harness | `mini_swe_agent` | mini-SWE-agent in-process (the optional `harness` extra) |
 
-Both engines accept local model paths or HF refs, support speculative decoding
-(`draft_model` / `num_draft_tokens`), and an optional `served_model_name` for
-the OpenAI-compatible `"model"` string. The default example stack
+The LLM engines accept local model paths or HF refs and an optional
+`served_model_name` for the OpenAI-compatible `"model"` string; `mlx_lm` and
+`llama_cpp` also support speculative decoding (`draft_model` /
+`num_draft_tokens`). The default example stack
 (`examples/sovereign.yaml`) runs an MLX engine plus Open WebUI with SearXNG
 wired in for web search.
 
