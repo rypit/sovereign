@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from pydantic import Field
 
-from sovereign.core.base_config import SovereignBaseModel
+from sovereign.core.base_config import SandboxConfig, SovereignBaseModel
 
 
 class ClineCliConfig(SovereignBaseModel):
@@ -32,3 +32,7 @@ class ClineCliConfig(SovereignBaseModel):
     timeout_seconds: int = Field(default=900, gt=0)
     #: Cap on agentic turns per task, when the installed CLI supports it.
     max_turns: int | None = Field(default=None, gt=0)
+    #: Run ``invoke()`` inside a per-task Docker sandbox (ADR 0009). When set,
+    #: the whole CLI runs in a throwaway container whose only network route is
+    #: the local engine; absent, invocation stays a host subprocess.
+    sandbox: SandboxConfig | None = None

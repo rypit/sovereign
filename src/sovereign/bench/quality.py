@@ -137,6 +137,15 @@ def run_quality_cell(
             }
         )
 
+    # A sandboxed harness (ADR 0009) tears down per invoke, but an aborted
+    # sweep must not strand labeled containers across cells — reap best-effort.
+    try:
+        from sovereign.services.docker.sandbox import sweep_leftovers
+
+        sweep_leftovers(harness=job.harness)
+    except Exception:  # noqa: BLE001 - hygiene only, never fails the cell
+        pass
+
     total = len(suite.tasks)
     return {
         "harness": job.harness,

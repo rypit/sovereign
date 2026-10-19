@@ -86,6 +86,15 @@ clean against every rule above.
 - **`Harness`** (`src/sovereign/core/base_harness.py`) — the contract for
   agent harnesses (`materialize()`, `invoke(task)`), symmetric to
   `ServiceManager` but distinct — harnesses are not supervised services.
+  A harness with a `sandbox:` block runs its invoke inside a per-invoke
+  throwaway Docker container (`services/docker/sandbox.py`, ADR 0009):
+  sandbox objects are label-tracked (`sovereign.sandbox=1`), excluded from
+  admission control and `DockerMonitorWorker`, and their only network routes
+  — if any — are the local engine plus explicitly `sandbox.allow`-listed
+  local services, each via its own egress proxy on an internal network.
+  Harnesses import the sandbox module lazily inside methods (discovery
+  imports harness modules unconditionally); the leaf-consumer direction is
+  unchanged — nothing imports harnesses back.
 - **`WorkerConfig`** (`src/sovereign/workers/worker_config.py`) — the JSON
   handoff from a manager to its engine worker process
   (`v, service, engine, host, port, health_path, telemetry_socket,
@@ -120,6 +129,7 @@ clean against every rule above.
 | UDS NDJSON telemetry | 0005 | PR #20 |
 | Engine-gap policy (`§3a` in code comments) | 0006 | PR #20 addendum |
 | ComfyUI engine, `checkpoint` artifact kind | 0008 | — |
+| Docker-sandboxed harnesses, engine-only egress | 0009 | §6b |
 
 ## How to change architecture
 

@@ -31,7 +31,7 @@ Sovereign's MVP orchestration spine is done (Phases 0–8 + 10; the suite is gre
 1. **Harness lineup:** Cline CLI (subprocess, npm) + **mini-swe-agent** (pip dep, in-process Python API) — mini-swe-agent first since it's pure Python and proves the whole pipeline; it also covers the "SWE-agent suite engine" role with minimal surface.
 2. **Perf bench:** in-house async prober (httpx + asyncio, streaming `/v1/chat/completions`) rather than guidellm — full control over metrics and manifest stamping; a guidellm adapter can be added later behind the same result schema.
 3. **Quality suite v1:** custom local task-suite format (the doc's "10–15 of your own real tasks"); SWE-bench subset is a later optional phase.
-4. **Sandboxing v1:** throwaway host git workspaces; Docker sandboxes are a later phase (resolver already supports `ConsumerKind.DOCKER`).
+4. **Sandboxing v1:** throwaway host git workspaces; Docker sandboxes are a later phase (resolver already supports `ConsumerKind.DOCKER`). *Superseded by ADR 0009: per-invoke Docker sandboxes with engine-only egress landed as the harness `sandbox:` block.*
 
 **Locked constraints (do not violate):** strictly local — no cloud baselines; `config.py` never imports `manager.py`; refuse-to-boot, never auto-kill; bench specs are NOT in `sovereign.yaml` (imperative `sovereign bench run` only); grade the repo, not the transcript.
 
@@ -130,7 +130,7 @@ New package `src/sovereign/bench/`:
 
 ## Phase B6 (optional, later) — extensions
 
-Docker-sandboxed quality workspaces (throwaway container per task, engine via `ConsumerKind.DOCKER` → `host.docker.internal`; reuse `docker` manager patterns); SWE-bench Lite subset via mini-swe-agent's batch runner (pinned dataset rev); guidellm adapter behind the B2 result schema; Cline teams as a swept config axis (slots×context accounting per §7 — `-np` becomes load-bearing).
+~~Docker-sandboxed quality workspaces~~ (landed — see ADR 0009; the design shifted from a `ConsumerKind.DOCKER` resolution to an invoke-time proxy-alias rewrite); SWE-bench Lite subset via mini-swe-agent's batch runner (pinned dataset rev); guidellm adapter behind the B2 result schema; Cline teams as a swept config axis (slots×context accounting per §7 — `-np` becomes load-bearing).
 
 ---
 

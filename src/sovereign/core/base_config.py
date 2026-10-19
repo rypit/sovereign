@@ -6,7 +6,7 @@ Per the golden rule (§2.3), config depends on Pydantic **only** — never on
 
 from __future__ import annotations
 
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field
 
@@ -62,6 +62,42 @@ def _gb_input_to_bytes(value: object) -> object:
 #: Field type for "GB in YAML, bytes internally". Pair with
 #: Field(validation_alias="<name>_gb") so the YAML key keeps its GB name.
 GbBytes = Annotated[int, BeforeValidator(_gb_input_to_bytes)]
+
+
+class SandboxConfig(SovereignBaseModel):
+    """Docker sandbox settings shared by every harness's optional ``sandbox:`` block.
+
+    Lives here (not under ``services/docker``) because harness config modules may
+    only import ``core.units`` / ``core.base_config`` (§2.3 golden rule). The
+    mechanics live in ``sovereign.services.docker.sandbox`` (ADR 0009): a
+    per-invoke throwaway container whose only network route — if any — is the
+    local inference endpoint, never the open internet.
+    """
+
+    #: Escape hatch: keep the block (and its settings) but run natively.
+    enabled: bool = True
+    #: Agent container image; ``None`` means the harness's own default.
+    image: str | None = None
+    #: ``engine_only`` = internal network + egress proxy to the engine port;
+    #: ``none`` = ``--network none``. Harnesses whose LLM traffic originates on
+    #: the host may ignore ``engine_only`` and always isolate fully.
+    network: Literal["engine_only", "none"] = "engine_only"
+    #: Additional stack services the sandboxed agent may reach (service names,
+    #: e.g. ``[searxng]``). Each gets its own proxy route + in-sandbox alias
+    #: (``sovereign-<name>``), published to the agent as
+    #: ``SOVEREIGN_<NAME>_URL``. Opt-in: every entry widens the egress surface
+    #: beyond the engine — a service that itself reaches the internet (like
+    #: searxng) reopens an indirect channel. Ignored under ``network: none``.
+    allow: list[str] = Field(default_factory=list)
+    #: Optional hard cap mapped to ``docker run --memory``. Sandboxes are NOT
+    #: counted against the stack's admission budget (ADR 0009).
+    memory_bytes: GbBytes | None = Field(default=None, gt=0, validation_alias="memory_gb")
+    #: Extra bind mounts (``host:container``) beyond the task workdir.
+    mounts: list[str] = Field(default_factory=list)
+    #: Image for the egress proxy sidecar (``engine_only`` mode).
+    proxy_image: str = "alpine/socat"
+    #: Docker-compatible CLI (podman works).
+    binary: str = "docker"
 
 
 def validate_identifier(value: str) -> str:

@@ -214,3 +214,62 @@ def test_make_quality_executor_wires_state_dir(tmp_path) -> None:
     executor = make_quality_executor(spec, tmp_path)
     result = executor(_job(stack, str(suite)))
     assert result["total"] == 1
+
+
+class WorkspaceWritingHarness(ScriptedHarness):
+    """Mimics a sandboxed harness: mutates the host workspace it was handed
+    (as the bind-mounted container would) and records the workdir path."""
+
+    seen_workdirs: list[str] = []
+
+    def invoke(self, task):
+        from pathlib import Path
+
+        WorkspaceWritingHarness.seen_workdirs.append(task.workdir)
+        (Path(task.workdir) / "agent_was_here.py").write_text("x = 1\n")
+        return RunResult(task_id=task.id, success=True, exit_code=0)
+
+
+def test_workspace_mount_contract_grading_sees_harness_writes(tmp_path, monkeypatch) -> None:
+    """ADR 0009 contract: the harness gets the *host* workspace path as its
+    workdir (what a sandbox bind-mounts), and grading sees files written there."""
+    monkeypatch.setitem(_HARNESSES, _BASE_TYPE, WorkspaceWritingHarness)
+    WorkspaceWritingHarness.seen_workdirs = []
+    _write_manifest(tmp_path)
+    stack = _write_stack(tmp_path)
+    suite = _write_suite(tmp_path, ["t1"], expect_diff=True)
+    spec = BenchSpec(stacks=[stack], harnesses=["h1"], suites=[str(suite)], trials=1)
+
+    result = run_quality_cell(
+        _job(stack, str(suite)),
+        spec,
+        manifest_state_dir=tmp_path,
+        bench_dir=tmp_path / "benchmarks",
+    )
+    # The workdir handed to invoke() is the bench-owned host workspace …
+    (workdir,) = WorkspaceWritingHarness.seen_workdirs
+    assert workdir.startswith(str(tmp_path / "benchmarks" / "workspaces"))
+    # … and the host-side grader saw the "container-written" diff: task passed.
+    assert result["passed"] == 1 and result["false_completions"] == 0
+
+
+def test_quality_cell_sweeps_sandbox_leftovers(tmp_path, monkeypatch) -> None:
+    from sovereign.services.docker import sandbox as sbx_mod
+
+    swept: list[str | None] = []
+    monkeypatch.setattr(
+        sbx_mod, "sweep_leftovers", lambda *, binary="docker", harness=None: swept.append(harness)
+    )
+    _write_manifest(tmp_path)
+    stack = _write_stack(tmp_path)
+    suite = _write_suite(tmp_path, ["t1"])
+    spec = BenchSpec(stacks=[stack], harnesses=["h1"], suites=[str(suite)], trials=1)
+    ScriptedHarness.outcomes = [True]
+
+    run_quality_cell(
+        _job(stack, str(suite)),
+        spec,
+        manifest_state_dir=tmp_path,
+        bench_dir=tmp_path / "benchmarks",
+    )
+    assert swept == ["h1"]
