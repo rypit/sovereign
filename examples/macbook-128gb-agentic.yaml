@@ -1,0 +1,345 @@
+# "Zero to Hero" local AI stack — Sovereign edition for a 128 GB MacBook Pro
+# (M5 Max), tuned for agentic coding.
+#
+#   uv run sovereign plan -f examples/macbook-128gb-agentic.yaml   # dry-run: routing + memory
+#   uv run sovereign up   -f examples/macbook-128gb-agentic.yaml   # boot the stack
+#
+# This is the Mac-native translation of the GB10 "ten steps" stack
+# (vLLM + ComfyUI + Open WebUI + Cline + Jupyter + RAG + SearXNG + Playwright):
+#
+#   step 03 "the brain"    -> coder_heavy  (mlx_lm, native Metal — vLLM stand-in) :8000
+#                             coder_fast   (mlx_lm — quick/utility model)          :8001
+#   step 04 "the eyes"     -> image_gen    (comfyui, native Metal/MPS)            :8188
+#   step 05 "the face"     -> open_webui   (docker)                                :3000
+#   step 06 "the hands"    -> cline harness + point VS Code Cline at :8000/v1
+#   step 07 "the sandbox"  -> jupyter      (docker)                                :8888
+#   step 08 "the memory"   -> qdrant       (docker) + Open WebUI built-in RAG      :6333
+#   step 09 "the lookout"  -> searxng      (docker)                                :8080
+#   step 10 "the scout"    -> browserless  (docker, headless Chromium)             :3001
+#
+#   step 04 "the eyes" (ComfyUI) is now native, not Docker: containers on macOS
+#   can't reach the GPU (no Metal passthrough), so Sovereign runs ComfyUI as a
+#   PyTorch/MPS engine subprocess instead — `base_type: comfyui` (ADR 0008),
+#   the same native-Metal path the coder engines use. Image gen is back in the
+#   stack; the SDXL checkpoint is light enough (~7 GB) to coexist with both
+#   coders on the lighter heavy model below.
+#
+# Heavy lifting is native (Metal); light tools are Docker. Models are pulled
+# from HuggingFace on first boot (DOWNLOADING state with byte progress) —
+# ~67 GB of weights total, one time.
+#
+# Memory plan (decimal GB, admission-controlled — Sovereign refuses to boot a
+# service that would blow the budget, and never kills a running one). The
+# declared memory_gb figures below are what admission uses, so they must carry
+# the KV cache explicitly — mlx_lm estimates only count weights + caches:
+#
+#   coder_heavy   56 = 42.4 weights (verified against the HF repo) + 4 prompt-
+#                      cache cap + ~9 active KV. Qwen3-Coder-Next is a hybrid
+#                      linear-attention model — only every 4th layer keeps full
+#                      attention (2 KV heads x 256 dim), so KV is ~0.025 GB per
+#                      1K tokens (8x cheaper than a dense-attention model): 9 GB
+#                      ~= 360K tokens in flight, so even the native 262K window
+#                      fits. mlx_lm has NO runtime memory guard — the declared
+#                      memory_gb is admission's number, not an enforced ceiling.
+#   coder_fast    25 = 17.2 weights (verified) + 4 prompt-cache cap + ~3.5
+#                      active KV. Qwen3-Coder KV (48 layers x 4 KV heads x
+#                      128 dim, fp16) ~= 0.10 GB per 1K tokens -> ~35K tokens
+#                      in flight. mlx_lm has NO runtime enforcement — keep
+#                      fast-lane contexts modest.
+#   image_gen     12 = ~7 SDXL checkpoint + torch/MPS runtime + latents/VAE
+#                      working set during generation.
+#
+# Context sizing — there is no llama.cpp-style `-c` on the MLX engines: KV is
+# allocated lazily as tokens arrive and mlx_lm.server (0.31.x) has no context
+# or KV-size flag. So the window is set by budget + clients, not by the server:
+#
+#   heavy lane   Qwen3-Coder-Next's cheap KV means the full native 262K window
+#                fits inside the ~9 GB KV budget — no client-side cap needed for
+#                normal use; only a runaway many-slot burst could approach it.
+#   fast lane    cap completions server-side (max_tokens below); cap prompts
+#                client-side — Qwen's native 262K window would be ~26 GB of
+#                KV with nothing to stop it.
+#   Cline        the cline harness below caps turns (max_turns); a VS Code
+#                context-window cap is now optional (the heavy lane's KV is
+#                cheap), set one only if you want deterministic truncation.
+#   docker tools   9   (webui 2, qdrant 2, jupyter 2, browserless 2, searxng 1)
+#   safety margin 12   (macOS + your apps)
+#   ------------------
+#                114 of 128
+#
+# No sudo sysctl needed: on the old GLM+Qwen pairing the two engines wired
+# ~106 GB, above macOS's default ~96 GB GPU-wired cap, so you had to raise
+# iogpu.wired_limit_mb. This lighter stack wires ~67 GB peak (42 + 17.5 + 7),
+# comfortably under the default cap — boot it as-is.
+
+version: "1.1"
+
+resources:
+  max_unified_memory_gb: 128
+  safety_margin_gb: 12
+  default_priority: medium
+
+services:
+  # ---------------------------------------------------------------------------
+  # THE BRAIN, part 1 — the heavy agentic coder. Qwen3-Coder-Next (verified on
+  # HF: official Qwen coder on the hybrid linear-attention Qwen3-Next
+  # architecture; 79.7B params, ~3B active, Apache-2.0, native 262K context) at
+  # mxfp4 (~42 GB weights). Only every 4th layer keeps full attention (2 KV
+  # heads x 256 dim), so KV is ~0.025 GB per 1K tokens — cheap enough that the
+  # full context fits — and decode is fast (3B active). mlx_lm serves it
+  # (mlx-lm 0.31.x supports qwen3_next); the mxfp8 variant (82 GB, near-lossless)
+  # fits only if you drop coder_fast (memory_gb ~95).
+  # ---------------------------------------------------------------------------
+  - name: coder_heavy
+    base_type: mlx_lm
+    priority: critical
+    memory_gb: 56                  # ~42.4 weights + 4 prompt cache + ~9 KV
+                                   # (fits the native 262K window; header math)
+    health_check:
+      type: http
+      endpoint: /health            # mlx_lm's health surface
+      port: 8000
+      timeout_seconds: 600         # model load after download; keep generous
+    config:
+      model: "mlx-community/Qwen3-Coder-Next-mxfp4"
+      served_model_name: "qwen3-coder-next"   # what clients send as "model"
+      host: 127.0.0.1
+      # mlx_lm can't enforce a memory ceiling, so bound the prompt cache —
+      # without this it grows without limit as chats accumulate:
+      prompt_cache_bytes: 4000000000
+      # Default completion cap (--max-tokens; requests can still ask lower):
+      max_tokens: 8192
+    dependencies: []
+
+  # ---------------------------------------------------------------------------
+  # THE BRAIN, part 2 — the fast lane. Qwen3-Coder-30B (MoE, only 3B active)
+  # decodes several times faster than the heavy model: quick edits, subagents,
+  # and Open WebUI's task work (titles, autocomplete, search queries).
+  # ---------------------------------------------------------------------------
+  - name: coder_fast
+    base_type: mlx_lm
+    priority: high
+    memory_gb: 25                  # ~17.5 weights + 4 prompt cache + ~3.5 KV
+    health_check:
+      type: http
+      endpoint: /health
+      port: 8001
+      timeout_seconds: 300
+    config:
+      model: "mlx-community/Qwen3-Coder-30B-A3B-Instruct-4bit"
+      served_model_name: "qwen3-coder-30b"
+      host: 127.0.0.1
+      temp: 0.7                    # Qwen3-Coder recommended sampling
+      top_p: 0.8
+      # Default completion cap (--max-tokens; requests can still ask lower).
+      # Prompt-side context has no server flag — cap it in clients (header).
+      max_tokens: 8192
+      # mlx_lm can't enforce a memory ceiling, so at least bound the prompt
+      # cache — without this it grows without limit as chats accumulate:
+      prompt_cache_bytes: 4000000000
+    dependencies: []
+
+  # ---------------------------------------------------------------------------
+  # THE EYES — ComfyUI image generation (blog step 04), native on Apple Silicon
+  # via PyTorch/MPS (ADR 0008), not Docker (containers can't reach the GPU).
+  # `base_type: comfyui` must be explicit — the engine abstains from `auto`
+  # routing (diffusion .safetensors would contend with the LLM engines' claims).
+  # First boot PROVISIONS comfy-cli + ComfyUI into ~/.sovereign/comfyui (a
+  # multi-GB torch install, once per machine), then DOWNLOADS the SDXL
+  # checkpoint. Once READY, build a workflow at http://127.0.0.1:8188 — the
+  # checkpoint appears in CheckpointLoaderSimple as sd_xl_base_1.0.safetensors.
+  # ---------------------------------------------------------------------------
+  - name: image_gen
+    base_type: comfyui             # explicit — comfyui never claims `auto` refs
+    priority: low
+    memory_gb: 12                  # ~7 checkpoint + torch/MPS runtime + latents
+    health_check:
+      type: http
+      endpoint: /system_stats      # ComfyUI's cheap always-on status endpoint
+      port: 8188
+      timeout_seconds: 300         # covers torch import + MPS init
+    config:
+      model: "stabilityai/stable-diffusion-xl-base-1.0/sd_xl_base_1.0.safetensors"
+      host: 127.0.0.1
+    dependencies: []
+
+  # ---------------------------------------------------------------------------
+  # THE LOOKOUT — SearXNG private metasearch (blog step 09).
+  # ---------------------------------------------------------------------------
+  - name: searxng
+    base_type: docker
+    priority: medium
+    memory_gb: 1
+    health_check:
+      type: http
+      endpoint: /
+      port: 8080
+      timeout_seconds: 120
+    config:
+      image: searxng/searxng:latest
+      port: 8080
+      container_port: 8080
+      volumes:
+        - ~/.sovereign/searxng:/etc/searxng
+      files:
+        - path: ~/.sovereign/searxng/settings.yml
+          content: |
+            use_default_settings: true
+            server:
+              secret_key: "${RANDOM_HEX:64}"
+              limiter: false
+            search:
+              formats: [html, json]
+    env_overrides:
+      SEARXNG_BASE_URL: "http://localhost:8080/"
+    dependencies: []
+
+  # ---------------------------------------------------------------------------
+  # THE MEMORY — Qdrant vector store (blog step 08). Open WebUI's built-in RAG
+  # pipeline (local sentence-transformers embeddings, CPU) indexes into it, so
+  # "chat with your files" works without a bespoke FastAPI service.
+  # ---------------------------------------------------------------------------
+  - name: qdrant
+    base_type: docker
+    priority: low
+    memory_gb: 2
+    health_check:
+      type: http
+      endpoint: /healthz
+      port: 6333
+      timeout_seconds: 120
+    config:
+      image: qdrant/qdrant:latest
+      port: 6333
+      container_port: 6333
+      volumes:
+        - sovereign_qdrant:/qdrant/storage
+    dependencies: []
+
+  # ---------------------------------------------------------------------------
+  # THE SANDBOX — Jupyter for agent code execution (blog step 07): isolated,
+  # disposable, not your host. Open http://localhost:8888 (token: sovereign).
+  # ---------------------------------------------------------------------------
+  - name: jupyter
+    base_type: docker
+    priority: low
+    memory_gb: 2
+    health_check:
+      type: http
+      endpoint: /api               # returns 200 without auth
+      port: 8888
+      timeout_seconds: 180
+    config:
+      image: quay.io/jupyter/base-notebook:latest
+      port: 8888
+      container_port: 8888
+      volumes:
+        - sovereign_jupyter:/home/jovyan/work
+    env_overrides:
+      JUPYTER_TOKEN: "sovereign"   # local-only convenience token
+    dependencies: []
+
+  # ---------------------------------------------------------------------------
+  # THE SCOUT — headless Chromium (blog step 10). browserless speaks the
+  # Playwright/CDP wire protocol: connect with
+  #   playwright.chromium.connect("ws://localhost:3001/chromium/playwright?token=sovereign")
+  # Search finds it; this reads it.
+  # ---------------------------------------------------------------------------
+  - name: browserless
+    base_type: docker
+    priority: low
+    memory_gb: 2
+    health_check:
+      type: http
+      endpoint: /config?token=sovereign
+      port: 3001
+      timeout_seconds: 180
+    config:
+      image: ghcr.io/browserless/chromium:latest
+      port: 3001
+      container_port: 3000
+    env_overrides:
+      TOKEN: "sovereign"
+    dependencies: []
+
+  # ---------------------------------------------------------------------------
+  # THE FACE — Open WebUI (blog step 05): one window into both engines, with
+  # SearXNG web search and Qdrant-backed RAG wired in. http://localhost:3000
+  # ---------------------------------------------------------------------------
+  - name: open_webui
+    base_type: docker
+    priority: medium
+    memory_gb: 2
+    health_check:
+      type: http
+      endpoint: /health
+      port: 3000
+      timeout_seconds: 300
+    config:
+      image: ghcr.io/open-webui/open-webui:main
+      port: 3000
+      container_port: 8080
+      volumes:
+        - sovereign_open_webui:/app/backend/data
+    env_overrides:
+      WEBUI_AUTH: "False"
+      # Both engines in one model picker ({{ ... }} resolves loopback to
+      # host.docker.internal for container consumers):
+      OPENAI_API_BASE_URLS: "{{ coder_heavy.endpoint }}/v1;{{ coder_fast.endpoint }}/v1"
+      OPENAI_API_KEYS: "sovereign;sovereign"
+      # Background task work (titles/tags/autocomplete) goes to the fast lane:
+      TASK_MODEL_EXTERNAL: "qwen3-coder-30b"
+      # Web search via SearXNG (legacy + current keys; unknown ones ignored):
+      ENABLE_WEB_SEARCH: "true"
+      ENABLE_RAG_WEB_SEARCH: "True"
+      WEB_SEARCH_ENGINE: "searxng"
+      RAG_WEB_SEARCH_ENGINE: "searxng"
+      SEARXNG_QUERY_URL: "{{ searxng.endpoint }}/search?q=<query>&format=json"
+      # RAG vectors live in Qdrant:
+      VECTOR_DB: "qdrant"
+      QDRANT_URI: "{{ qdrant.endpoint }}"
+    dependencies: [coder_heavy, coder_fast, searxng, qdrant]
+
+# -----------------------------------------------------------------------------
+# THE HANDS (blog step 06). For Cline inside VS Code, use provider "OpenAI
+# Compatible" with base URL http://127.0.0.1:8000/v1, model "qwen3-coder-next",
+# any API key. The harnesses below are the scriptable equivalents
+# (`sovereign harness invoke ...`) — Cline CLI on the heavy model,
+# mini-swe-agent on the fast lane for cheap batch runs.
+#
+# Giving the model SEARCH: the engines are bare completion servers — tools run
+# client-side, so SearXNG must be exposed per client (the env wiring above
+# only covers Open WebUI chats). SearXNG's JSON API is already enabled
+# (`formats: [html, json]` in its settings.yml — that's what it's for):
+#
+#   Cline (VS Code + the cline harness): register a SearXNG MCP server, e.g.
+#     { "mcpServers": { "searxng": {
+#         "command": "npx", "args": ["-y", "mcp-searxng"],
+#         "env": { "SEARXNG_URL": "http://localhost:8080" } } } }
+#   in Cline's MCP settings. For the harness below, the same JSON goes in
+#   ~/.sovereign/harnesses/cline/settings/cline_mcp_settings.json (the
+#   isolated CLINE_DIR sovereign materializes; written once, it persists).
+#
+#   mini_swe_agent: nothing to install — it drives bash, so tell it in the
+#   task prompt it may `curl "http://localhost:8080/search?q=...&format=json"`.
+# -----------------------------------------------------------------------------
+harnesses:
+  - name: cline
+    base_type: cline_cli
+    dependencies: [coder_heavy]
+    config:
+      base_url: "{{ coder_heavy.endpoint }}/v1"
+      model: "{{ coder_heavy.model }}"
+      timeout_seconds: 1800
+      # Turn cap doubles as a context cap — Cline CLI has no context-window
+      # knob, and each turn compounds the prompt (KV budget math in header):
+      max_turns: 25
+
+  - name: swe_mini
+    base_type: mini_swe_agent
+    dependencies: [coder_fast]
+    config:
+      base_url: "{{ coder_fast.endpoint }}/v1"
+      model: "{{ coder_fast.model }}"
+      step_limit: 60
+      timeout_seconds: 1200
